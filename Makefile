@@ -89,11 +89,11 @@ picwall-safari-cookie:
 picwall-audit:
 	$(PY) tools/audit.py
 
-## 重打包 Cookie 助手扩展 zip（make picwall 前置自动执行）
+## 重打包 Cookie 助手扩展 zip（make picwall 前置自动执行；zip 内保留 extension/ 前缀，解压后直接加载该目录）
 extension:
 	@command -v zip >/dev/null 2>&1 || { echo "（无 zip 命令，跳过扩展重打包）"; exit 0; }
 	mkdir -p app/static/extension
-	cd extension && zip -X -q -r ../app/static/extension/pwall-cookie-helper.zip . -x '.DS_Store' '.*'
+	zip -X -q -r app/static/extension/pwall-cookie-helper.zip extension -x 'extension/.DS_Store' 'extension/._*' 'extension/.*'
 
 ## 快照状态速览：容器状态 + 最新备份批次新鲜度（超 24h 提示补备份）
 status:
