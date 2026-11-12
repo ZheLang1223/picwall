@@ -1,0 +1,9 @@
+# 构建上下文只带源码：data/（图片库+数据库，会越滚越大）、cookie、缓存都不进
+data/
+__pycache__/
+*.pyc
+.env
+.git/
+Dockerfile
+docker-compose.yml
+README.md

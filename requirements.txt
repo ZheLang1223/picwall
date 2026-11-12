@@ -1,0 +1,10 @@
+# 直接依赖锁版（2026-10-11 风险分析 F6）：浮动版本会让 serve.py 的 uvicorn 兼容入口
+# 与 FastAPI 行为在镜像重建时静默漂移；升级 = 改版本号 + make picwall-test + make picwall。
+APScheduler==3.11.3
+fastapi==0.141.1
+httpx==0.28.1
+jinja2==3.1.6
+pillow==12.3.0
+pypinyin==0.55.0
+qrcode==8.2
+uvicorn==0.53.0

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 300px; margin: 0; padding: 12px 14px;
+         font: 13px/1.6 -apple-system, "PingFang SC", sans-serif; color: #1d1d1f; }
+  h1 { font-size: 14px; margin: 0 0 10px; }
+  label { display: block; font-size: 12px; color: #86868b; margin: 10px 0 4px; }
+  input { width: 100%; box-sizing: border-box; padding: 7px 9px; font-size: 13px;
+          border: 1px solid #d2d2d7; border-radius: 8px; }
+  button { width: 100%; margin-top: 8px; padding: 9px 0; font-size: 13px;
+           border: 0; border-radius: 8px; cursor: pointer;
+           background: #0a66ff; color: #fff; }
+  button.ghost { background: #e8e8ed; color: #1d1d1f; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 10px; font-size: 12px; color: #86868b;
+            min-height: 34px; white-space: pre-wrap; }
+  #status.ok { color: #1a7f37; }
+  #status.bad { color: #c94436; }
+</style>
+</head>
+<body>
+  <h1>PWALL Cookie 助手</h1>
+  <label>PWALL 地址</label>
+  <input id="addr" spellcheck="false" placeholder="http://localhost:8081">
+  <label>管理设备配对码（电脑终端：make picwall-pair ROLE=admin）</label>
+  <input id="pair-code" spellcheck="false" autocomplete="off" placeholder="XXXX-XXXX-XXXX">
+  <button id="pair" class="ghost">配对助手</button>
+  <button id="send-weibo">发送微博 Cookie</button>
+  <button id="send-x" class="ghost">发送 X (Twitter) Cookie</button>
+  <div id="status"></div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

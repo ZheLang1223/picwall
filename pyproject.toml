@@ -1,0 +1,10 @@
+# 最小工程配置：只服务 ruff 兜底，不引入其他工具链。
+# 豁免的三条规则是本库的刻意模式：
+#   DTZ005 裸 now() —— 容器 TZ 固定 Asia/Shanghai，业务日界另有 NOW_TZ 常量
+#   BLE001 盲捕获 —— 图片下载/缩略图/归档均为 best-effort，失败路径都有注释说明
+#   S110   try-except-pass —— 同上，静默降级是既定设计
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["DTZ005", "BLE001", "S110"]

@@ -1,0 +1,1652 @@
+"""Picwall 服务：相册页 + JSON API + 图片/打包下载 + 每日调度。
+
+单进程单容器；调度用 AsyncIOScheduler 挂在 uvicorn 的事件循环上。
+"""
+import asyncio
+import base64
+import bisect
+import io
+import json
+import logging
+import os
+import re
+import secrets
+import sys
+import tempfile
+import time
+import zipfile
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
+from starlette.background import BackgroundTask
+from starlette.requests import Request
+
+from . import (
+    auth,
+    config,
+    connections,
+    crawler,
+    db,
+    demo,
+    downloads,
+    jobs,
+    maintenance,
+    purge,
+    storage,
+    weibo,
+)
+from .queries import post_filter as _post_filter
+from .sources import base as source_errors
+from .sources import x as x_source
+from .sources import xapi
+
+# 应用版本：发版时递增；随启动日志与 /api/status 暴露，便于用户反馈时对版本
+APP_VERSION = "0.5.7"
+
+logger = logging.getLogger("picwall")
+# uvicorn 只配自己的 logger：这里给 root 兜底挂 handler，INFO 级启动/抓取日志才能落到容器日志。
+# 已有 handler 的宿主环境 basicConfig 是 no-op，不会重复初始化。
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# 模板与静态资源锚定到模块位置：桌面/快捷方式拉起时 cwd 不再影响启动
+_APP_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_APP_DIR / "templates"))
+sched = AsyncIOScheduler(timezone="Asia/Shanghai")
+
+# 静态资源缓存版本号 = 进程启动时间：每次重建容器自动失效浏览器缓存，杜绝改完代码看到旧界面
+STATIC_V = str(int(datetime.now().timestamp()))
+
+# create_task 的引用必须有人拿着，否则任务可能被 GC 掉（官方文档警告的反模式）
+_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    t = asyncio.get_running_loop().create_task(coro)
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return t
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    jobs.recover_interrupted()
+    crawler.recover_interrupted()
+    # 克制的启动日志：一条说清版本/平台/数据目录/schema，用户反馈时够定位
+    logger.info("picwall %s 启动 platform=%s data=%s schema=v%s",
+                APP_VERSION, sys.platform, config.DATA_DIR,
+                db.get_meta("schema_version") or "?")
+    hh, mm = config.crawl_hm()
+    # misfire_grace_time 给足 1 小时：宿主睡眠跨过抓取点，醒来仍补跑而非静默跳过
+    sched.add_job(crawler.crawl, "cron", hour=hh, minute=mm, id="daily",
+                  misfire_grace_time=3600, kwargs={"trigger": "cron"})
+    if config.PAIR_CODE_WEAK:
+        logger.warning("security fixed_pair_code len<%d，限流上限内可被穷举，请换更长的码",
+                       config.PAIR_CODE_MIN_LEN)
+    # 「已删除」超期清理：每天凌晨 4:10 跑一轮，PURGE_DAYS 控制阈值
+    sched.add_job(purge.run, "cron", hour=4, minute=10, id="purge", misfire_grace_time=3600)
+    # X 列表服务端抓取：独立间隔（容器时区），0 小时 = 关闭
+    if config.X_CRAWL_INTERVAL_HOURS > 0:
+        sched.add_job(_crawl_x, "interval", hours=config.X_CRAWL_INTERVAL_HOURS,
+                      id="crawl-x", misfire_grace_time=1800)
+    sched.add_job(crawler.retry_missing, "interval", hours=4, id="media-retry")
+    sched.add_job(maintenance.repair_local, "interval", hours=24, id="local-repair")
+    sched.start()
+    if config.get_cookie() and db.active_groups():
+        _spawn(crawler.catch_up_if_stale())
+    try:
+        yield
+    finally:
+        sched.shutdown(wait=False)
+        await jobs.runner.shutdown()
+
+
+app = FastAPI(title="picwall", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def _request_cors(request: Request) -> dict:
+    origin = request.headers.get("origin", "")
+    expected = {"/api/ingest/harvest": "https://weibo.com", "/api/ingest/x": "https://x.com"}.get(request.url.path)
+    if origin == expected:
+        return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "content-type, authorization",
+                "Access-Control-Allow-Private-Network": "true", "Vary": "Origin"}
+    return {}
+
+
+@app.middleware("http")
+async def device_boundary(request: Request, call_next):
+    try:
+        host = request.url.hostname
+    except ValueError:
+        return JSONResponse({"detail": "地址无效"}, status_code=400)
+    if not auth.allowed_host(host):
+        return JSONResponse({"detail": "此地址未被允许，请使用 localhost 或已配置的局域网 IP"}, status_code=403)
+    path, method = request.url.path, request.method
+    local_listener = request.scope.get("pwall_local_owner", False)
+    if local_listener and host not in ("localhost", "127.0.0.1", "::1"):
+        return JSONResponse({"detail": "本机入口请使用 localhost；其他设备请使用局域网入口"}, status_code=403)
+    cors = _request_cors(request)
+    if method == "OPTIONS":
+        return Response(status_code=204 if cors else 403, headers=cors)
+    origin = request.headers.get("origin", "")
+    same_origin = origin == str(request.base_url).rstrip("/")
+    extension = origin.startswith(("chrome-extension://", "moz-extension://"))
+    bearer = request.headers.get("authorization", "")
+    token = bearer[7:] if bearer.startswith("Bearer ") else request.cookies.get(auth.COOKIE, "")
+    public = path in ("/", "/api/health", "/api/device/pair") or path.startswith("/static/")
+    write = method not in ("GET", "HEAD")
+    if origin and not same_origin and not (bearer and (cors or extension)) and not (path == "/api/device/pair" and extension):
+        return JSONResponse({"detail": "跨来源请求未被允许"}, status_code=403)
+    if write and not bearer and not same_origin and not (path == "/api/device/pair" and extension):
+        return JSONResponse({"detail": "请从 PWALL 页面发送请求"}, status_code=403)
+    # 仅宿主回环端口可产生此标记；浏览器扩展等跨来源客户端仍须持有自己的令牌。
+    # 浏览器跨站子资源（img 等）不带 Origin 却带 Sec-Fetch-Site: cross-site——
+    # 它们虽读不到响应，但会以 local_owner 身份触发读类 GET 副作用（回看出场、打包），
+    # 一并挡下；curl/扩展/无该头的旧浏览器不受影响（仍受 Origin 与配对边界约束）。
+    local_owner = (local_listener and (not origin or same_origin) and not bearer
+                   and request.headers.get("sec-fetch-site", "") != "cross-site")
+    current = ({"id": "local-owner", "name": "运行 PWALL 的本机", "role": "admin", "local_owner": True}
+               if local_owner else await asyncio.to_thread(auth.session, token))
+    request.state.device = current
+    if not public:
+        if not current:
+            return JSONResponse({"detail": "设备尚未配对或连接已过期，请重新配对"}, status_code=401, headers=cors)
+        self_logout = path == "/api/device/session" and method == "DELETE"
+        if write and not self_logout and not auth.can_write(current["role"], path):
+            return JSONResponse({"detail": "当前设备没有此操作权限，请用管理设备操作"}, status_code=403, headers=cors)
+        if current["role"] == "collector" and method in ("GET", "HEAD") and path != "/api/device/session":
+            return JSONResponse({"detail": "采集设备仅可提交内容"}, status_code=403)
+    response = await call_next(request)
+    if path.startswith(("/api/", "/media/")):
+        response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
+
+
+@app.get("/api/health")
+async def health():
+    if not await asyncio.to_thread(db.get_meta, "schema_version"):
+        raise HTTPException(503, "数据库尚未就绪")
+    return {"ok": True, "version": APP_VERSION}
+
+
+class PairBody(BaseModel):
+    code: str
+    name: str = ""
+    bearer: bool = False
+
+
+@app.post("/api/device/pair")
+async def pair_device(body: PairBody, request: Request):
+    if len(body.code) > 64 or len(body.name) > 60:
+        raise HTTPException(400, "配对码或设备名称过长")
+    result = await asyncio.to_thread(auth.exchange, body.code, body.name,
+                                     request.client.host if request.client else "unknown")
+    if "error" in result:
+        raise HTTPException(result["status"], result["error"])
+    token = result.pop("token")
+    response = JSONResponse(result | ({"token": token} if body.bearer else {}))
+    if not body.bearer:
+        response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_SECONDS,
+                            httponly=True, samesite="strict", secure=request.url.scheme == "https")
+    return response
+
+
+class PairCodeBody(BaseModel):
+    role: str = "editor"
+
+
+@app.post("/api/device/code")
+async def issue_pair_code(body: PairCodeBody):
+    """签发设备配对码（仅管理设备，write 中间件按角色放行）：一次性、10 分钟有效。
+    明文码只进当前管理设备的页面，不落日志；新设备在配对页输入，或扫携带码的二维码自动填入。"""
+    if body.role not in auth.ROLES:
+        raise HTTPException(400, "未知设备角色")
+    return {"ok": True, "code": auth.issue_code(body.role), "role": body.role,
+            "ttl": auth.CODE_SECONDS}
+
+
+@app.get("/api/device/session")
+async def current_device(request: Request):
+    return request.state.device
+
+
+@app.delete("/api/device/session")
+async def logout_device(request: Request):
+    if request.state.device.get("local_owner"):
+        raise HTTPException(409, "本机入口无需配对；关闭页面即可离开")
+    with db._write_lock, db.conn() as c:
+        c.execute("DELETE FROM device_sessions WHERE id=?", (request.state.device["id"],))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE)
+    return response
+
+
+@app.get("/api/devices")
+async def list_devices(request: Request):
+    if request.state.device["role"] != "admin":
+        raise HTTPException(403, "只有管理设备可查看设备列表")
+    with db.conn() as c:
+        return {"devices": [dict(row) for row in c.execute(
+            "SELECT id,name,role,created,expires FROM device_sessions WHERE expires>? ORDER BY created DESC", (time.time(),))]}
+
+
+@app.delete("/api/devices/{device_id}")
+async def revoke_device(device_id: str):
+    with db._write_lock, db.conn() as c:
+        c.execute("DELETE FROM device_sessions WHERE id=?", (device_id,))
+    return {"ok": True}
+
+
+class RevalidatedStatic(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if path.endswith((".js", ".css")):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.add_middleware(auth.RequestBudget)
+app.mount("/static", RevalidatedStatic(directory=str(_APP_DIR / "static")), name="static")
+
+
+# ---------- 相册页 ----------
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    # no-cache：HTML 永远回源，配合 ?v= 静态版本号，重建后必定看到新界面
+    return templates.TemplateResponse(
+        request, "index.html" if request.state.device and request.state.device["role"] != "collector" else "pair.html",
+        {"v": STATIC_V, "role": request.state.device["role"] if request.state.device else "",
+         "local_owner": bool(request.state.device and request.state.device.get("local_owner"))},
+        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/atlas", response_class=HTMLResponse)
+async def atlas_page(request: Request):
+    """PWALL 设置 → 开发管理：单文件交互式架构图谱（生成物，源文件 docs/project_atlas.html）。"""
+    if request.state.device["role"] != "admin":
+        raise HTTPException(403, "只有管理设备可打开开发管理")
+    return FileResponse(_APP_DIR.parent / "docs" / "project_atlas.html",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/kiosk", response_class=HTMLResponse)
+async def kiosk_page(request: Request):
+    """PWALL 报刊亭：博主杂志墙（每位博主一本「杂志」，点开看专栏内页）。"""
+    return templates.TemplateResponse(request, "kiosk.html", {"v": STATIC_V},
+                                      headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats_page(request: Request):
+    """PWALL 回看统计：入库/保留/点赞的本地聚合报告页（独立深色页，模式同报刊亭）。"""
+    return templates.TemplateResponse(request, "stats.html", {"v": STATIC_V},
+                                      headers={"Cache-Control": "no-cache"})
+
+
+# ---------- 状态与抓取 ----------
+
+def _cookie_state() -> dict:
+    return connections.status("weibo")
+
+
+def _cloud_state() -> dict:
+    """备份 blob 库的云端同步体检：登记数 vs 最新 manifest 覆盖率。"""
+    out = {"blobs": 0, "last_upload": None, "manifest_files": None,
+           "covered": None, "store": None}
+    try:
+        with db.conn() as c:
+            if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_blobs'").fetchone():
+                out["blobs"] = c.execute("SELECT COUNT(*) FROM cloud_blobs").fetchone()[0]
+                out["last_upload"] = c.execute("SELECT MAX(uploaded_at) FROM cloud_blobs").fetchone()[0]
+        snaps = sorted((config.DATA_DIR / "backups").glob("picwall-*.snapshot/manifest.json"))
+        if snaps:
+            manifest = json.loads(snaps[-1].read_text())
+            # 凭据只进本地快照（manifest.local_only），不参与云端覆盖率核对
+            local_only = set(manifest.get("local_only", []))
+            keys = {e["sha256"] for rel, e in manifest["files"].items() if rel not in local_only}
+            out["manifest_files"] = len(keys)
+            out["store"] = manifest.get("blob_store")   # 产生该 manifest 的实际后端
+            with db.conn() as c:
+                registered = {r["key"] for r in c.execute("SELECT key FROM cloud_blobs")}
+            out["covered"] = keys <= registered if out["blobs"] else False
+    except (OSError, ValueError, KeyError):
+        pass
+    return out
+
+
+@app.get("/api/status")
+async def status():
+    with db.conn() as c:
+        by_status = dict(c.execute(
+            "SELECT status, COUNT(*) FROM posts GROUP BY status").fetchall())
+        row = c.execute(
+            "SELECT COUNT(*) FROM posts WHERE status='pending' AND created_at >= ?",
+            (datetime.now(config.NOW_TZ).strftime("%Y-%m-%dT00:00:00+08:00"),)).fetchone()
+        today_pending = row[0]
+        groups = [dict(r) | {"active": bool(r["active"])} for r in c.execute(
+            "SELECT g.list_id, g.name, g.active,"
+            " SUM(CASE WHEN p.status='pending' THEN 1 ELSE 0 END) pending,"
+            " SUM(CASE WHEN p.status='kept' THEN 1 ELSE 0 END) kept,"
+            " SUM(CASE WHEN p.status='discarded' THEN 1 ELSE 0 END) discarded,"
+            " COUNT(p.sid) total"
+            " FROM groups g LEFT JOIN posts p ON p.list_id = g.list_id OR EXISTS"
+            " (SELECT 1 FROM post_groups pg WHERE pg.sid=p.sid AND pg.list_id=g.list_id)"
+            " GROUP BY g.list_id ORDER BY g.active DESC, g.added_at").fetchall()]
+        purge_due = c.execute(
+            "SELECT COUNT(*) FROM posts WHERE status='discarded' AND COALESCE(favorite,0)=0"
+            " AND discarded_at IS NOT NULL AND discarded_at < ?",
+            ((datetime.now(config.NOW_TZ) - timedelta(days=config.PURGE_DAYS))
+             .isoformat(timespec="seconds"),)).fetchone()[0]
+        favorites = c.execute("SELECT COUNT(*) FROM posts WHERE favorite=1").fetchone()[0]
+        protected = c.execute(
+            "SELECT COUNT(*) FROM posts WHERE status='discarded' AND favorite=1").fetchone()[0]
+        missing_posts = c.execute("SELECT COUNT(*) FROM image_jobs").fetchone()[0]
+    hh, mm = config.crawl_hm()
+    last_result = db.get_meta("last_result")
+    archive = await asyncio.to_thread(storage.archive_health)
+    return {
+        "version": APP_VERSION,
+        "platform": sys.platform,
+        "schema_version": db.get_meta("schema_version") or None,
+        "cookie": _cookie_state(),
+        "connections": {s: connections.status(s) for s in ("weibo", "x")},
+        "groups": groups,
+        "counts": {"pending": by_status.get("pending", 0),
+                   "kept": by_status.get("kept", 0),
+                   "discarded": by_status.get("discarded", 0),
+                   "today_pending": today_pending,
+                   "favorites": favorites},
+        "purge": {"days": config.PURGE_DAYS, "due": purge_due,
+                  "discarded": by_status.get("discarded", 0), "protected": protected},
+        "cloud": _cloud_state(),
+        "crawl": {"running": crawler.state["running"],
+                  "time": f"{hh:02d}:{mm:02d}",
+                  "last": db.get_meta("last_crawl"),
+                  "ingest": db.get_meta("last_ingest"),
+                  "attempt": db.get_meta("last_attempt"),
+                  "last_result": json.loads(last_result) if last_result else None,
+                  "error": db.get_meta("last_error"),
+                  "progress": crawler.state.get("progress", {}),
+                  "x_auth": bool(config.get_x_auth()),
+                  "x_last_crawl": db.get_meta("x_last_crawl"),
+                  "x_last_error": db.get_meta("x_last_error")},
+        "media": {"incomplete_posts": missing_posts},
+        "pairing": {"fixed_code_weak": config.PAIR_CODE_WEAK},
+        "jobs": {kind: jobs.status(kind) for kind in jobs.KINDS},
+        "archive": {"missing": archive["missing"], "missing_originals": archive["missing_originals"]},
+        "demo": demo.is_on(),
+    }
+
+
+def _x_list_progress(idx: int, summary: dict | None) -> None:
+    return crawler._x_list_progress(idx, summary)
+
+
+def _x_http_client() -> httpx.AsyncClient:
+    return crawler.x_http_client()
+
+
+async def _crawl_x(only: str | None = None, max_pages: int | None = None) -> dict:
+    """X 服务端抓取：委托给 crawler.crawl_x 执行。"""
+    return await crawler.crawl_x(http_client_factory=_x_http_client, xapi_module=xapi,
+                                 only=only, max_pages=max_pages)
+
+
+@app.post("/api/crawl/x")
+async def crawl_x_now():
+    r = await _crawl_x()
+    return r if r.get("ok") else JSONResponse(r, status_code=409)
+
+
+@app.post("/api/crawl")
+async def trigger_crawl(source: str | None = None):
+    if crawler.state["running"]:
+        return JSONResponse({"ok": False, "msg": "已有抓取在进行中"}, status_code=409)
+    has_wb = bool(config.get_cookie() and db.active_groups(source="weibo"))
+    has_x = bool(config.get_x_auth() and db.active_groups(source="x"))
+
+    if source == "x":
+        if not config.get_x_auth():
+            return JSONResponse({"ok": False, "msg": "还没有 X Cookie"}, status_code=400)
+        if not db.active_groups(source="x"):
+            return JSONResponse({"ok": False, "msg": "还没有 X 列表或博主分组"}, status_code=400)
+        _spawn(_crawl_x())
+        return {"ok": True, "msg": "X 抓取已开始"}
+
+    if source == "weibo":
+        if not config.get_cookie() or not db.active_groups(source="weibo"):
+            r = await crawler.crawl(trigger="manual")
+            return JSONResponse(r, status_code=400)
+        _spawn(crawler.crawl(trigger="manual"))
+        return {"ok": True, "msg": "微博抓取已开始"}
+
+    if not has_wb and not has_x:
+        r = await crawler.crawl(trigger="manual")
+        return JSONResponse(r, status_code=400)
+
+    if has_wb and has_x:
+        async def _crawl_both():
+            await crawler.crawl(trigger="manual")
+            await _crawl_x()
+        _spawn(_crawl_both())
+    elif has_x:
+        _spawn(_crawl_x())
+    else:
+        _spawn(crawler.crawl(trigger="manual"))
+    return {"ok": True, "msg": "抓取已开始"}
+
+
+# ---------- 帖子列表与标记 ----------
+
+def _post_payloads(rows) -> list[dict]:
+    """帖子行 → 前端字典（pics/分组/补图状态一并取齐），列表与回看选组共用。"""
+    if not rows:
+        return []
+    sids = [r["sid"] for r in rows]
+    qmarks = ",".join("?" * len(sids))
+    with db.conn() as c:
+        by_sid: dict[str, list] = {}
+        for r in c.execute(f"SELECT * FROM pics WHERE sid IN ({qmarks}) ORDER BY position,id",
+                           sids):
+            by_sid.setdefault(r["sid"], []).append(
+                {"file": r["file"], "thumb": r["thumb"], "w": r["w"], "h": r["h"],
+                 "position": r["position"], "quality": r["quality"],
+                 "kind": r["kind"] or "photo", "dur_ms": r["dur_ms"] or 0})
+        incomplete = {r[0] for r in c.execute("SELECT sid FROM image_jobs")}
+        group_ids: dict[str, list] = {}
+        for sid, lid in c.execute(f"SELECT sid,list_id FROM post_groups WHERE sid IN ({qmarks})",
+                                  sids):
+            group_ids.setdefault(sid, []).append(lid)
+        comment_counts = {r["sid"]: r["n"] for r in c.execute(
+            f"SELECT sid,COUNT(*) n FROM post_comments WHERE sid IN ({qmarks}) GROUP BY sid", sids)}
+        # 墙卡评论预览行：每帖最新一条（有评论才在卡上出现）
+        comment_preview = {r["sid"]: r["body"] for r in c.execute(
+            f"SELECT pc.sid, pc.body FROM post_comments pc JOIN "
+            f"(SELECT sid, MAX(id) m FROM post_comments WHERE sid IN ({qmarks}) GROUP BY sid) t "
+            f"ON t.sid = pc.sid AND t.m = pc.id", sids)}
+    tags_map = db.post_tags_map(sids)
+    return [{
+        "sid": r["sid"], "uid": db.author_key(r["source"], r["uid"]), "list_id": r["list_id"], "author": r["author"],
+        "groups": group_ids.get(r["sid"], []), "text_complete": bool(r["text_complete"]),
+        "decision_version": r["decision_version"],
+        "avatar": r["avatar"], "text": r["text"], "created_at": r["created_at"],
+        "weibo_url": r["weibo_url"], "via": r["via"], "status": r["status"],
+        "group": r["group_name"], "kept_at": r["kept_at"],
+        "discarded_at": r["discarded_at"],
+        "favorite": bool(r["favorite"]), "source": r["source"] or "weibo",
+        "keep_count": r["keep_count"] or 1,
+        "last_confirm_at": r["last_confirm_at"],
+        "comment_count": comment_counts.get(r["sid"], 0),
+        "comment_preview": comment_preview.get(r["sid"], ""),
+        "tags": tags_map.get(r["sid"], []),
+        "pics": by_sid.get(r["sid"], []), "image_complete": r["sid"] not in incomplete,
+    } for r in rows]
+
+
+@app.get("/api/posts")
+async def list_posts(status: str = "pending", group: str = "all", author: str = "all",
+                     range: str = "all", q: str = "",
+                     has_cmts: str = "all", cmts: str = "", source: str = "all",
+                     tags: str = "all",
+                     offset: int = 0, limit: int = 50, cursor: str = "", sort: str = "",
+                     shuffle: str = ""):
+    if not 1 <= limit <= 200:
+        limit = 50
+    offset = max(offset, 0)
+    by_count = sort == "keep_count"   # 点赞序：点赞降序 → 时间降序 → sid，游标同步三键
+    cond, args = _post_filter(status, group, author, range, has_cmts, source=source, tags=tags)
+    if q.strip():
+        # 正文与评论一起搜：批注的价值一半在「找得回来」
+        like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        cond += (" AND (p.text LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM post_comments pc "
+                 "WHERE pc.sid = p.sid AND pc.body LIKE ? ESCAPE '\\'))")
+        args = [*args, like, like]
+    seed = (shuffle or "").strip()[:64]
+    if seed:
+        # 随机档：db.shuffled_sids 给出 (seed, 筛选集) 的确定性虚拟全序，翻页沿用
+        # 游标机制、锚升级为位次摘要 key（时间键在这里没有意义）；与 sort 互斥，
+        # 前端同传时随机优先。首个 key 定序、第二个兜底同 key 撞车（sha256 可忽略）。
+        keyed = await asyncio.to_thread(db.shuffled_sids, cond, args, seed)
+        lo = 0
+        if cursor:
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+                if (not isinstance(decoded, list) or len(decoded) != 2 or
+                        not all(isinstance(x, str) for x in decoded)):
+                    raise ValueError
+            except (ValueError, TypeError, UnicodeError):
+                raise HTTPException(400, "分页游标无效，请刷新列表")
+            lo = bisect.bisect_right(keyed, (decoded[0], decoded[1]))
+        page = keyed[lo:lo + limit]
+        has_more = lo + limit < len(keyed)
+        rows = []
+        if page:
+            sids = [sid for _, sid in page]
+            by_order = {sid: i for i, sid in enumerate(sids)}
+            qmarks = ",".join("?" * len(sids))
+            with db.conn() as c:
+                rows = c.execute(
+                    f"SELECT p.*, COALESCE(g.name, p.list_id) group_name FROM posts p"
+                    f" LEFT JOIN groups g ON g.list_id = p.list_id"
+                    f" WHERE p.sid IN ({qmarks})", sids).fetchall()
+            rows.sort(key=lambda r: by_order[r["sid"]])   # 虚拟全序 = 展示序
+        next_cursor = None
+        if has_more and page:
+            next_cursor = base64.urlsafe_b64encode(
+                json.dumps(list(page[-1])).encode()).decode()
+        return {"total": len(keyed), "posts": _post_payloads(rows),
+                "next_cursor": next_cursor, "has_more": has_more}
+    page_cond, page_args = cond, list(args)
+    if cursor:
+        try:
+            decoded = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        except (ValueError, TypeError, UnicodeError):
+            raise HTTPException(400, "分页游标无效，请刷新列表")
+        if by_count:
+            if (not isinstance(decoded, list) or len(decoded) != 3 or
+                    not all(isinstance(x, (str, int)) for x in decoded)):
+                raise HTTPException(400, "分页游标无效，请刷新列表")
+            count, created, sid = decoded
+            page_cond += (" AND (COALESCE(p.keep_count,1) < ? OR (COALESCE(p.keep_count,1) = ?"
+                          " AND (p.created_at < ? OR (p.created_at = ? AND p.sid > ?))))")
+            page_args += [count, count, created, created, sid]
+        else:
+            created, sid = decoded
+            if not isinstance(created, str) or not isinstance(sid, str):
+                raise HTTPException(400, "分页游标无效，请刷新列表")
+            page_cond += " AND (p.created_at < ? OR (p.created_at = ? AND p.sid > ?))"
+            page_args += [created, created, sid]
+    order = ("ORDER BY COALESCE(p.keep_count,1) DESC, p.created_at DESC, p.sid" if by_count
+             else "ORDER BY p.created_at DESC, p.sid")
+    with db.conn() as c:
+        total = c.execute(f"SELECT COUNT(*) FROM posts p WHERE {cond}", args).fetchone()[0]
+        rows = c.execute(
+            f"SELECT p.*, COALESCE(g.name, p.list_id) group_name FROM posts p"
+            f" LEFT JOIN groups g ON g.list_id = p.list_id"
+            f" WHERE {page_cond} {order} LIMIT ? OFFSET ?",
+            page_args + [limit + 1, 0 if cursor else offset]).fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+    posts = _post_payloads(rows)
+    if cmts == "1":   # 放映字幕等整卡消费场景：一次批量带齐评论流
+        comments_by_sid = await asyncio.to_thread(db.comments_map, [r["sid"] for r in rows])
+        for p in posts:
+            p["comments"] = comments_by_sid.get(p["sid"], [])
+    if q.strip():   # 搜索态：命中来自评论时，给墙卡预览行指认命中的那条（找得回来看得见为什么）
+        like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        sids = [r["sid"] for r in rows]
+        qmarks = ",".join("?" * len(sids)) if sids else "''"
+        with db.conn() as c:
+            hits = c.execute(
+                f"SELECT sid, body FROM post_comments WHERE sid IN ({qmarks}) "
+                f"AND body LIKE ? ESCAPE '\\' ORDER BY sid, id", [*sids, like]).fetchall()
+        first_hit: dict[str, str] = {}
+        for r in hits:
+            first_hit.setdefault(r["sid"], r["body"])
+        for p in posts:
+            if p["sid"] in first_hit:
+                p["comment_match"] = first_hit[p["sid"]]
+    next_cursor = None
+    if has_more and rows:
+        tail = ([rows[-1]["keep_count"] or 1, rows[-1]["created_at"], rows[-1]["sid"]] if by_count
+                else [rows[-1]["created_at"], rows[-1]["sid"]])
+        next_cursor = base64.urlsafe_b64encode(json.dumps(tail).encode()).decode()
+    return {"total": total, "posts": posts, "next_cursor": next_cursor, "has_more": has_more}
+
+
+@app.get("/api/timeline/outline")
+async def timeline_outline(status: str = "all", group: str = "all", author: str = "all",
+                           range: str = "all", q: str = "",
+                           has_cmts: str = "all", source: str = "all", tags: str = "all"):
+    """编年时间线的按日聚合（密度尺与日卷日头的计数源）。
+
+    筛选口径与 /api/posts 完全一致（同一 post_filter + q 追加），
+    日界取 substr(created_at,1,10)：库内 created_at 统一东八区 ISO8601，
+    跨来源（微博/X）排序与「今天」筛选都按字符串比较，截前 10 位即当地日。
+    days 按 d 降序（最新在前），与前端内容流方向一致。
+    """
+    cond, args = _post_filter(status, group, author, range, has_cmts, source=source, tags=tags)
+    if q.strip():
+        like = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        cond += (" AND (p.text LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM post_comments pc "
+                 "WHERE pc.sid = p.sid AND pc.body LIKE ? ESCAPE '\\'))")
+        args = [*args, like, like]
+    with db.conn() as c:
+        days = {r["d"]: {"d": r["d"], "total": r["total"], "kept": r["kept"],
+                         "discarded": r["discarded"], "fav": r["fav"]}
+                for r in c.execute(
+                    "SELECT substr(p.created_at,1,10) d, COUNT(*) total,"
+                    " COALESCE(SUM(p.status='kept'),0) kept,"
+                    " COALESCE(SUM(p.status='discarded'),0) discarded,"
+                    " COALESCE(SUM(p.favorite),0) fav"
+                    f" FROM posts p WHERE {cond} GROUP BY d", args)}
+        # 批注数单独一查：写过批注的帖可能已被硬删，但批注豁免清理，正常都在
+        for r in c.execute(
+                "SELECT substr(p.created_at,1,10) d, COUNT(*) n FROM post_comments pc"
+                f" JOIN posts p ON p.sid = pc.sid WHERE {cond} GROUP BY d", args):
+            days.setdefault(r["d"], {"d": r["d"], "total": 0, "kept": 0,
+                                     "discarded": 0, "fav": 0})["cmts"] = r["n"]
+    for d in days.values():
+        d.setdefault("cmts", 0)
+    return {"days": sorted(days.values(), key=lambda x: x["d"], reverse=True)}
+
+
+class StatusBody(BaseModel):
+    status: str
+
+
+@app.post("/api/posts/{sid}/status")
+async def mark(sid: str, body: StatusBody):
+    if body.status not in ("pending", "kept", "discarded"):
+        raise HTTPException(400, "status 只能是 pending/kept/discarded")
+    decision = db.mark_snapshot(sid, body.status)
+    if decision is None:
+        raise HTTPException(404, "帖子不存在")
+    if body.status == "kept":
+        day = datetime.now(config.NOW_TZ).strftime("%Y-%m-%d")
+        with db.conn() as c:
+            files = [r["file"] for r in c.execute(
+                "SELECT file FROM pics WHERE sid=? AND file != ''", (sid,))]
+        report = await asyncio.to_thread(storage.export_report, files, day)
+        if db.list_comments(sid):   # 先批注后保留：归档日的 评论.txt 同步建账
+            await asyncio.to_thread(storage.rebuild_day_notes, day)
+        return {"ok": True, **decision, **report}
+    return {"ok": True, **decision}
+
+
+class DecisionSnapshot(BaseModel):
+    status: str
+    kept_at: str | None = None
+    discarded_at: str | None = None
+    decision_version: int | None = None
+
+
+class RestoreBody(BaseModel):
+    previous: DecisionSnapshot
+    expected: DecisionSnapshot
+
+
+@app.post("/api/posts/{sid}/restore")
+async def restore(sid: str, body: RestoreBody):
+    if body.previous.status not in ("pending", "kept", "discarded"):
+        raise HTTPException(400, "恢复状态无效")
+    if not db.restore_snapshot(sid, body.previous.model_dump(), body.expected.model_dump()):
+        raise HTTPException(409, "这帖已发生其他修改，请刷新后查看；撤销未覆盖新操作")
+    post = db.get_post(sid)
+    return {"ok": True, "decision": {k: post[k] for k in
+            ("status", "kept_at", "discarded_at", "decision_version")}}
+
+
+@app.post("/api/media/retry")
+async def retry_media():
+    async def work(cancelled, progress):
+        return await crawler.retry_missing(manual=True, cancelled=cancelled, progress=progress)
+    return JSONResponse({"job": jobs.runner.start("media", work)}, status_code=202)
+
+
+@app.post("/api/archive/retry")
+async def retry_archive():
+    async def work(cancelled, progress):
+        return await asyncio.to_thread(storage.retry_archive, cancelled=cancelled, progress=progress)
+    return JSONResponse({"job": jobs.runner.start("archive", work)}, status_code=202)
+
+
+@app.get("/api/jobs/{kind}")
+async def maintenance_job(kind: str):
+    if kind not in jobs.KINDS:
+        raise HTTPException(404, "未知维护任务")
+    return {"job": await asyncio.to_thread(jobs.status, kind)}
+
+
+class FavoriteBody(BaseModel):
+    favorite: bool
+
+
+@app.post("/api/posts/{sid}/favorite")
+async def set_favorite(sid: str, body: FavoriteBody):
+    """收藏开关：独立标记，不影响 pending/kept/deleted；删帖不清收藏。"""
+    if not db.get_post(sid):
+        raise HTTPException(404)
+    db.set_favorite(sid, body.favorite)
+    return {"ok": True, "favorite": body.favorite}
+
+
+class TagsBody(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@app.post("/api/posts/{sid}/tags")
+async def set_tags(sid: str, body: TagsBody):
+    """标签增删：用户自定义归类维度，与决定状态/收藏正交，不改 decision_version。"""
+    if not db.get_post(sid):
+        raise HTTPException(404)
+    try:
+        tags = await asyncio.to_thread(db.set_post_tags, sid, body.add, body.remove)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "tags": tags}
+
+
+@app.get("/api/tags")
+async def tags_list():
+    """全部标签与帖数（视图面板标签行的 chip 数据源）。"""
+    return {"ok": True, "tags": await asyncio.to_thread(db.list_tags)}
+
+
+# ---------- 评论（单人批注时间线：只增不覆盖、每条带首发时间、无楼层） ----------
+
+class CommentBody(BaseModel):
+    body: str
+
+
+def _clean_comment(body: str) -> str:
+    text = (body or "").strip()
+    if not text:
+        raise HTTPException(400, "评论内容不能为空")
+    if len(text) > 500:
+        raise HTTPException(400, "评论最长 500 字")
+    return text
+
+
+@app.post("/api/posts/{sid}/comments")
+async def create_comment(sid: str, body: CommentBody):
+    if not db.get_post(sid):
+        raise HTTPException(404, "帖子不存在")
+    comment = await asyncio.to_thread(db.add_comment, sid, _clean_comment(body.body))
+    await _sync_archive_notes(sid)
+    return {"ok": True, "comment": comment}
+
+
+@app.put("/api/posts/{sid}/comments/{comment_id}")
+async def edit_comment(sid: str, comment_id: int, body: CommentBody):
+    """改写正文不改动 created_at：时间保持首发时刻，编辑记录只进 updated_at。"""
+    comment = await asyncio.to_thread(db.update_comment, sid, comment_id,
+                                      _clean_comment(body.body))
+    if comment is None:
+        raise HTTPException(404, "评论不存在")
+    await _sync_archive_notes(sid)
+    return {"ok": True, "comment": comment}
+
+
+@app.delete("/api/posts/{sid}/comments/{comment_id}")
+async def remove_comment(sid: str, comment_id: int):
+    if not await asyncio.to_thread(db.delete_comment, sid, comment_id):
+        raise HTTPException(404, "评论不存在")
+    await _sync_archive_notes(sid)
+    return {"ok": True}
+
+
+async def _sync_archive_notes(sid: str) -> None:
+    """批注增改删后同步归档文件夹的 评论.txt（仅保留帖有归档日）。"""
+    p = db.get_post(sid)
+    if p and p["status"] == "kept" and p.get("kept_at"):
+        await asyncio.to_thread(storage.rebuild_day_notes, p["kept_at"][:10])
+
+
+@app.get("/api/comments")
+async def list_all_comments(cursor: str = "", limit: int = 100):
+    """最近批注流：全库评论按时间倒排（新→旧），带帖作者/缩略图；点行回详情评论区。"""
+    if not 1 <= limit <= 200:
+        limit = 100
+    before = 10 ** 18
+    if cursor:
+        try:
+            before = int(cursor)
+        except ValueError:
+            raise HTTPException(400, "分页游标无效")
+
+    def _load():
+        with db.conn() as c:
+            total = c.execute("SELECT COUNT(*) FROM post_comments").fetchone()[0]
+            rows = c.execute(
+                "SELECT c.id, c.sid, c.body, c.created_at, p.author, p.avatar, p.status, "
+                "(SELECT thumb FROM pics WHERE sid = c.sid ORDER BY position, id LIMIT 1) thumb "
+                "FROM post_comments c JOIN posts p ON p.sid = c.sid "
+                "WHERE c.id < ? ORDER BY c.id DESC LIMIT ?",
+                (before, limit + 1)).fetchall()
+        has_more = len(rows) > limit
+        return total, rows[:limit], has_more
+
+    total, rows, has_more = await asyncio.to_thread(_load)
+    items = [dict(r) for r in rows]
+    next_cursor = str(items[-1]["id"]) if has_more and items else None
+    return {"total": total, "items": items, "next_cursor": next_cursor, "has_more": has_more}
+
+
+# ---------- 回看 ----------
+
+@app.get("/api/review/next")
+async def review_next(limit: int = 30):
+    """回看选组：实时执行、无定时；选组规则见 db.review_candidates。
+    被选中即记一次出场（shown_count+1、刷新 last_shown_at、追加事件）。"""
+    limit = max(1, min(limit, 200))
+    sids = await asyncio.to_thread(db.review_candidates, limit)
+    if not sids:
+        return {"ok": True, "posts": [], "total": 0}
+    qmarks = ",".join("?" * len(sids))
+    with db.conn() as c:
+        rows = c.execute(
+            f"SELECT p.*, COALESCE(g.name, p.list_id) group_name FROM posts p"
+            f" LEFT JOIN groups g ON g.list_id = p.list_id"
+            f" WHERE p.sid IN ({qmarks})", sids).fetchall()
+    by_order = {sid: i for i, sid in enumerate(sids)}
+    rows.sort(key=lambda r: by_order[r["sid"]])
+    await asyncio.to_thread(db.record_shown, sids)
+    posts = _post_payloads(rows)
+    comments_by_sid = await asyncio.to_thread(db.comments_map, sids)
+    for p in posts:
+        p["comments"] = comments_by_sid.get(p["sid"], [])
+    return {"ok": True, "posts": posts, "total": len(posts)}
+
+
+@app.post("/api/posts/{sid}/reaffirm")
+async def reaffirm_post(sid: str):
+    """回看「点赞」：keep_count+1，三态状态机不动；viewer 在中间件已被拒。"""
+    r = await asyncio.to_thread(db.reaffirm, sid)
+    if r is None:
+        raise HTTPException(404)
+    if "error" in r:
+        raise HTTPException(409, r["error"])
+    return {"ok": True, **r}
+
+
+@app.delete("/api/posts/{sid}/reaffirm")
+async def undo_reaffirm_post(sid: str):
+    """撤销点赞（回看内 6 秒撤销用）：keep_count−1，不低于建账的 1。"""
+    r = await asyncio.to_thread(db.undo_reaffirm, sid)
+    if r is None:
+        raise HTTPException(404)
+    if "error" in r:
+        raise HTTPException(409, r["error"])
+    return {"ok": True, **r}
+
+
+class BulkBody(BaseModel):
+    sids: list[str]
+    status: str
+
+
+@app.post("/api/posts/bulk-status")
+async def bulk_status(body: BulkBody):
+    """批量标记（选择模式）：状态单事务批量提交；保留的帖一次性查出图片批量归档。"""
+    if body.status not in ("pending", "kept", "discarded"):
+        raise HTTPException(400, "status 只能是 pending/kept/discarded")
+    sids = list(dict.fromkeys(s for s in body.sids if s))
+    if len(sids) > 500:
+        raise HTTPException(400, "每次最多操作 500 帖，请分批选择")
+    updated = exported = 0
+    report = {"failed_count": 0, "archive_complete": True}
+    to = ""
+    if sids:
+        with db.conn() as c:
+            existing = [r[0] for r in c.execute(
+                f"SELECT sid FROM posts WHERE sid IN ({','.join('?' * len(sids))})",
+                sids).fetchall()]
+        if existing:
+            db.set_status_bulk(existing, body.status)
+            updated = len(existing)
+            if body.status == "kept":
+                day = datetime.now(config.NOW_TZ).strftime("%Y-%m-%d")
+                with db.conn() as c:
+                    files = [r["file"] for r in c.execute(
+                        f"SELECT DISTINCT file FROM pics WHERE file != '' AND sid IN "
+                        f"({','.join('?' * len(existing))})", existing).fetchall()]
+                report = await asyncio.to_thread(storage.export_report, files, day)
+                exported = report["exported"]
+                to = report["to"]
+    return {"ok": True, "updated": updated, "exported": exported, "to": to,
+            "failed_count": report["failed_count"], "archive_complete": report["archive_complete"]}
+
+
+class BulkTagsBody(BaseModel):
+    sids: list[str]
+    add: list[str] = []
+    remove: list[str] = []
+
+
+@app.post("/api/posts/bulk-tags")
+async def bulk_tags(body: BulkTagsBody):
+    """批量打标签（选择模式）：单事务提交；加完会超单帖上限的帖跳过不计入。"""
+    sids = list(dict.fromkeys(s for s in body.sids if s))
+    if len(sids) > 500:
+        raise HTTPException(400, "每次最多操作 500 帖，请分批选择")
+    if not body.add and not body.remove:
+        raise HTTPException(400, "没有要增删的标签")
+    r = await asyncio.to_thread(db.set_post_tags_bulk, sids, body.add, body.remove)
+    return {"ok": True, **r}
+
+
+
+@app.get("/qr.svg")
+async def qr_svg(text: str = ""):
+    """连接地址 → 二维码（SVG），给「手机扫码连接」用。"""
+    text = text.strip()
+    if not text.startswith(("http://", "https://")):
+        raise HTTPException(400, "地址需以 http(s):// 开头")
+    if len(text) > 512:
+        raise HTTPException(400, "地址过长")
+    import qrcode.image.svg  # 子模块懒加载，必须显式导入
+    img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage,
+                      box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(buf.getvalue(), media_type="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+# ---------- 详情 / 作者 / 批量打包 / 清理 ----------
+# 注意：字面路由（bulk-status）必须注册在 /api/posts/{sid} 之前，否则被吞。
+
+
+@app.get("/api/posts/{sid}")
+async def post_detail(sid: str):
+    p = db.get_post(sid)
+    if not p:
+        raise HTTPException(404)
+    p["source_uid"] = p["uid"]
+    p["uid"] = db.author_key(p["source"], p["uid"])
+    return {"ok": True, "post": p}
+
+
+def _name_key(name: str) -> str:
+    """博主排序键：中文转拼音后按字母序，英文/数字自然参与。"""
+    from pypinyin import lazy_pinyin
+    return "".join(lazy_pinyin(name or "")).lower()
+
+@app.get("/api/lan")
+async def lan():
+    """宿主当前局域网 IP（make 启动时探测注入），给扫码地址预填用。"""
+    return {"ok": True, "ip": config.PICWALL_LAN_IP, "port": 8082}
+
+
+@app.get("/api/download/options")
+async def download_options(scope: str = "kept", authors: str = "", dates: str = "",
+                           select: str = "", thumb: int = 0):
+    return await asyncio.to_thread(downloads.preview, scope, authors, dates, select, bool(thumb))
+
+
+@app.get("/api/authors")
+async def authors(group: str = "all", status: str = "all", sort: str = "name",
+                  source: str = "all"):
+    """作者清单：n 跟随当前标签页状态（待处理/保留/已删除各算各的，0 也返回）。
+
+    sort 六键 = 字段_方向：name_asc/name_desc（拼音）、time_desc/time_asc
+    （按作者最新一帖时间，新→旧为 desc）、count_desc/count_asc（按当前标签页帖数）；
+    旧值 name 仍接受，等价 name_asc。同级再按拼音稳定排。
+    聚合口径与列表筛选一致，排序在聚合结果上做。
+    """
+    if sort not in ("name", "name_asc", "name_desc", "time_desc", "time_asc",
+                    "count_desc", "count_asc"):
+        sort = "name_asc"
+    rows = db.list_authors(group, status, source)
+    pinyin = lambda a: (_name_key(a["author"]), a["uid"])  # 稳定次键：同值再按拼音排
+    # initial = 拼音序首字母（联系人式字母索引用）：与 name_asc 排序同源，非字母归 #
+    def _initial(a):
+        k = _name_key(a["author"]).strip()
+        ch = k[:1].upper() if k else ""
+        return ch if "A" <= ch <= "Z" else "#"
+    if sort in ("name", "name_asc"):
+        rows.sort(key=pinyin)
+    elif sort == "name_desc":
+        rows.sort(key=pinyin, reverse=True)
+    elif sort == "count_desc":
+        rows.sort(key=lambda a: (-a["n"], _name_key(a["author"]), a["uid"]))
+    elif sort == "count_asc":
+        rows.sort(key=lambda a: (a["n"], _name_key(a["author"]), a["uid"]))
+    elif sort == "time_desc":
+        rows.sort(key=lambda a: (a["last_at"] or "", _name_key(a["author"]),
+                                 a["uid"]), reverse=True)
+    else:  # time_asc
+        rows.sort(key=lambda a: (a["last_at"] or "", _name_key(a["author"]),
+                                 a["uid"]))
+    return {"ok": True, "authors": [{**r, "initial": _initial(r)} for r in rows]}
+
+
+@app.get("/api/authors/kiosk")
+async def authors_kiosk():
+    """报刊亭书架：每位博主一本「杂志」的聚合（统计/节奏/封面内页/缓存签名）。
+
+    纯本地查询，签名只读 meta 缓存；网络拉取留给内页打开时的 /bio 端点，互不拖累。
+    """
+    return {"ok": True, "shelf": await asyncio.to_thread(db.kiosk_shelf)}
+
+
+@app.get("/api/stats")
+async def stats_data():
+    """回看统计报告（/stats 页数据源）：全本地聚合，重查询进线程池不拖事件循环。"""
+    return {"ok": True, **await asyncio.to_thread(db.stats_report)}
+
+
+@app.get("/api/authors/{uid}/bio")
+async def author_bio(uid: str):
+    """作者签名：优先本地缓存；无登录态时降级为空（前端只显示头像+昵称）。
+
+    微博传裸 uid；X 传 x:<rest_id>（rest_id → handle → UserByScreenName）。
+    """
+    if uid.startswith("x:"):
+        return await _x_author_bio(uid)
+    if ":" in uid:
+        return {"ok": False, "bio": "", "source": uid.split(":", 1)[0], "need_browser": True}
+    cached = db.get_meta(f"author_bio:{uid}")
+    if cached:
+        return {"ok": True, "bio": cached, "source": "cache"}
+    cookie = config.get_cookie()
+    if not cookie:
+        return {"ok": False, "bio": "", "need_browser": True}
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            bio = await weibo.profile_bio(client, cookie, uid)
+    except Exception as e:
+        return JSONResponse({"ok": False, "bio": "", "msg": str(e)}, status_code=502)
+    if bio:
+        db.set_meta(f"author_bio:{uid}", bio)
+    return {"ok": True, "bio": bio, "source": "weibo"}
+
+
+async def _x_author_bio(uid: str):
+    """X 作者简介：缓存 → handle 解析 → UserByScreenName；错误按类降级。"""
+    cached = db.get_meta(f"author_bio:{uid}")
+    if cached:
+        return {"ok": True, "bio": cached, "source": "cache"}
+    token = config.get_x_auth()
+    if not token:
+        return {"ok": False, "bio": "", "source": "x", "need_browser": True}
+    handle = db.x_handle_for_uid(uid.split(":", 1)[1])
+    if not handle:
+        return {"ok": False, "bio": "", "source": "x", "msg": "本地没有该作者的 handle，无法查询简介"}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True,
+                                 proxy=config.X_PROXY_URL or None) as client:
+        try:
+            profile = await xapi.XGraphQL(token, config.get_x_csrf()).user_profile(client, handle)
+        except xapi.XApiError as e:
+            body = {"ok": False, "bio": "", "source": "x", "msg": str(e)}
+            if e.kind == "auth":
+                body["need_browser"] = True   # 登录态失效与未配置同路：前端提示重发 Cookie
+            return JSONResponse(body, status_code=502)
+    bio = profile.get("description") or ""
+    if bio:
+        db.set_meta(f"author_bio:{uid}", bio)
+    return {"ok": True, "bio": bio, "source": "x"}
+
+
+@app.get("/api/authors/{key}/profile")
+async def author_profile(key: str):
+    """博主视图头部：某作者跨状态、跨分组的全量聚合（纯本地查询，无网络请求）。
+
+    key = author_key 口径（微博裸 uid、X 为 x:<id>）；签名的网络获取留给
+    /api/authors/{uid}/bio，前端分开调，超时互不拖累。
+    """
+    source, uid = key.split(":", 1) if ":" in key else ("weibo", key)
+    if source not in ("x", "weibo") or not uid:
+        raise HTTPException(404, "作者不存在")
+    row = await asyncio.to_thread(db.author_profile, source, uid)
+    if not row:
+        raise HTTPException(404, "作者不存在")
+    return {"ok": True, **row}
+
+
+@app.post("/api/purge")
+async def run_purge(days: int = 0):
+    """手动跑一轮过期清理（定时任务每天 04:10 自动跑同一段逻辑）。"""
+    return {"ok": True, "result": purge.purge_expired(days if days > 0 else None)}
+
+
+def _unlink_quiet(path: str) -> None:
+    """后台删临时 zip：Windows 上杀软/索引器短暂握句柄时 unlink 会抛，静默留待系统清理。"""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+@app.get("/api/download/zip")
+async def download_zip(status: str = "pending", group: str = "all", author: str = "all",
+                       range: str = "all", select: str = "",
+                       authors: str = "", dates: str = "", subfolder: int = 0,
+                       thumb: int = 0, scope: str = ""):
+    """批量打包：select 给 sid 清单（多选模式），authors/dates 给细分勾选，
+    否则按当前筛选；文件按路径全局去重，命名含正文前 30 字。"""
+    if scope:
+        status = scope
+    plan = await asyncio.to_thread(downloads.plan, status, group, author, range,
+                                   authors, dates, select, bool(thumb), bool(subfolder))
+    if plan["posts"] > downloads.MAX_POSTS:
+        raise HTTPException(400, "单包最多 500 帖，请按博主或日期分批选择；没有截断下载内容")
+    entries = plan["entries"]
+    if not entries:
+        raise HTTPException(404, "没有可打包的图片")
+    fd, tmp = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    notes = await asyncio.to_thread(downloads.notes_text, plan["rows"])
+
+    def build() -> None:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+            for name, p in entries.items():
+                z.write(p, name)
+            if notes:   # 范围内有批注才附带；纯文本、"> " 引用协议与详情一致
+                z.writestr("评论.txt", notes)
+
+    try:
+        await asyncio.to_thread(build)
+    except BaseException:
+        _unlink_quiet(tmp)   # 打包失败也别把临时 zip 留在容器里
+        raise
+    return FileResponse(tmp, media_type="application/zip",
+                        headers={"Content-Disposition":
+                                 "attachment; filename=picwall-batch.zip"},
+                        background=BackgroundTask(_unlink_quiet, tmp))
+
+
+@app.post("/api/download/zip")
+async def download_zip_start(status: str = "pending", group: str = "all", author: str = "all",
+                             range: str = "all", select: str = "",
+                             authors: str = "", dates: str = "", subfolder: int = 0,
+                             thumb: int = 0, scope: str = ""):
+    """批量打包改走任务框架：先按 GET 同款语义校验范围，登记 job 后由前端轮询进度。
+
+    打包本身在后台执行，本端点立即返回 job 记录；产物经 /api/download/zip-file 领取。
+    """
+    if scope:
+        status = scope
+    plan = await asyncio.to_thread(downloads.plan, status, group, author, range,
+                                   authors, dates, select, bool(thumb), bool(subfolder))
+    if plan["posts"] > downloads.MAX_POSTS:
+        raise HTTPException(400, "单包最多 500 帖，请按博主或日期分批选择；没有截断下载内容")
+    if not plan["entries"]:
+        raise HTTPException(404, "没有可打包的图片")
+    params = {"status": status, "group": group, "author": author, "range": range,
+              "select": select, "authors": authors, "dates": dates,
+              "subfolder": subfolder, "thumb": thumb, "scope": scope}
+    return {"job": jobs.runner.start("download", downloads.build_work(params))}
+
+
+def _release_download_zip(job_id: str, path: str) -> None:
+    """交付完成后清理：注销打包产物登记 + 删临时 zip（容错删除同 _unlink_quiet）。"""
+    downloads.pop_result_file(job_id)
+    _unlink_quiet(path)
+
+
+@app.get("/api/download/zip-file")
+async def download_zip_file(job: str):
+    """领取打包产物：任务完成且临时文件仍在才交付；响应发完后后台注销登记并删文件。"""
+    record = await asyncio.to_thread(jobs.status, "download")
+    result = record.get("result") if isinstance(record.get("result"), dict) else {}
+    if record.get("id") != job:
+        raise HTTPException(404, "打包任务不存在或已过期，请重新打包")
+    if record["state"] in jobs.ACTIVE:
+        raise HTTPException(409, "打包尚未完成，请稍后再取")
+    if record["state"] != "complete" or not result.get("file"):
+        raise HTTPException(404, "打包没有产出文件，请重新发起打包")
+    tmp = result["file"]
+    if not os.path.isfile(tmp):
+        raise HTTPException(404, "打包文件已过期或已被领取，请重新打包")
+    return FileResponse(tmp, media_type="application/zip",
+                        headers={"Content-Disposition":
+                                 "attachment; filename=picwall-batch.zip"},
+                        background=BackgroundTask(_release_download_zip, job, tmp))
+
+
+# ---------- 分组管理 ----------
+
+class GroupBody(BaseModel):
+    list_id: str
+    name: str = ""
+
+
+X_HANDLE = re.compile(r"[A-Za-z0-9_]{1,15}")
+
+
+WB_UID_RE = re.compile(r"^\d{6,16}$")
+WB_URL_RE = re.compile(r"weibo\.com/(?:u/)?(\d{6,16})")
+
+
+def _extract_wb_uid(raw: str) -> str | None:
+    raw = raw.strip()
+    if raw.startswith(("wbu:", "wb:")):
+        uid = re.sub(r"^(wbu:|wb:)", "", raw).strip()
+        return uid if WB_UID_RE.fullmatch(uid) else None
+    m = WB_URL_RE.search(raw)
+    if m:
+        return m.group(1)
+    return None
+
+
+async def _ensure_wb_user(uid: str, name_hint: str = "") -> tuple[str, str]:
+    """校验微博博主存在并获取昵称，返回 (wbu:<uid>, 显示名)；失败给出可操作错误。"""
+    cookie = config.get_cookie()
+    if not cookie:
+        raise HTTPException(400, "还没有微博 Cookie：先在右上角「Cookie」保存")
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        try:
+            info = await weibo.profile_info(client, cookie, uid)
+        except weibo.CookieExpired as e:
+            raise HTTPException(400, f"微博 Cookie 过期或失效：{e}")
+        except weibo.WeiboError as e:
+            raise HTTPException(400, f"微博博主 {uid} 校验失败：{e}")
+    lid = f"wbu:{uid}"
+    name = name_hint.strip() or (f"@{info['screen_name']}" if info.get("screen_name") else f"博主 {uid}")
+    return lid, name
+
+
+async def _ensure_x_user(handle: str) -> str:
+    """校验 X 用户存在并返回归一的 xu: 分组 id；失败给出可操作的错误。"""
+    token = config.get_x_auth()
+    if not token:
+        raise HTTPException(400, "还没有 X Cookie：先在「Cookie」里保存，"
+                                 "或终端 make picwall-safari-cookie 从 Safari 现取")
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True,
+                                 proxy=config.X_PROXY_URL or None) as client:
+        try:
+            rest_id = await xapi.XGraphQL(token, config.get_x_csrf()).user_id(client, handle)
+            db.set_meta(f"x_user_rest_id:{handle.lower()}", rest_id)
+        except xapi.XApiError as e:
+            raise HTTPException(400, f"X 用户 @{handle} 校验失败：{e}")
+    return f"xu:{handle.lower()}"
+
+
+@app.post("/api/groups")
+async def add_group(body: GroupBody):
+    raw = body.list_id.strip()
+    if raw == "xg:":   # 新建本地分组：slug 服务端生成（永不与抓取目标撞），组名必填
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "分组名不能为空")
+        lid = f"xg:{secrets.token_hex(4)}"
+        db.add_group(lid, name)
+        return {"ok": True, "msg": f"已建分组「{name}」，展开后把 X 用户加进来", "list_id": lid}
+    wb_uid = _extract_wb_uid(raw)
+    if wb_uid:
+        lid, name = await _ensure_wb_user(wb_uid, body.name)
+        db.add_group(lid, name)
+        return {"ok": True, "msg": f"已添加 {name}，立即抓取或等下轮定时"}
+    if raw.startswith("xu:") or X_HANDLE.fullmatch(raw.lstrip("@")):
+        handle = raw.removeprefix("xu:").lstrip("@")
+        if not X_HANDLE.fullmatch(handle):
+            raise HTTPException(400, "X 用户名只能是字母、数字、下划线（≤15 位）")
+        lid = await _ensure_x_user(handle)
+        name = body.name.strip() or f"@{handle}"
+        db.add_group(lid, name)
+        return {"ok": True, "msg": f"已添加 {name}，立即抓取或等下轮定时"}
+    is_weibo = raw.isdigit()
+    is_x = raw.startswith("x:") and raw[2:].isdigit()
+    if not (is_weibo or is_x):
+        raise HTTPException(400, "分组 ID 应是纯数字（微博 groupstimeline 里的值）、"
+                                 "带 x: 前缀的 X 列表 ID、X 用户名，或微博博主 UID/主页链接")
+    db.add_group(raw, body.name.strip() or f"分组 {raw}")
+    return {"ok": True}
+
+
+@app.delete("/api/groups/{list_id}")
+async def remove_group(list_id: str):
+    db.remove_group(list_id)
+    return {"ok": True}
+
+
+# ---------- X 本地分组成员管理 ----------
+
+class MemberBody(BaseModel):
+    member: str
+
+
+def _require_local_group(list_id: str) -> None:
+    if not list_id.startswith("xg:"):
+        raise HTTPException(400, "只有系统内分组（xg:）能管理成员")
+    if not any(g["list_id"] == list_id for g in db.active_groups()):
+        raise HTTPException(404, "分组不存在或已移除")
+
+
+@app.get("/api/group-members")
+async def list_all_members():
+    """全部组员关系 + 各本地组成员明细（管理弹窗一次取齐）。"""
+    members = db.all_group_members()
+    by_group: dict[str, list] = {}
+    for m in members:
+        by_group.setdefault(m["list_id"], []).append(
+            {**m, "name": next((g2["name"] for g2 in db.active_groups()
+                                if g2["list_id"] == m["member_id"]), m["member_id"])})
+    return {"ok": True, "members": members, "by_group": by_group}
+
+
+@app.post("/api/groups/{list_id}/members")
+async def add_member(list_id: str, body: MemberBody):
+    _require_local_group(list_id)
+    member = body.member.strip().lstrip("@").lower()   # @handle / 裸 handle / xu:handle 都收
+    if member.startswith("xu:"):
+        member = member.removeprefix("xu:")
+    if not X_HANDLE.fullmatch(member):
+        raise HTTPException(400, "成员应是 X 用户名（字母、数字、下划线，≤15 位）")
+    member = "xu:" + member
+    # 必须是已添加的用户目标：本地组只做归组，不代抓新用户
+    if not any(g["list_id"] == member for g in db.active_groups(source="x")):
+        raise HTTPException(404, f"{body.member} 还不是已添加的 X 用户，先在上方添加")
+    db.add_group_member(list_id, member)
+    name = next((g["name"] for g in db.active_groups(source="x") if g["list_id"] == member), member)
+    return {"ok": True, "msg": f"已把 {name} 加入分组（历史帖子已归组）"}
+
+
+@app.delete("/api/groups/{list_id}/members/{member_id}")
+async def remove_member(list_id: str, member_id: str):
+    _require_local_group(list_id)
+    db.remove_group_member(list_id, member_id)
+    return {"ok": True, "msg": "已移出分组（已归组的帖子保留）"}
+
+
+@app.post("/api/groups/discover")
+async def discover():
+    try:
+        cands = await crawler.discover_groups()
+    except Exception as e:
+        return JSONResponse({"ok": False,
+                             "msg": f"拉取失败：{e}（可在下方手动添加分组 ID）"},
+                            status_code=502)
+    added = {g["list_id"] for g in db.active_groups()}
+    return {"ok": True,
+            "candidates": [c | {"added": c["list_id"] in added} for c in cands]}
+
+
+@app.post("/api/groups/{list_id}/backfill")
+async def backfill_group(list_id: str, days: int = 0):
+    """对已配置的分组手动深度回补（days<=0 时用 CRAWL_BACKFILL_DAYS 默认窗口）。"""
+    if crawler.state["running"]:
+        return JSONResponse({"ok": False, "msg": "已有抓取在进行中"}, status_code=409)
+    if x_source.is_x_group(list_id):
+        if not config.get_x_auth():
+            raise HTTPException(400, "还没有 X Cookie：先在「Cookie」里保存，或从扩展发送")
+        if not any(g["list_id"] == list_id for g in db.active_groups(source="x")):
+            raise HTTPException(404, "分组不存在或已移除")
+        pages = min(config.CRAWL_BACKFILL_MAX_PAGES, 10)
+        _spawn(_crawl_x(only=list_id, max_pages=pages))
+        return {"ok": True, "msg": "X 回补已开始，可在页面顶部看到进度"}
+    if not config.get_cookie():
+        raise HTTPException(400, "还没有填 Cookie，先点右上角「Cookie」")
+    if not any(g["list_id"] == list_id for g in db.active_groups()):
+        raise HTTPException(404, "分组不存在或已移除")
+    # days=0 的语义是「用默认窗口」而不是「不回补」，否则按钮静默变成普通抓取
+    _spawn(crawler.crawl(trigger="backfill", only=list_id,
+                         backfill_days=days if days > 0 else config.CRAWL_BACKFILL_DAYS))
+    return {"ok": True, "msg": "回补已开始，可在页面顶部看到进度"}
+
+
+# ---------- 浏览器代抓导入 ----------
+# 服务端没有 Cookie 时的抓取通道：由已登录微博的浏览器页面（同源 fetch 自动带
+# HttpOnly 凭证）翻页拿分组时间线，POST 给本接口；图片由服务端直连 sinaimg 下载
+# （无需 Cookie）。CORS 只放行 https://weibo.com 单一来源，其他网页碰不到本服务。
+
+_HARVEST_CORS = {
+    "Access-Control-Allow-Origin": "https://weibo.com",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type, authorization",
+    # 公网页面 → localhost 属于跨网络空间访问，Chrome PNA 要求预检响应带这个头
+    "Access-Control-Allow-Private-Network": "true",
+}
+
+
+@app.options("/api/ingest/harvest")
+async def ingest_preflight():
+    return Response(status_code=204, headers=_HARVEST_CORS)
+
+
+@app.post("/api/ingest/harvest")
+async def ingest_harvest(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "请求体不是 JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "请求体必须是 JSON 对象")
+    list_id = str(body.get("list_id", "")).strip()
+    name = str(body.get("name", "") or "").strip() or f"分组 {list_id}"
+    statuses = body.get("statuses", [])
+    if not list_id.isdigit() or not isinstance(statuses, list):
+        raise HTTPException(400, "list_id 必须是纯数字且 statuses 必须是数组")
+    if len(statuses) > 100:
+        raise HTTPException(400, "单批最多 100 条，请分批发送；没有截断导入内容")
+    status_code, result = await crawler.ingest_harvest(list_id, name, statuses)
+    return JSONResponse(result, status_code=status_code, headers=_HARVEST_CORS)
+
+
+# ---------- X（Twitter）浏览器代抓导入 ----------
+# 与微博同款架构：已登录 x.com 的浏览器页面采集推文（List/时间线），POST 给本接口；
+# 图片由服务端直连 pbs.twimg.com 下载（公网可取，无需凭据）。官方 API 免费档读不了
+# List、GraphQL queryId 高频漂移，均不作为实现；采集端换路线不影响本接口的输入契约。
+
+_X_CORS = {
+    "Access-Control-Allow-Origin": "https://x.com",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "content-type, authorization",
+    "Access-Control-Allow-Private-Network": "true",
+}
+
+
+@app.options("/api/ingest/x")
+async def ingest_x_preflight():
+    return Response(status_code=204, headers=_X_CORS)
+
+
+class XIngestBody(BaseModel):
+    list_id: str
+    name: str = ""
+    tweets: list[dict] = []
+
+
+@app.post("/api/ingest/x")
+async def ingest_x(body: XIngestBody):
+    if len(body.tweets) > 100:
+        raise HTTPException(400, "单批最多 100 条，请分批发送；没有截断导入内容")
+    if crawler.state["running"]:
+        return JSONResponse({"ok": False, "msg": "已有抓取在进行中"},
+                            status_code=409, headers=_X_CORS)
+    try:
+        lid = x_source.group_list_id(body.list_id)   # 校验并加 x: 前缀
+    except source_errors.StructureError as e:
+        raise HTTPException(400, str(e))
+    xlog = logging.getLogger("picwall.x")            # 日志只含来源/阶段/错误类别，无凭据
+    xlog.info("x ingest start list=%s received=%d", lid, len(body.tweets))
+    crawler.state["running"] = True
+    started = time.monotonic()
+    try:
+        posts = x_source.normalize_tweets(body.tweets)
+        new_posts = new_pics = 0
+        avatar_cache: dict[str, str] = {}
+        async with _x_http_client() as client:   # 代抓落图与抓取同口径：被墙环境走 X_PROXY_URL
+            for p in posts:
+                db.observe_post(p, lid)
+                if (db.has_post(p["sid"]) and not crawler.needs_images(p["sid"])) or db.has_tombstone(p["sid"]):
+                    continue
+                existed = db.has_post(p["sid"])
+                saved = await crawler._store_post(client, p, lid, avatar_cache)
+                new_pics += saved
+                if saved:   # 一张图都没下成的帖没入库，不计新增（与 _crawl_group 一致）
+                    new_posts += int(not existed)
+        name = body.name.strip() or f"X 列表 {body.list_id}"
+        db.add_group(lid, name)
+        # 只写 X 自己的键：动 last_error/last_crawl 会抹掉微博侧的 Cookie 错误提示
+        db.set_meta("x_last_crawl", datetime.now(config.NOW_TZ).isoformat(timespec="seconds"))
+        xlog.info("x ingest done list=%s normalized=%d new_posts=%d new_pics=%d cost=%.1fs",
+                  lid, len(posts), new_posts, new_pics, time.monotonic() - started)
+        return JSONResponse({"ok": True, "new_posts": new_posts, "new_pics": new_pics,
+                             "received": len(body.tweets), "normalized": len(posts)},
+                            headers=_X_CORS)
+    except Exception as e:   # 诊断进状态页与日志，不让 X 导入静默失败
+        kind = "network" if isinstance(e, httpx.HTTPError) else type(e).__name__
+        db.set_meta("x_last_error", f"ingest-x: {type(e).__name__}: {e}")
+        xlog.warning("x ingest failed list=%s stage=ingest kind=%s err=%s", lid, kind, e)
+        return JSONResponse({"ok": False, "msg": f"X 导入失败：{e}"},
+                            status_code=502, headers=_X_CORS)
+    finally:
+        crawler.state["running"] = False
+
+
+@app.exception_handler(HTTPException)
+async def _ingest_cors_http(request: Request, exc: HTTPException):
+    """ingest 通道的错误响应也带上预检许诺过的 CORS 头，页面 JS 才能看到诊断信息。"""
+    resp = JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                        headers=exc.headers)
+    if request.url.path.startswith("/api/ingest/"):
+        resp.headers.update(_X_CORS if request.url.path.endswith("/x") else _HARVEST_CORS)
+    return resp
+
+
+@app.exception_handler(Exception)
+async def _ingest_cors_500(request: Request, exc: Exception):
+    resp = JSONResponse({"detail": "服务器内部错误"}, status_code=500)
+    if request.url.path.startswith("/api/ingest/"):
+        resp.headers.update(_X_CORS if request.url.path.endswith("/x") else _HARVEST_CORS)
+    return resp
+
+
+# ---------- Cookie ----------
+
+class CookieBody(BaseModel):
+    cookie: str
+    verify: bool = True
+
+
+_connection_locks = {s: asyncio.Lock() for s in ("weibo", "x")}
+
+
+async def _candidate(source: str, credential: str, verify: bool, ct0: str = "") -> dict:
+    result = await connections.probe(source, credential, ct0) if verify else {"state": "saved", "error": ""}
+    if result["state"] in ("expired", "error"):
+        raise HTTPException(400 if result["state"] == "expired" else 503,
+                            result["error"] + "；原有凭据已保留")
+    return result
+
+
+@app.post("/api/settings/cookie")
+async def save_cookie(body: CookieBody):
+    try:
+        c = connections.normalize_weibo(body.cookie)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    async with _connection_locks["weibo"]:
+        result = await _candidate("weibo", c, body.verify)
+        config.save_cookie(c)
+        connections.record("weibo", c, **result, updated=True)
+    return {"ok": True, "state": result["state"],
+            "msg": "微博连接已验证并保存" if result["state"] == "ok" else "已保存，待验证"}
+
+
+@app.delete("/api/settings/cookie")
+async def drop_cookie():
+    async with _connection_locks["weibo"]:
+        config.clear_cookie()
+        fallback = config.get_cookie()
+        connections.record("weibo", fallback, "saved" if fallback else "unset", updated=True)
+    return {"ok": True, "msg": "已清除网页保存的 Cookie，当前使用环境配置，需重新校验" if fallback else "微博连接已清除"}
+
+
+class XAuthBody(BaseModel):
+    auth_token: str = ""
+    ct0: str = ""
+    verify: bool = True
+
+
+@app.post("/api/settings/x-auth")
+async def save_x_auth(body: XAuthBody):
+    """Cookie 助手扩展送来 X 的 auth_token（供服务端定时抓 X 列表）。"""
+    try:
+        token, ct0 = connections.normalize_x(body.auth_token, body.ct0)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    async with _connection_locks["x"]:
+        result = await _candidate("x", token, body.verify, ct0)
+        config.save_x_auth(token, ct0)
+        connections.record("x", token, **result, updated=True)
+    return {"ok": True, "state": result["state"],
+            "msg": "X 连接已验证并保存" if result["state"] == "ok" else result["error"] or "X 已保存，待验证"}
+
+
+@app.delete("/api/settings/x-auth")
+async def drop_x_auth():
+    async with _connection_locks["x"]:
+        config.X_AUTH_FILE.unlink(missing_ok=True)
+        connections.record("x", "", "unset", updated=True)
+    return {"ok": True, "msg": "X 连接已清除"}
+
+
+@app.post("/api/settings/{source}/check")
+async def check_connection(source: str):
+    if source not in _connection_locks:
+        raise HTTPException(404, "未知来源")
+    async with _connection_locks[source]:
+        credential = connections.current(source)
+        if not credential:
+            raise HTTPException(400, "请先保存该平台的 Cookie")
+        result = await connections.probe(source, credential, config.get_x_csrf() if source == "x" else "")
+        connections.record(source, credential, **result)
+    return {"ok": result["state"] == "ok", "state": result["state"],
+            "msg": "连接校验通过" if result["state"] == "ok" else result["error"]}
+
+
+# ---------- 演示数据 ----------
+
+@app.post("/api/demo")
+async def demo_seed():
+    return demo.seed()
+
+
+@app.delete("/api/demo")
+async def demo_clear():
+    return demo.clear()
+
+
+# ---------- 图片与打包下载 ----------
+
+# pics/ 下文件名全部内容寻址（sha1 前缀），同一路径永远是同一张图，本可长缓存；
+# 但 device_boundary 中间件对 /media/ 统一盖 Cache-Control: no-store——0.5.4 安全
+# 冲刺的隐私决定：配对设备的浏览器不长期留存私人媒体。此处不再声明 immutable，
+# 免得写一个永远不生效的头。
+@app.get("/media/{path:path}")
+async def media(path: str, dl: int = 0):
+    base = config.PICS_DIR.resolve()
+    p = (base / path).resolve()
+    # is_relative_to 而非前缀字符串比较：防止 /app/data/picsX 这类兄弟目录逃逸
+    if not p.is_relative_to(base) or not p.is_file():
+        raise HTTPException(404)
+    if dl:
+        # 内容寻址文件名本身就是 sha1，直接用，省一次整文件读
+        return FileResponse(p, filename=f"picwall-{p.stem}{p.suffix}")
+    return FileResponse(p)
+
+
+def _build_zip(day_dir, dst) -> None:
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_STORED) as z:
+        for f in sorted(day_dir.iterdir()):
+            z.write(f, f.name)
+
+
+@app.get("/api/export/zip")
+async def export_zip(date: str):
+    base = config.EXPORT_DIR.resolve()
+    day_dir = (base / date).resolve()
+    if not date.replace("-", "").isdigit() or not day_dir.is_relative_to(base) \
+            or not day_dir.is_dir():
+        raise HTTPException(404, "该日期没有保留的图")
+    # 压缩丢线程池不阻塞事件循环；写临时文件流式发送，保留多的一天也不会吃满内存
+    fd, tmp = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    try:
+        await asyncio.to_thread(_build_zip, day_dir, tmp)
+    except Exception:
+        os.unlink(tmp)
+        raise
+    return FileResponse(tmp, media_type="application/zip",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=picwall-kept-{date}.zip"},
+                        background=BackgroundTask(_unlink_quiet, tmp))

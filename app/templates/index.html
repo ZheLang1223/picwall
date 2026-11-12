@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="zh-CN" data-device-role="{{ role }}" data-local-owner="{{ 'true' if local_owner else 'false' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Picwall · 微博分组图片墙</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%231d1d1f'/%3E%3Crect x='3' y='3' width='4.5' height='4.5' rx='1' fill='%23fff'/%3E%3Crect x='8.5' y='3' width='4.5' height='4.5' rx='1' fill='%230066cc'/%3E%3Crect x='3' y='8.5' width='4.5' height='4.5' rx='1' fill='%23fff'/%3E%3Crect x='8.5' y='8.5' width='4.5' height='4.5' rx='1' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="manifest" href="/static/manifest.webmanifest?v={{ v }}">
+  <link rel="apple-touch-icon" href="/static/icon-192.png?v={{ v }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#ffffff">
+  <script>
+  /* 个性化初始化：必须跑在 CSS 之前（主题防闪白、纯图模式防闪正文）。
+     pw_prefs = { theme, accent, bg, font, skin, author, pureimg, dblfav }；
+     主题三态：light/dark/system；旧 pw_theme='dark' 迁移为深色，其余跟随系统。
+     皮肤（skin）：swiss/brut/photo，空=默认苹果风；皮肤自带底色，theme-color 跟随。 */
+  (function () {
+    var KEY = 'pw_prefs';
+    var THEME_BG = { light: '#ffffff', dark: '#0d0d0f' };
+    var SKIN_BG = {
+      swiss: { light: '#f7f6f2', dark: '#0f0f11' },
+      brut:  { light: '#f3ead6', dark: '#16130d' },
+      photo: { light: '#fbfbfa', dark: '#0b0b0c' }
+    };
+    var root = document.documentElement;
+    function prefs() {
+      try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+    }
+    function sysTheme() {
+      return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
+        ? 'dark' : 'light';
+    }
+    function theme() {
+      var p = prefs();
+      if (p.theme === 'light' || p.theme === 'dark') return p.theme;
+      if (p.theme === 'system') return sysTheme();
+      try { if (localStorage.getItem('pw_theme') === 'dark') return 'dark'; } catch (e) {}
+      return sysTheme();   // 从未配置过：跟随系统
+    }
+    function applyAll() {
+      var p = prefs();
+      var t = theme();
+      root.setAttribute('data-theme', t);
+      var m = document.querySelector('meta[name="theme-color"]');
+      if (m) m.setAttribute('content', (SKIN_BG[p.skin] || THEME_BG)[t]);
+      ['accent', 'bg', 'font', 'skin'].forEach(function (k) {
+        var v = p[k];
+        if (k === 'accent' && v && ['indigo', 'green', 'plum'].indexOf(v) < 0) v = '';   // 琥珀已退役（专职收藏标记），旧档回落默认
+        if (k === 'skin' && v && ['swiss', 'brut', 'photo'].indexOf(v) < 0) v = '';      // 未知皮肤档位回落默认
+        if (v) root.setAttribute('data-' + k, v);
+        else root.removeAttribute('data-' + k);
+      });
+      if (p.pureimg) root.setAttribute('data-pureimg', '1');
+      else root.removeAttribute('data-pureimg');
+      root.setAttribute('data-x-blur', p['x-blur'] === 'off' ? 'off' : 'on');
+    }
+    /* 供设置面板写入：'' 表示清除该配置（如 theme='' 回归跟随系统） */
+    window.pwSetPref = function (key, val) {
+      var p = prefs();
+      if (val === '' || val === null || val === undefined) delete p[key];
+      else p[key] = val;
+      try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {}
+      applyAll();
+    };
+    window.pwGetPrefs = prefs;
+    applyAll();
+    if (window.matchMedia) {
+      var mq = matchMedia('(prefers-color-scheme: dark)');
+      var follow = function () { if (!prefs().theme || prefs().theme === 'system') applyAll(); };
+      mq.addEventListener ? mq.addEventListener('change', follow) : mq.addListener(follow);
+    }
+    window.addEventListener('storage', function (e) {
+      if (e.key === KEY) applyAll();
+    });
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+</head>
+<body>
+
+<header class="topbar">
+  <button id="btn-top" class="brand" type="button" aria-label="PWALL，回到顶部" title="回到顶部">PWALL</button>
+  <div class="nav-tools">
+    <div class="viewwrap">
+      <button id="btn-view" class="viewbtn" aria-expanded="false" aria-controls="view-panel">
+        <span id="view-label">新增</span>
+        <span id="view-filter" class="vfilter" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg><b id="view-fcount"></b></span>
+        <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+    <div class="searchwrap">
+      <svg class="sicon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="f-search" class="f-search" type="search" placeholder="搜正文/评论…" maxlength="100" autocomplete="off">
+    </div>
+  </div>
+  <button id="btn-settings" class="tbtn ic" title="设置" aria-label="设置"
+          aria-haspopup="dialog" aria-controls="modal-settings">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
+</header>
+
+<div id="view-panel" class="view-panel" hidden>
+  <div class="f-row"><span class="f-label">状态</span><div class="f-chips" id="f-status"></div></div>
+  <div class="f-row"><span class="f-label">来源</span><div class="f-chips" id="f-source"></div></div>
+  <div class="f-row"><span class="f-label">博主</span><div class="f-chips" id="f-author"></div></div>
+  <div class="f-row"><span class="f-label">标签</span><div class="f-chips" id="f-tags"></div></div>
+  <hr class="f-divider">
+  <div class="f-row" id="f-viewctl-row">
+    <span class="f-label">视图</span>
+    <div class="f-viewctl">
+      <div class="segctl" id="f-sort-ctl" hidden>
+        <button data-v=""><span class="mic" aria-hidden="true">↓</span>最新</button>
+        <button data-v="keep_count"><span class="mic" aria-hidden="true">#</span>点赞</button>
+        <button data-v="shuffle"><span class="mic" aria-hidden="true">✦</span>随机</button>
+      </div>
+      <div class="segctl" id="f-layout">
+        <button data-v="wall"><span class="mic" aria-hidden="true">⊞</span>墙</button>
+        <button data-v="chrono"><span class="mic" aria-hidden="true">☰</span>编年</button>
+      </div>
+      <button id="f-reset" class="f-reset" hidden>重置筛选</button>
+    </div>
+  </div>
+</div>
+
+<!-- 抓取状态栈：右侧悬浮小卡（登录失效/未配分组/抓取中/告警），由 app.js renderBanner 填充 -->
+<div id="banner"></div>
+
+<!-- 桌面左右轨（≥900px 显示，顶栏在桌面隐藏；移动端布局不变）。
+     图标列恒 56px 不变形；分组/博主/会话等内容在 #rail-panel 浮层里
+     只由 #rail-toggle 按钮展开/收起（不悬停自动浮出）。行为与数据填充在 rail.js。 -->
+<aside id="rail" class="rail" aria-label="主导航">
+  <div class="rstrip">
+    <span class="rbrand" title="PWALL"><span class="lgm" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span>
+  </div>
+  <button class="rrow" id="rail-toggle" type="button" aria-expanded="false" aria-controls="rail-panel" aria-label="展开导航面板">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
+    <span class="tip" id="rail-toggle-tip">展开导航</span>
+  </button>
+  <div class="rsec" id="rail-views">
+    <!-- 展示序 = 键位序：保留1 / 已删除2 / 收藏3 / 全部4；新增（待筛墙）无常驻数字键，
+         排首作每日入口——此前它只在右轨条件出现（有待筛帖才显），视图本身无法被发现 -->
+    <button class="rrow vw" data-status="pending" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span class="tip">新增</span>
+    </button>
+    <button class="rrow vw" data-status="kept" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+      <span class="tip">保留 <kbd>1</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="discarded" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      <span class="tip">已删除 <kbd>2</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="favorites" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+      <span class="tip">收藏 <kbd>3</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="all" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="tip">全部 <kbd>4</kbd></span>
+    </button>
+  </div>
+  <div class="rscroll">
+    <button class="rrow" id="rail-groups" type="button" aria-haspopup="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span class="tip">分组</span>
+    </button>
+    <button class="rrow" id="rail-authors-entry" type="button" aria-haspopup="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="bdg" id="rail-authors-bdg" hidden></span>
+      <span class="tip">所有博主</span>
+    </button>
+    <button class="rrow js-chrono" id="rail-chrono" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <span class="tip">编年视图 <kbd>V</kbd></span>
+    </button>
+  </div>
+  <div class="rbottom">
+    <button class="rrow js-settings" id="rail-settings" type="button" aria-label="设置">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span class="tip">设置</span>
+    </button>
+  </div>
+</aside>
+
+<!-- 导航浮层面板：图标列功能的「延伸」——同一批功能行按相同顺序与行高节奏
+     排布（每枚图标在面板里有同 y 的图标+文字形态），分组树/博主列表就地
+     长在自己的行下面。展开/收起只认 #rail-toggle 按钮，不推挤墙。行为见 rail.js。 -->
+<div id="rail-panel" class="rail-panel" aria-label="导航面板">
+  <div class="phead">
+    <span class="lb">PWALL</span>
+  </div>
+  <!-- 与轨上 #rail-toggle 同 y 的镜像行：保住「面板行 y 与图标行 y 一一对齐」的节奏，点它同样收起面板 -->
+  <button class="rrow" id="rail-panel-toggle" type="button" aria-label="收起导航面板">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
+  </button>
+  <div class="rsec" id="panel-views">
+    <!-- 视图行带全量计数（.cnt 由 rail.js sync 填充）；.rend 把计数与键位打包右对齐 -->
+    <button class="rrow vw" data-status="pending" type="button">
+      <span class="lb">新增</span><span class="cnt"></span>
+    </button>
+    <button class="rrow vw" data-status="kept" type="button">
+      <span class="lb">保留</span><span class="rend"><span class="cnt"></span><kbd class="kb">1</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="discarded" type="button">
+      <span class="lb">已删除</span><span class="rend"><span class="cnt"></span><kbd class="kb">2</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="favorites" type="button">
+      <span class="lb">收藏</span><span class="rend"><span class="cnt"></span><kbd class="kb">3</kbd></span>
+    </button>
+    <button class="rrow vw" data-status="all" type="button">
+      <span class="lb">全部</span><span class="rend"><span class="cnt"></span><kbd class="kb">4</kbd></span>
+    </button>
+  </div>
+  <div class="pscroll">
+    <div class="rsec">
+      <div class="rrow head">
+        <span class="lb">分组</span>
+      </div>
+      <div id="rail-tree" class="rtree"></div>
+    </div>
+    <div class="rsec">
+      <div class="rrow head">
+        <span class="lb">所有博主</span><span class="head-hint">点开博主页面</span>
+      </div>
+      <div id="rail-authors" class="rtree"></div>
+    </div>
+    <button class="rrow js-chrono" type="button">
+      <span class="lb">编年视图</span><kbd class="kb">V</kbd>
+    </button>
+    <a class="rrow" href="/kiosk" title="报刊亭：博主杂志墙">
+      <span class="lb">报刊亭</span>
+    </a>
+    <a class="rrow" href="/stats" title="统计室：回看与入库报告">
+      <span class="lb">回看统计</span>
+    </a>
+    <button class="rrow js-settings" type="button">
+      <span class="lb">设置</span>
+    </button>
+  </div>
+</div>
+
+<nav id="irail" class="irail" aria-label="快捷动作">
+  <!-- 排序（自左轨移入）：悬停/点按出选项抽屉；仅在保留/收藏/全部视图可排序（rail.js 管闸）。
+       三档与手机视图面板排序段同全集（最新/点赞/随机）——桌面抽屉此前漏复制随机档 -->
+  <div class="isl" id="ir-sort">
+    <button class="ibtn" id="ir-sort-btn" type="button" aria-label="排序" aria-haspopup="true"
+      aria-controls="ir-sort-drawer" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><polyline points="18 20 18 4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="3" y1="14" x2="9" y2="14"/><line x1="15" y1="10" x2="21" y2="10"/></svg>
+      <span class="tip" id="ir-sort-tip">排序：最新</span>
+    </button>
+    <div class="drawer" id="ir-sort-drawer">
+      <h5>排序</h5>
+      <button class="d-opt" data-sort-opt="" type="button">按最新 <span class="d-sub">抓取时间序</span></button>
+      <button class="d-opt" data-sort-opt="keep_count" type="button">按点赞 <span class="d-sub">保留次数多在前</span></button>
+      <button class="d-opt" data-sort-opt="shuffle" type="button">按随机 <span class="d-sub">打乱顺序</span></button>
+      <p class="d-hint">仅保留 / 收藏 / 全部视图可排序；其余视图按时间序。</p>
+    </div>
+  </div>
+  <!-- 筛选：桌面上视图面板（状态/来源/博主/排序/布局）唯一可见入口——
+       触发按钮 #btn-view 只在移动端顶栏存在，此前桌面只剩 Shift+F 一条暗道 -->
+  <div class="isl">
+    <button class="ibtn" id="ir-filter" type="button" aria-label="筛选" aria-haspopup="true" aria-controls="view-panel" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+      <span class="tip">筛选 <kbd>Shift+F</kbd></span>
+    </button>
+  </div>
+  <div class="isl">
+    <button class="ibtn" id="ir-search" type="button" aria-label="搜索" aria-haspopup="true"
+      aria-controls="ir-search-drawer" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span class="tip" id="ir-search-tip">搜索</span>
+    </button>
+    <div class="drawer" id="ir-search-drawer">
+      <h5>搜索</h5>
+      <label class="d-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input id="ir-search-input" type="search" placeholder="搜正文/评论…" maxlength="100" autocomplete="off" aria-label="搜索正文与评论">
+      </label>
+      <p class="d-hint">Enter 搜索，Esc 清除或关闭。命中批注会在卡片上高亮。</p>
+    </div>
+  </div>
+  <div class="isl">
+    <button class="ibtn" id="ir-play" type="button" aria-label="放映" aria-haspopup="true"
+      aria-controls="ir-play-drawer" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+    </button>
+    <div class="drawer" id="ir-play-drawer">
+      <h5>幻灯片放映</h5>
+      <p class="d-hint">按设置里的回看数量与间隔放映</p>
+      <button class="d-cta" id="ir-play-go" type="button">开始放映</button>
+    </div>
+  </div>
+  <div class="isl">
+    <button class="ibtn" id="ir-random" type="button" aria-label="随机一张">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+      <span class="tip">随机一张</span>
+    </button>
+  </div>
+  <div class="isl">
+    <button class="ibtn" id="ir-notes" type="button" aria-label="最近批注">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+      <span class="tip">最近批注</span>
+    </button>
+  </div>
+  <div class="ispacer"></div>
+  <!-- 待筛入口：有待筛帖才出现（rail.js syncSession 控制），点击直达四格快筛 -->
+  <div class="isl" id="ir-triage" hidden>
+    <button class="ibtn" type="button" aria-label="待筛">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span class="bdg" id="ir-triage-bdg" hidden></span>
+      <span class="tip">待筛</span>
+    </button>
+  </div>
+  <div class="isl">
+    <button class="ibtn" id="ir-top" type="button" aria-label="回到顶部">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+      <span class="tip">回顶部</span>
+    </button>
+  </div>
+</nav>
+
+<div id="author-view" class="author-view" hidden></div>
+
+<main id="feed" class="feed"></main>
+<div class="more">
+  <button id="btn-more" hidden>加载更多</button>
+  <span id="endnote"></span>
+</div>
+
+<div id="selbar" class="selbar" hidden>
+  <button id="sel-all" class="tbtn">全选本页</button>
+  <button id="sel-keep" class="tbtn sel-keep">✓ 保留</button>
+  <button id="sel-drop" class="tbtn sel-drop">✕ 不要</button>
+  <button id="sel-tags" class="tbtn">标签</button>
+  <button id="sel-download" class="tbtn primary">下载（<span id="sel-n">0</span>）</button>
+  <button id="sel-cancel" class="tbtn">退出</button>
+</div>
+
+<div id="fab" class="fab">
+  <button id="fab-btn" class="fab-btn" type="button" aria-expanded="false" aria-controls="fab-menu"
+          aria-haspopup="true" aria-label="功能" title="功能">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="8.2" cy="8.2" r="2.1"/><circle cx="15.8" cy="8.2" r="2.1"/><circle cx="8.2" cy="15.8" r="2.1"/><circle cx="15.8" cy="15.8" r="2.1"/></svg>
+  </button>
+  <div id="fab-menu" class="fab-menu" hidden></div>
+</div>
+
+<div id="notes-view" class="notes-view" role="dialog" aria-modal="true" aria-label="最近批注" hidden>
+  <div class="notes-head"><b>最近批注</b>
+    <button id="notes-close" class="notes-close" aria-label="关闭批注流">✕</button></div>
+  <div id="notes-list" class="notes-list"></div>
+</div>
+
+<div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="大图浏览"
+     aria-keyshortcuts="1 2 3 4 5 ArrowLeft ArrowRight M L Escape" hidden>
+  <div class="lb-stage"><img id="lb-img" alt="" decoding="async"><video id="lb-video" controls playsinline preload="metadata" hidden></video></div>
+  <button id="lb-prev" class="lb-nav prev" aria-label="上一张">‹</button>
+  <button id="lb-next" class="lb-nav next" aria-label="下一张">›</button>
+  <div id="lb-film" class="lb-film" role="tablist" aria-label="胶片缩略图" hidden></div>
+</div>
+
+<div id="slideshow" class="slideshow" role="dialog" aria-modal="true" aria-label="幻灯片放映" hidden>
+  <div class="ss-layer" id="ss-layer-a"><img alt="" decoding="async"></div>
+  <div class="ss-layer" id="ss-layer-b"><img alt="" decoding="async"></div>
+  <div id="ss-progress" class="ss-progress-bar"></div>
+  <div id="ss-notes" class="ss-notes" hidden></div>
+  <div id="ss-caption" class="ss-caption"></div>
+  <div id="ss-state" class="ss-state" hidden>已暂停</div>
+  <button id="ss-prev" class="ss-nav prev" aria-label="上一张">‹</button>
+  <button id="ss-next" class="ss-nav next" aria-label="下一张">›</button>
+  <button id="ss-close" class="ss-close" aria-label="退出放映">✕</button>
+</div>
+
+<div id="modal-settings" class="modal" role="dialog" aria-modal="true" aria-label="设置" hidden>
+  <div class="modal-card settings-shell">
+    <div class="modal-head">
+      <button id="settings-back" class="settings-back" aria-label="返回设置菜单">‹</button>
+      <b id="settings-title">设置</b>
+      <button class="mclose" data-close="modal-settings" aria-label="关闭设置">✕</button></div>
+    <div class="sbody">
+      <nav class="snav" id="snav" aria-label="设置分区">
+        <div class="snav-title">来源与同步</div>
+        <button class="snav-item" data-pane="groups"><span>分组管理</span></button>
+        <button class="snav-item" data-pane="conn"><span>连接状态</span></button>
+        <button class="snav-item" data-pane="crawl"><span>自动抓取</span></button>
+        <div class="snav-title">内容与库</div>
+        <button class="snav-item" data-pane="batch"><span>批量下载</span></button>
+        <button class="snav-item" data-pane="purge"><span>清理空间</span><em id="nav-purge-badge" hidden></em></button>
+        <div class="snav-title">外观与偏好</div>
+        <button class="snav-item" data-pane="appearance"><span>主题显示</span></button>
+        <button class="snav-item" data-pane="cards"><span>卡片交互</span></button>
+        <button class="snav-item" data-pane="slideshow"><span>放映</span></button>
+        <div class="snav-title">设备与帮助</div>
+        <button class="snav-item" data-pane="qr"><span>手机连接</span></button>
+        <button class="snav-item" data-pane="devices"><span>设备管理</span><em id="nav-devices-sub"></em></button>
+        <button class="snav-item" data-pane="shortcuts"><span>快捷键</span></button>
+        <button class="snav-item" data-pane="about"><span>关于</span></button>
+      </nav>
+      <div class="spanes" id="spanes">
+
+        <section class="spane groups-card" id="pane-groups" hidden>
+          <h3 class="spane-title">分组管理</h3>
+          <div id="my-groups" class="my-groups"></div>
+          <div class="wbuser-add">
+            <input id="wbuser-input" placeholder="微博博主 UID 或主页链接，如 1669879400" autocomplete="off" spellcheck="false">
+            <button id="btn-add-wbuser" class="pbtn">添加微博博主</button>
+          </div>
+          <div class="xuser-add">
+            <input id="xuser-input" placeholder="X 用户名，如 luoluokun_" autocomplete="off" spellcheck="false">
+            <button id="btn-add-xuser" class="pbtn">添加 X 用户</button>
+          </div>
+          <div class="xgroup-add">
+            <input id="xgroup-input" placeholder="新建分组名，如 画师 / 摄影" autocomplete="off" maxlength="20">
+            <button id="btn-add-xgroup" class="pbtn">新建分组</button>
+          </div>
+          <button id="btn-discover" class="pbtn wide">拉取分组</button>
+        </section>
+
+        <section class="spane connection-card" id="pane-conn" hidden>
+          <h3 class="spane-title">连接状态</h3>
+          <div class="seg connection-tabs" id="cookie-source" aria-label="选择平台">
+            <button data-source="weibo" aria-pressed="true" class="on">微博</button>
+            <button data-source="x" aria-pressed="false">X</button>
+          </div>
+          <p id="cookie-connection-state" class="connection-state" role="status">正在读取连接状态…</p>
+          <p id="cookie-connection-meta" class="hint"></p>
+          <details class="ext-guide">
+            <summary>用浏览器扩展更新 Cookie</summary>
+            <p class="hint">① <a href="/static/extension/pwall-cookie-helper.zip" download>下载扩展 zip</a> 并解压；
+               ② 打开 <code>chrome://extensions</code>，右上角开启「开发者模式」；
+               ③ 点「加载已解压的扩展程序」，选择解压目录；④ 点浏览器工具栏的扩展图标，按提示分别发送微博 / X 的 Cookie。</p>
+            <p class="hint">在同一浏览器登录平台后，点扩展发送。服务器会校验连接；失败时保留原有凭据。</p>
+          </details>
+          <label for="cookie-input" id="cookie-input-label">手动更新微博 Cookie</label>
+          <p id="cookie-input-guide" class="hint">登录 weibo.com，在开发者工具 Network 中复制请求 Cookie，需包含 SUB 与 XSRF-TOKEN。</p>
+          <textarea id="cookie-input" rows="4" placeholder="SUB=…; XSRF-TOKEN=…; …"
+                    spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          <p id="cookie-result" class="hint" role="status"></p>
+          <div class="modal-row">
+            <button id="btn-save-cookie" class="pbtn">保存并校验</button>
+            <button id="btn-check-cookie" class="pbtn ghost">重新检查</button>
+            <button id="btn-clear-cookie" class="pbtn ghost">清除</button>
+          </div>
+        </section>
+
+        <section class="spane crawl-card" id="pane-crawl" hidden>
+          <h3 class="spane-title">自动抓取</h3>
+          <p class="hint">每天 <span id="crawl-time"></span> 自动抓一次；新分组首次抓取会自动回补近 30 天。</p>
+          <div id="crawl-lines" class="crawl-lines"></div>
+          <button id="btn-crawl-start" class="pbtn wide">立即抓取</button>
+        </section>
+
+        <section class="spane batch-card" id="pane-batch" hidden>
+          <h3 class="spane-title">批量下载</h3>
+          <div class="pref-row"><span class="pref-label">范围</span>
+            <div class="seg" id="b-scope" aria-label="下载范围"><button type="button" data-v="kept" class="on" aria-pressed="true">已保留</button><button type="button" data-v="all" aria-pressed="false">全部帖子</button><button type="button" data-v="favorites" aria-pressed="false">收藏</button><button type="button" data-v="selected" aria-pressed="false">我勾选的</button></div></div>
+          <div class="pref-row"><span class="pref-label">细分</span>
+            <div class="seg" id="b-sub" aria-label="下载细分"><button type="button" data-v="all" class="on" aria-pressed="true">全部</button><button type="button" data-v="author" aria-pressed="false">按博主</button><button type="button" data-v="date" aria-pressed="false">按日期</button></div></div>
+          <div id="b-buckets" class="b-buckets"></div>
+          <details class="b-adv">
+            <summary>高级</summary>
+            <label><input type="checkbox" id="b-subfolder"> 按博主建子文件夹</label>
+            <label><input type="checkbox" id="b-thumb"> 使用缩略图（体积更小）</label>
+          </details>
+          <div class="b-total" id="b-total"></div>
+          <div id="b-chunks" class="b-chunks" hidden></div>
+          <div class="modal-row">
+            <button class="pbtn ghost" data-close="modal-settings" style="flex:1">关闭</button>
+            <button id="b-go" class="pbtn" style="flex:2">批量下载</button>
+          </div>
+        </section>
+
+        <section class="spane purge-card" id="pane-purge" hidden>
+          <h3 class="spane-title">清理空间</h3>
+          <p class="hint">未收藏的「不要」满 <span id="purge-days">3</span> 天的帖子会在每天 04:10 自动硬删（图片一并清除，无法恢复）。</p>
+          <p class="hint">保留会归档已下载的图片；中图补成原图后继续归档。收藏标记重点并受自动清理保护。</p>
+          <p class="hint" id="purge-summary"></p>
+          <div id="purge-list" class="purge-list"></div>
+          <button id="btn-purge-run" class="pbtn wide danger">立即清理（<span id="purge-n">0</span> 帖）</button>
+        </section>
+
+        <section class="spane prefs-card" id="pane-appearance" hidden>
+          <h3 class="spane-title">主题显示</h3>
+          <div class="pref-group">
+            <div class="pref-row"><span class="pref-label">皮肤</span>
+              <div class="seg" id="pref-skin"><button data-v="classic">默认</button><button data-v="swiss">瑞士排版</button><button data-v="brut">粗野主义</button><button data-v="photo">摄影优先</button></div></div>
+            <div class="pref-row"><span class="pref-label">主题</span>
+              <div class="seg" id="pref-theme"><button data-v="light">浅色</button><button data-v="dark">深色</button><button data-v="system">跟随系统</button></div></div>
+            <div class="pref-row" id="pref-accent-row"><span class="pref-label">强调色</span>
+              <div><div class="seg" id="pref-accent"><button data-v="indigo"><i class="adot" style="--dot:#0066cc" aria-hidden="true"></i>靛蓝</button><button data-v="green"><i class="adot" style="--dot:#1f8a4d" aria-hidden="true"></i>墨绿</button><button data-v="plum"><i class="adot" style="--dot:#7a4fb3" aria-hidden="true"></i>梅紫</button></div>
+              <div class="phint" id="pref-accent-hint" hidden>当前皮肤自带强调色</div></div></div>
+            <div class="pref-row" id="pref-bg-row"><span class="pref-label">背景色调</span>
+              <div><div class="seg" id="pref-bg"><button data-v="cool">冷白</button><button data-v="paper">米白</button></div>
+              <div class="phint" id="pref-bg-hint" hidden>仅浅色模式生效</div></div></div>
+            <div class="pref-row"><span class="pref-label">全局字号</span>
+              <div class="seg" id="pref-font"><button data-v="sm">小</button><button data-v="std">标准</button><button data-v="lg">大</button></div></div>
+          </div>
+        </section>
+
+        <section class="spane prefs-card" id="pane-cards" hidden>
+          <h3 class="spane-title">卡片交互</h3>
+          <div class="pref-group">
+            <div class="pref-row"><span class="pref-label">X 卡片</span>
+              <div class="seg" id="pref-x-blur"><button data-v="on">模糊</button><button data-v="off">清晰</button></div></div>
+            <div class="pref-row"><span class="pref-label">双击图片收藏</span>
+              <label class="switch"><input type="checkbox" id="pref-dblfav-sw" aria-label="双击图片收藏"><span class="knob" aria-hidden="true"></span></label></div>
+            <div class="pref-row"><span class="pref-label">随机洗牌</span>
+              <div class="seg" id="pref-shuffle-seed"><button data-v="session">每次打开</button><button data-v="daily">每天一换</button></div></div>
+          </div>
+        </section>
+
+        <section class="spane prefs-card" id="pane-slideshow" hidden>
+          <h3 class="spane-title">放映</h3>
+          <div class="pref-group">
+            <div class="pref-row"><span class="pref-label">回看数量</span>
+              <div class="seg" id="pref-review"><button data-v="10">10 张</button><button data-v="30">30 张</button><button data-v="100">100 张</button></div></div>
+            <div class="pref-row"><span class="pref-label">放映间隔</span>
+              <div class="seg" id="pref-ss-interval"><button data-v="3">3 秒</button><button data-v="5">5 秒</button><button data-v="8">8 秒</button></div></div>
+            <div class="pref-row"><span class="pref-label">放映顺序</span>
+              <div class="seg" id="pref-ss-order"><button data-v="seq">顺序</button><button data-v="rand">随机</button></div></div>
+            <div class="pref-row"><span class="pref-label">放映评论</span>
+              <div class="seg" id="pref-ss-comments"><button data-v="on">显示</button><button data-v="off">隐藏</button></div></div>
+          </div>
+        </section>
+
+        <section class="spane qr-card" id="pane-qr" hidden>
+          <h3 class="spane-title">手机扫码连接</h3>
+          <div class="qr-img-wrap"><img id="qr-img" alt="连接二维码"></div>
+          <div class="modal-row">
+            <input id="qr-url" spellcheck="false" aria-label="连接地址">
+            <button id="qr-refresh" class="pbtn ghost">刷新</button>
+          </div>
+          <p class="hint">手机和电脑需处于同一 WiFi 下</p>
+          <div class="pair-issue" id="pair-issue">
+            <div class="pair-issue-row">
+              <span class="pair-issue-label">新设备配对</span>
+              <div class="seg" id="pair-role" aria-label="新设备权限">
+                <button data-v="editor" class="on">日常</button><button data-v="viewer">只读</button><button data-v="admin">管理</button>
+              </div>
+            </div>
+            <div class="modal-row">
+              <output id="pair-code" class="pair-code" aria-live="polite">···· ···· ····</output>
+              <button id="pair-code-gen" class="pbtn">生成配对码</button>
+            </div>
+            <p class="hint" id="pair-code-hint">生成后 10 分钟内有效、仅可使用一次；二维码会携带配对码，扫码自动填入。</p>
+          </div>
+        </section>
+
+        <section class="spane" id="pane-devices" hidden>
+          <h3 class="spane-title">设备管理</h3>
+          <div id="device-list"></div>
+          <p class="hint">新设备在电脑终端运行 make picwall-pair 获取配对码。管理、只读、采集设备通过 ROLE=admin / viewer / collector 指定权限。</p>
+          {% if not local_owner %}<button class="pbtn ghost" id="device-logout">断开当前设备</button>{% endif %}
+        </section>
+
+        <section class="spane" id="pane-shortcuts" hidden>
+          <h3 class="spane-title">快捷键速查</h3>
+          <div class="shortcuts-grid">
+            <div class="shortcut-group">
+              <div class="shortcut-title">浏览与导航</div>
+              <div class="shortcut-row"><kbd>1</kbd>–<kbd>4</kbd> <span>视图切换 (保留/已删除/收藏/全部)</span></div>
+              <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>F</kbd> <span>筛选面板 (状态/来源/博主)</span></div>
+              <div class="shortcut-row"><kbd>V</kbd> <span>切换编年视图</span></div>
+              <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Q</kbd> / <kbd>W</kbd> <span>四格快筛</span></div>
+              <div class="shortcut-row"><kbd>Space</kbd> <span>查看大图 / 关闭大图</span></div>
+              <div class="shortcut-row"><kbd>Esc</kbd> <span>关闭浮层 / 取消选择</span></div>
+            </div>
+            <div class="shortcut-group">
+              <div class="shortcut-title">快筛裁决</div>
+              <div class="shortcut-row"><kbd>F</kbd> / <kbd>↑</kbd> <span>保留 (Kept)</span></div>
+              <div class="shortcut-row"><kbd>D</kbd> / <kbd>↓</kbd> <span>不要 / 丢弃 (Discard)</span></div>
+              <div class="shortcut-row"><kbd>Z</kbd> <span>撤销上一笔裁决 (四格)</span></div>
+              <div class="shortcut-row"><kbd>+</kbd> / <kbd>-</kbd> <span>增减点赞次数 (×N)</span></div>
+            </div>
+            <div class="shortcut-group">
+              <div class="shortcut-title">详情与翻图</div>
+              <div class="shortcut-row"><kbd>←</kbd> / <kbd>→</kbd> <span>切图 (双击同向翻帖)</span></div>
+              <div class="shortcut-row"><kbd>PgUp</kbd> / <kbd>PgDn</kbd> <span>上一帖 / 下一帖</span></div>
+              <div class="shortcut-row"><kbd>T</kbd> <span>聚焦评论输入框</span></div>
+              <div class="shortcut-row"><kbd>L</kbd> <span>打开原文链接</span></div>
+            </div>
+            <div class="shortcut-group">
+              <div class="shortcut-title">标记与辅助</div>
+              <div class="shortcut-row"><kbd>M</kbd> <span>收藏 / 取消收藏</span></div>
+              <div class="shortcut-row"><kbd>?</kbd> <span>呼出快捷键速查</span></div>
+            </div>
+          </div>
+          <div class="modal-row" style="justify-content: flex-end;">
+            <button class="pbtn" data-close="modal-settings">关闭</button>
+          </div>
+        </section>
+
+        <section class="spane" id="pane-about" hidden>
+          <h3 class="spane-title">关于</h3>
+          <dl class="about-list">
+            <div class="about-row"><dt>版本</dt><dd id="about-version">—</dd></div>
+            <div class="about-row"><dt>数据库结构</dt><dd id="about-schema">—</dd></div>
+            <div class="about-row"><dt>当前设备</dt><dd id="about-role">—</dd></div>
+          </dl>
+          {% if local_owner %}<div class="modal-row"><a class="pbtn ghost" href="/atlas" title="单文件交互式架构图谱（浏览器返回键回相册）">开发管理</a></div>{% endif %}
+        </section>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="detail" class="detail" role="dialog" aria-modal="true" aria-label="帖子详情"
+     aria-keyshortcuts="1 2 3 4 5 F ArrowUp D ArrowDown ArrowLeft ArrowRight N M L Escape" hidden>
+  <button id="dt-prev" class="dt-nav prev" aria-label="上一帖">‹</button>
+  <button id="dt-next" class="dt-nav next" aria-label="下一帖">›</button>
+  <div id="review-progress" hidden></div>
+  <div id="triage-progress" hidden></div>
+  <div class="detail-belt">
+    <div class="detail-card is-front" tabindex="-1">
+      <div class="flash-veil keep">保留</div>
+      <div class="flash-veil drop">不要</div>
+      <div class="dt-body">
+        <div class="dt-stage">
+          <div class="dt-pics"></div>
+          <button class="dt-ig prev" aria-label="上一张" hidden>‹</button>
+          <button class="dt-ig next" aria-label="下一张" hidden>›</button>
+          <div class="dt-dots" hidden></div>
+        </div>
+        <div class="dt-panel">
+          <div class="detail-meta">
+            <span class="dt-avatar"></span>
+            <div class="dt-who">
+              <span class="dt-line1"><time class="dt-time"></time><span class="dt-keepn chip keepn" hidden></span></span>
+              <span class="dt-line2"><b class="dt-author"></b><span class="dt-via" hidden></span></span>
+            </div>
+            <div class="dt-side">
+              <a class="dt-weibo" target="_blank" rel="noopener" title="打开原博 (L)" aria-label="打开原博"></a>
+              <button class="dt-close" title="关闭帖子详情 (Esc)" aria-label="关闭帖子详情">✕</button>
+            </div>
+          </div>
+          <div class="dt-scroll">
+            <p class="dt-text"></p>
+            <div class="dt-tags" aria-label="标签"></div>
+            <div class="dt-comments">
+              <div class="dt-comments-head" hidden></div>
+              <div class="dt-comment-list"></div>
+              <p class="dt-comment-empty" hidden>还没有评论——写一条给未来的自己。</p>
+            </div>
+          </div>
+          <div class="dt-comment-bar">
+            <textarea class="dt-cinput" rows="1" maxlength="500" placeholder="记一笔… (T 键聚焦)"
+                      title="Enter 发送，Shift+Enter 换行 (T 聚焦)" aria-label="给这张帖写评论"></textarea>
+            <button class="dt-csend" title="发送评论 (Enter)" aria-label="发送评论">发送</button>
+            <span class="dt-bar-sep" aria-hidden="true"></span>
+            <button class="dtb drop" title="不要 (D / ↓)" aria-label="不要" aria-pressed="false">×</button>
+            <button class="dtb keep" title="保留 (F / ↑)" aria-label="保留" aria-pressed="false">✓</button>
+            <button class="dt-fav" title="收藏 (M)" aria-label="收藏"></button>
+          </div>
+        </div>
+      </div>
+      <div class="back-veil" aria-hidden="true"></div>
+    </div>
+    <div class="detail-card is-back" tabindex="-1" inert aria-hidden="true">
+      <div class="flash-veil keep">保留</div>
+      <div class="flash-veil drop">不要</div>
+      <div class="dt-body">
+        <div class="dt-stage">
+          <div class="dt-pics"></div>
+          <button class="dt-ig prev" aria-label="上一张" hidden>‹</button>
+          <button class="dt-ig next" aria-label="下一张" hidden>›</button>
+          <div class="dt-dots" hidden></div>
+        </div>
+        <div class="dt-panel">
+          <div class="detail-meta">
+            <span class="dt-avatar"></span>
+            <div class="dt-who">
+              <span class="dt-line1"><time class="dt-time"></time><span class="dt-keepn chip keepn" hidden></span></span>
+              <span class="dt-line2"><b class="dt-author"></b><span class="dt-via" hidden></span></span>
+            </div>
+            <div class="dt-side">
+              <a class="dt-weibo" target="_blank" rel="noopener" title="打开原博 (L)" aria-label="打开原博"></a>
+              <button class="dt-close" title="关闭帖子详情 (Esc)" aria-label="关闭帖子详情">✕</button>
+            </div>
+          </div>
+          <div class="dt-scroll">
+            <p class="dt-text"></p>
+            <div class="dt-tags" aria-label="标签"></div>
+            <div class="dt-comments">
+              <div class="dt-comments-head" hidden></div>
+              <div class="dt-comment-list"></div>
+              <p class="dt-comment-empty" hidden>还没有评论——写一条给未来的自己。</p>
+            </div>
+          </div>
+          <div class="dt-comment-bar">
+            <textarea class="dt-cinput" rows="1" maxlength="500" placeholder="记一笔… (T 键聚焦)"
+                      title="Enter 发送，Shift+Enter 换行 (T 聚焦)" aria-label="给这张帖写评论"></textarea>
+            <button class="dt-csend" title="发送评论 (Enter)" aria-label="发送评论">发送</button>
+            <span class="dt-bar-sep" aria-hidden="true"></span>
+            <button class="dtb drop" title="不要 (D / ↓)" aria-label="不要" aria-pressed="false">×</button>
+            <button class="dtb keep" title="保留 (F / ↑)" aria-label="保留" aria-pressed="false">✓</button>
+            <button class="dt-fav" title="收藏 (M)" aria-label="收藏"></button>
+          </div>
+        </div>
+      </div>
+      <div class="back-veil" aria-hidden="true"></div>
+    </div>
+  </div>
+</div>
+
+<div id="quad" class="quad" role="dialog" aria-modal="true" aria-label="四格快筛" hidden>
+  <div class="q-panel">
+    <button class="q-close" type="button" aria-label="退出四格快筛（Esc）" title="退出四格快筛（Esc）"></button>
+    <div class="q-grid">
+      <div class="q-slot" data-slot="0"></div>
+      <div class="q-slot" data-slot="1"></div>
+      <div class="q-slot" data-slot="2"></div>
+      <div class="q-slot" data-slot="3"></div>
+    </div>
+    <div class="q-hint" aria-hidden="true">↑/F 保留 · ↓/D 不要 · ←→ 换格 · 空格 大图 · 回车 细看 · Z 撤销 · Esc 退出</div>
+    <div class="q-zoom" hidden>
+      <div class="qz-media">
+        <img class="qz-img" alt="" decoding="async">
+        <span class="qz-count" hidden></span>
+      </div>
+      <div class="qz-info">
+        <div class="qz-meta">
+          <span class="qz-avatar"></span>
+          <b class="qz-author"></b>
+          <time class="qz-time"></time>
+        </div>
+        <p class="qz-text"></p>
+        <p class="qz-hint">F / ↑ 保留 · D / ↓ 不要 · ←→ 翻图 · Z 撤销 · Esc 返回</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-tags" class="modal" role="dialog" aria-modal="true" aria-label="批量打标签" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><b>给 <span id="tags-n">0</span> 帖打标签</b>
+      <button class="mclose" data-close="modal-tags" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="modal-row">
+        <input id="tag-new" placeholder="新标签名，回车添加" maxlength="24" autocomplete="off" aria-label="新标签名">
+        <button id="tag-add-btn" class="pbtn">添加</button>
+      </div>
+      <div id="tag-choices" class="tag-choices" aria-label="标签选择"></div>
+      <p class="hint">勾选要加的标签后「应用」；已在帖子上的标签不会重复添加，超出每帖 10 个上限的帖会跳过。逐帖移除标签在帖子详情里操作。</p>
+      <div class="modal-row" style="justify-content: flex-end;">
+        <button class="pbtn ghost" data-close="modal-tags">取消</button>
+        <button id="tags-apply" class="pbtn">应用</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<iframe id="download-frame" title="下载" hidden></iframe>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/static/app.js?v={{ v }}"></script>
+<script type="module" src="/static/rail.js?v={{ v }}"></script>
+</body>
+</html>

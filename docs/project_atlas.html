@@ -1,0 +1,4988 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PWALL · Project Atlas 工作台</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    colors: {
+      ink: { 950:'#121110', 900:'#171512', 850:'#1c1a16', 800:'#24211c', 700:'#302c25', 500:'#57524a', 400:'#7d766b', 300:'#a8a196' },
+      paper: { 50:'#f7f3ea', 100:'#efe9dc', 200:'#e2d9c7' },
+      accent: { 400:'#fbbf24', 500:'#f59e0b', 600:'#d97706' }
+    },
+    fontFamily: { sans: ['ui-sans-serif','system-ui','-apple-system','PingFang SC','Hiragino Sans GB','Microsoft YaHei','sans-serif'],
+                  mono: ['ui-monospace','SF Mono','Menlo','Consolas','monospace'],
+                  display: ['Songti SC','Noto Serif SC','STSong','Georgia','serif'] }
+  } }
+}
+</script>
+<style>
+  html, body { height: 100%; }
+  body { overflow: hidden; }
+  .dark body { background:#121110; color:#e7e2d8; }
+  body { background:#f7f3ea; color:#29241c; }
+  .display { font-family:'Songti SC','Noto Serif SC','STSong',Georgia,serif; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:#4a443a; border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+  html:not(.dark) ::-webkit-scrollbar-thumb { background:#d8cdb8; background-clip:content-box; }
+
+  /* 三栏工作台 */
+  #workbench { display:flex; height:calc(100vh - 49px); }
+  .col { overflow-y:auto; overscroll-behavior:contain; }
+  #left { width:20%; min-width:230px; border-right:1px solid rgba(245,158,11,.18); }
+  #center { width:45%; min-width:420px; border-right:1px solid rgba(245,158,11,.18); }
+  #right { flex:1; }
+  .col-pad { padding:16px; }
+
+  /* 左栏导航树 */
+  .nav-group-title { display:flex; align-items:center; gap:8px; margin:14px 0 4px;
+    font-size:11px; letter-spacing:.18em; color:rgba(245,158,11,.85); font-weight:600; }
+  html:not(.dark) .nav-group-title { color:#b45309; }
+  .nav-item { display:flex; align-items:baseline; gap:8px; width:100%; text-align:left;
+    padding:5px 8px; border-radius:4px; cursor:pointer; font-size:13px; color:inherit;
+    background:none; border:0; transition:background .12s; }
+  .nav-item:hover { background:rgba(245,158,11,.07); }
+  .nav-item.on { background:rgba(245,158,11,.13); box-shadow:inset 2px 0 0 #f59e0b; }
+  .nav-item .mono { font-family:ui-monospace,SF Mono,Menlo,monospace; font-size:12.5px; }
+
+  /* 状态高亮 */
+  .state-item.on .mono { color:#fbbf24; }
+  html:not(.dark) .state-item.on .mono { color:#b45309; }
+  .hl-atlas .nodeShape, .hl-atlas rect, .hl-atlas circle, .hl-atlas polygon, .hl-atlas path.line
+    { stroke:#fbbf24 !important; stroke-width:2.4px !important; }
+  .hl-atlasLabel { outline:1px solid rgba(245,158,11,.6); border-radius:3px; padding:0 2px; }
+  .legend-dot { display:inline-block; width:9px; height:9px; border-radius:2px; background:#f59e0b; }
+
+  /* 中栏 */
+  .flow-tab-active { color:#fbbf24 !important; border-color:rgba(245,158,11,.6) !important; box-shadow: inset 0 -2px 0 #f59e0b; }
+  html:not(.dark) .flow-tab-active { color:#b45309 !important; border-color:rgba(180,83,9,.6) !important; box-shadow: inset 0 -2px 0 #d97706; }
+  .flow-panel { border:1px solid rgba(245,158,11,.22); border-radius:6px; background:linear-gradient(180deg, rgba(245,158,11,.05), transparent 34%), #171512; box-shadow: inset 0 0 46px rgba(0,0,0,.45); }
+  html:not(.dark) .flow-panel { background:#fffdf8; box-shadow:none; }
+  .flow-box svg { max-width:none; height:auto; }
+  .flow-box .hl-atlas .nodeShape, .flow-box .hl-atlas rect, .flow-box .hl-atlas circle { stroke:#fbbf24 !important; stroke-width:2.4px !important; }
+
+  /* 右栏 Inspector */
+  .sec-title { font-size:11px; letter-spacing:.22em; font-weight:600; margin-bottom:8px; color:rgba(245,158,11,.9); }
+  html:not(.dark) .sec-title { color:#b45309; }
+  .rule-table { width:100%; border-collapse:collapse; font-size:12.5px; line-height:1.55; }
+  .rule-table th { text-align:left; padding:6px 8px; border:1px solid rgba(245,158,11,.3);
+    background:rgba(245,158,11,.08); font-weight:600; white-space:nowrap; }
+  .rule-table td { padding:6px 8px; border:1px solid rgba(245,158,11,.16); vertical-align:top; }
+  html:not(.dark) .rule-table th { border-color:rgba(146,104,14,.35); background:rgba(217,119,6,.08); }
+  html:not(.dark) .rule-table td { border-color:rgba(146,104,14,.22); }
+  .calltree { font-family:ui-monospace,SF Mono,Menlo,monospace; font-size:12px; line-height:1.75;
+    white-space:pre-wrap; word-break:break-all; }
+  .tradeoff { border:1px solid rgba(245,158,11,.16); border-radius:6px; padding:12px 14px; margin-bottom:10px; }
+  html:not(.dark) .tradeoff { border-color:rgba(146,104,14,.3); background:#fffdf8; }
+  .tradeoff h5 { font-size:13px; font-weight:700; margin-bottom:6px; }
+  .tradeoff dl { display:grid; grid-template-columns:64px 1fr; gap:4px 10px; font-size:12.5px; line-height:1.6; }
+  .tradeoff dt { opacity:.55; }
+  .chip { display:inline-block; font-size:11px; font-family:ui-monospace,Menlo,monospace;
+    padding:1px 6px; margin:1px 2px; border-radius:4px; border:1px solid rgba(245,158,11,.4);
+    color:inherit; background:none; cursor:pointer; }
+  .chip:hover { background:rgba(245,158,11,.12); }
+  .chip-static { cursor:default; }
+  mark { background:#fbbf24; color:#1c1917; border-radius:1px; padding:0 1px; }
+  html:not(.dark) mark { background:#fde68a; color:#78350f; }
+  .vscode { font-size:11px; padding:1px 6px; border:1px solid rgba(245,158,11,.5); border-radius:4px;
+    font-family:ui-monospace,Menlo,monospace; white-space:nowrap; }
+  .vscode:hover { background:rgba(245,158,11,.12); }
+  #search-overlay input { border-color:rgba(245,158,11,.4); }
+  #search-results { border-color:rgba(245,158,11,.25); }
+  .search-hit:hover { background:rgba(245,158,11,.07) !important; }
+</style>
+</head>
+<body class="font-sans antialiased">
+
+<header class="h-[49px] px-4 flex items-center gap-4 border-b" style="border-bottom:3px double rgba(245,158,11,.4)">
+  <div class="flex items-baseline gap-2.5">
+    <span class="display text-lg font-bold tracking-wide">PWALL</span>
+    <span class="display text-lg opacity-70">架构图谱工作台</span>
+    <span class="hidden lg:inline text-[10px] tracking-[.3em] opacity-40 uppercase pb-0.5">project atlas workbench</span>
+  </div>
+  <span id="baseline-chip" class="text-[11px] px-2 py-0.5 border rounded-sm font-mono -rotate-2 text-accent-600 dark:text-accent-400" style="border-color:rgba(245,158,11,.5)"></span>
+  <div class="flex-1"></div>
+  <button id="btn-search" class="text-xs px-3 py-1.5 rounded-sm border flex items-center gap-2 opacity-80 hover:opacity-100" style="border-color:rgba(245,158,11,.3)">
+    <span>检索</span><kbd class="text-[10px] px-1.5 py-0.5 rounded-sm border font-mono" style="border-color:rgba(245,158,11,.4)">/</kbd>
+  </button>
+  <button id="btn-theme" class="text-xs px-3 py-1.5 rounded-sm border opacity-80 hover:opacity-100" style="border-color:rgba(245,158,11,.3)">Theme</button>
+</header>
+
+<div id="workbench">
+  <aside id="left" class="col"><div class="col-pad" id="nav-tree"></div></aside>
+  <section id="center" class="col">
+    <div class="col-pad">
+      <div class="flex items-center gap-1 flex-wrap pb-3">
+        <div id="center-tabs" class="flex gap-1 flex-wrap"></div>
+        <div class="flex-1"></div>
+        <div id="zoomers" class="hidden items-center gap-1">
+          <button id="zoom-out" class="w-7 h-7 rounded-md border text-sm" style="border-color:rgba(245,158,11,.3)">−</button>
+          <button id="zoom-reset" class="w-7 h-7 rounded-md border text-xs" style="border-color:rgba(245,158,11,.3)">1:1</button>
+          <button id="zoom-in" class="w-7 h-7 rounded-md border text-sm" style="border-color:rgba(245,158,11,.3)">+</button>
+        </div>
+      </div>
+      <div id="center-body"></div>
+    </div>
+  </section>
+  <aside id="right" class="col"><div class="col-pad" id="inspector"></div></aside>
+</div>
+
+<div id="search-overlay" class="fixed inset-0 z-50 hidden">
+  <div class="max-w-2xl mx-auto mt-20 px-4">
+    <input id="search-input" type="text" placeholder="检索模块 / 状态字段 / 任务 / 概念…"
+           class="w-full px-4 py-3 rounded-sm border bg-transparent outline-none text-sm">
+    <div id="search-results" class="mt-2 rounded-sm border overflow-hidden divide-y"></div>
+    <div class="mt-2 text-xs opacity-50 px-1">Enter 打开首项 · Esc 关闭</div>
+  </div>
+</div>
+
+<script id="atlas-data" type="application/json">{
+  "meta": {
+    "name": "PWALL · Project Atlas 工作台",
+    "baseline": "v0.5.7 / schema v11",
+    "abs_root": "",
+    "generated": "2026-11-06"
+  },
+  "layers": [
+    {
+      "id": "be-ingest",
+      "name": "后端 · 采集层"
+    },
+    {
+      "id": "be-data",
+      "name": "后端 · 数据层"
+    },
+    {
+      "id": "be-service",
+      "name": "后端 · 服务层"
+    },
+    {
+      "id": "fe-comm",
+      "name": "前端 · 通信与纯函数层"
+    },
+    {
+      "id": "fe-hub",
+      "name": "前端 · 调度中枢（Hub）"
+    },
+    {
+      "id": "fe-mutation",
+      "name": "前端 · 写操作与后台任务"
+    },
+    {
+      "id": "fe-view",
+      "name": "前端 · 布局与内嵌视图"
+    },
+    {
+      "id": "fe-immersive",
+      "name": "前端 · 全屏消费引擎"
+    },
+    {
+      "id": "fe-config",
+      "name": "前端 · 配置与设备管理"
+    },
+    {
+      "id": "periphery",
+      "name": "外围 · 扩展与工具"
+    },
+    {
+      "id": "tasks",
+      "name": "任务入口"
+    },
+    {
+      "id": "concepts",
+      "name": "概念前提"
+    }
+  ],
+  "states": [
+    {
+      "name": "S.posts",
+      "kind": "前端状态",
+      "shape": "Array<Post>（created_at 降序，与 feed 子元素同序）",
+      "desc": "当前筛选视图下已加载的帖子队列，是墙、详情、四格、编年共同的数据源。",
+      "writers": [
+        "appjs",
+        "post_actions"
+      ],
+      "readers": [
+        "appjs",
+        "quad",
+        "timeline",
+        "authorview",
+        "review",
+        "batch_download"
+      ]
+    },
+    {
+      "name": "S.decisions",
+      "kind": "前端状态",
+      "shape": "Map<sid, Post>",
+      "desc": "乐观写期间的本地产物账本：写操作开始时登记、分页对账时决定「信本地还是信服务端」。",
+      "writers": [
+        "post_actions"
+      ],
+      "readers": [
+        "appjs"
+      ]
+    },
+    {
+      "name": "S.images",
+      "kind": "前端状态",
+      "shape": "Array<{p, pc, url}>",
+      "desc": "扁平化图片清单，供大图、详情、四格共用的浏览池。",
+      "writers": [
+        "appjs",
+        "review"
+      ],
+      "readers": [
+        "appjs",
+        "lightbox",
+        "quad",
+        "settings",
+        "post_actions"
+      ]
+    },
+    {
+      "name": "S.st",
+      "kind": "前端状态",
+      "shape": "Object（/api/status 响应缓存）",
+      "desc": "服务端状态快照：Cookie 连接、分组、计数、任务进度都从这里读。",
+      "writers": [
+        "appjs",
+        "maintenance_jobs"
+      ],
+      "readers": [
+        "appjs",
+        "settings",
+        "quad",
+        "content_state"
+      ]
+    },
+    {
+      "name": "S.author",
+      "kind": "前端状态",
+      "shape": "'all' | author_key",
+      "desc": "博主筛选：'all' 表示墙视图，具体值表示博主视图钉住；头部条显隐的单一事实源。",
+      "writers": [
+        "authorview",
+        "appjs"
+      ],
+      "readers": [
+        "appjs",
+        "authorview",
+        "timeline",
+        "slideshow"
+      ]
+    },
+    {
+      "name": "S.selectMode",
+      "kind": "前端状态",
+      "shape": "bool",
+      "desc": "多选模式总开关，进入后悬浮球让位、卡片点击改为勾选。",
+      "writers": [
+        "appjs"
+      ],
+      "readers": [
+        "appjs"
+      ]
+    },
+    {
+      "name": "S.cursor",
+      "kind": "前端状态",
+      "shape": "string | null",
+      "desc": "keyset 分页书签：上一页最后一条的排序键，驱动「加载更多」。",
+      "writers": [
+        "appjs"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "quad"
+      ]
+    },
+    {
+      "name": "S.hasMore",
+      "kind": "前端状态",
+      "shape": "bool",
+      "desc": "续页探针：取 limit+1 行探测 has_more。",
+      "writers": [
+        "appjs"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "quad"
+      ]
+    },
+    {
+      "name": "S.requestVersion",
+      "kind": "前端状态",
+      "shape": "number（自增）",
+      "desc": "load 竞态版本号：筛选快速切换时，过期响应按版本号直接丢弃。",
+      "writers": [
+        "appjs"
+      ],
+      "readers": [
+        "appjs"
+      ]
+    },
+    {
+      "kind": "前端状态",
+      "shape": "'' | 'keep_count' · string · 'all'|'weibo'|'x'",
+      "desc": "排序、搜索词、来源筛选：load 查询串、matchesView 客户端兜底、编年 outline 三处共用。",
+      "writers": [
+        "appjs",
+        "timeline",
+        "authorview"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "slideshow",
+        "view_state"
+      ],
+      "name": "S.sort"
+    },
+    {
+      "kind": "前端状态",
+      "shape": "'' | 'keep_count' · string · 'all'|'weibo'|'x'",
+      "desc": "排序、搜索词、来源筛选：load 查询串、matchesView 客户端兜底、编年 outline 三处共用。",
+      "writers": [
+        "appjs",
+        "timeline",
+        "authorview"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "slideshow",
+        "view_state"
+      ],
+      "name": "S.searchText"
+    },
+    {
+      "kind": "前端状态",
+      "shape": "'' | 'keep_count' · string · 'all'|'weibo'|'x'",
+      "desc": "排序、搜索词、来源筛选：load 查询串、matchesView 客户端兜底、编年 outline 三处共用。",
+      "writers": [
+        "appjs",
+        "timeline",
+        "authorview"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "slideshow",
+        "view_state"
+      ],
+      "name": "S.source"
+    },
+    {
+      "name": "Post.status",
+      "kind": "领域字段",
+      "shape": "'pending' | 'kept' | 'discarded'",
+      "desc": "帖子生命周期主状态；由 DB 触发器在库层校验合法性。",
+      "writers": [
+        "crawler",
+        "server",
+        "purge",
+        "db"
+      ],
+      "readers": [
+        "appjs",
+        "purge",
+        "queries"
+      ]
+    },
+    {
+      "name": "Post.keep_count",
+      "kind": "领域字段",
+      "shape": "int ≥ 1",
+      "desc": "点赞次数：建账=1，此后每帖每天最多 +1（服务层 _review_count 统一限流，墙卡点赞/详情±/回看/放映同限）；「按点赞排序」与回看选组的依据。",
+      "writers": [
+        "server",
+        "db"
+      ],
+      "readers": [
+        "appjs",
+        "review",
+        "queries"
+      ]
+    },
+    {
+      "name": "Post.favorite",
+      "kind": "领域字段",
+      "shape": "0 | 1",
+      "desc": "收藏独立标记：不改保留状态、受自动清理保护；取消收藏会重置清理计时。",
+      "writers": [
+        "server",
+        "db"
+      ],
+      "readers": [
+        "purge",
+        "appjs"
+      ]
+    },
+    {
+      "name": "Post.decision_version",
+      "kind": "领域字段",
+      "shape": "int（单调递增）",
+      "desc": "决定版本号：撤销乐观锁的比对基准，防止跨设备旧撤销覆盖新操作。",
+      "writers": [
+        "db",
+        "server"
+      ],
+      "readers": [
+        "server",
+        "appjs"
+      ]
+    },
+    {
+      "name": "Post.created_at",
+      "kind": "领域字段",
+      "shape": "ISO8601（东八区）",
+      "desc": "首发时间（编辑不漂移）；全库统一东八区是编年分组与时间筛选的不变量。",
+      "writers": [
+        "crawler",
+        "db"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "purge",
+        "queries"
+      ]
+    },
+    {
+      "name": "S.readOnly",
+      "kind": "前端状态",
+      "shape": "bool",
+      "desc": "只读设备（viewer）能力标记：由 html[data-device-role] 推出，写操作入口全部禁用。",
+      "writers": [],
+      "readers": [
+        "appjs",
+        "post_actions",
+        "quad",
+        "review"
+      ]
+    },
+    {
+      "name": "S.selected",
+      "kind": "前端状态",
+      "shape": "Set<sid>",
+      "desc": "多选勾选集：批量下载与 bulk-status 的输入。",
+      "writers": [
+        "appjs"
+      ],
+      "readers": [
+        "appjs",
+        "batch_download"
+      ]
+    },
+    {
+      "name": "S.status",
+      "kind": "前端状态",
+      "shape": "'all' | 'pending' | 'kept' | 'favorites' | 'discarded'",
+      "desc": "当前视图（主筛选），数字键 1-4 切换；切换时清空伴随筛选。",
+      "writers": [
+        "appjs",
+        "authorview"
+      ],
+      "readers": [
+        "appjs",
+        "timeline",
+        "slideshow",
+        "batch_download",
+        "view_state"
+      ]
+    }
+  ],
+  "diagrams": {
+    "topology": "flowchart LR\n  subgraph SGF[\"前端（app.js 显式依赖注入组装，模块无全局副作用）\"]\n    appjs[\"app.js · 调度中枢\"]\n    requests[\"requests.js\"]\n    post_actions[\"post-actions.js\"]\n    timeline[\"timeline.js\"]\n    quad[\"quad.js\"]\n    review[\"review.js\"]\n    slideshow[\"slideshow.js\"]\n    authorview[\"author-view.js\"]\n    lightbox[\"lightbox.js\"]\n    settings[\"settings.js\"]\n    notes[\"notes.js\"]\n    fab[\"fab.js\"]\n  end\n  subgraph SGB[\"后端 REST API（server.py 组合根）\"]\n    server[\"server.py · 50+ 路由\"]\n    authn[\"auth.py · 配对/会话\"]\n  end\n  subgraph SGI[\"采集与存储\"]\n    crawler[\"crawler.py 编排\"]\n    weibo[\"weibo.py\"]\n    xapi[\"sources/xapi.py\"]\n    media_fetch[\"media_fetch.py\"]\n    db[(\"db.py · SQLite 19 表\")]\n    storage[(\"storage.py · 内容寻址\")]\n  end\n  appjs -->|\"显式依赖注入\"| post_actions\n  appjs --> timeline\n  appjs --> quad\n  appjs --> review\n  appjs --> slideshow\n  appjs --> authorview\n  appjs --> lightbox\n  appjs --> settings\n  appjs --> notes\n  appjs --> fab\n  requests -.->|\"api() / serialQueue 被注入复用\"| post_actions\n  appjs -->|\"/api/status · /api/posts · /api/purge · /api/crawl\"| server\n  post_actions -->|\"/status · /restore · /reaffirm · /favorite\"| server\n  timeline -->|\"/api/timeline/outline\"| server\n  review -->|\"/api/review/next\"| server\n  settings -->|\"/api/groups · /api/settings/* · /api/device/code\"| server\n  server --> authn\n  server --> crawler\n  crawler --> weibo\n  crawler --> xapi\n  crawler --> media_fetch\n  media_fetch --> db\n  media_fetch --> storage",
+    "pipeline": "flowchart LR\n  W[\"weibo.py\\n解析标准 Post\"] --> V[\"validate_post\\n12 键契约校验\"]\n  X[\"sources/xapi.py\\nGraphQL 解析\"] --> V\n  H[\"浏览器代抓\\n/api/ingest/*\"] --> V\n  V -->|\"缺键即拒\"| D[(\"db.py\\n元数据落库\\n先拦墓碑\")]\n  D --> MF[\"media_fetch\\nfull 原图优先\"]\n  MF -->|\"成功\"| S[(\"storage.py\\nsha256 查重后落盘\")]\n  MF -->|\"原图失败\"| MID[\"mid 档回退\"]\n  MID --> S\n  MF -->|\"全部失败\"| Q[\"image_jobs 队列\\nretry_missing 补抓\"]\n  S --> A[\"保留时 archive\\nexport/ 归档\"]",
+    "lifecycle": "flowchart LR\n    ST([\"● 入库\"]) -->|\"抓取导入\"| P[\"pending 待处理\"]\n    P -->|\"保留 F / 快筛 / 批量\"| K[\"kept 已保留\\nkeep_count 可累加\"]\n    P -->|\"不要 D\"| DIS[\"discarded 已删除\\n记录 discarded_at\"]\n    K -->|\"改判 / 长按删除\"| DIS\n    DIS -->|\"已删除视图恢复 / 6 秒撤销\"| P\n    DIS -->|\"超期 3 天 · 每日 04:10\"| T([\"purge 物理清理 · 立墓碑\"])\n    K -.->|\"favorite 保护豁免；批注帖豁免\"| DIS"
+  },
+  "apiMap": {
+    "note": "前端统一经 requests.js 的 api() 发起，写操作全部走 serialQueue 串行队列。下表为「前端模块 → 后端端点」的完整映射；后端另有若干仅供外部/扩展调用的路由在表末单列。",
+    "rows": [
+      [
+        "app.js",
+        "GET /api/status",
+        "启动、抓取轮询（4 秒）、标记后 500ms 聚合刷新、维护任务完成后"
+      ],
+      [
+        "app.js",
+        "GET /api/posts?limit=50&cursor=…",
+        "首屏、筛选变更、翻页、IntersectionObserver 预载"
+      ],
+      [
+        "app.js",
+        "GET /api/authors · /api/authors/{uid}/bio",
+        "视图面板博主行刷新（最近活跃排序）；博主视图头部微博签名"
+      ],
+      [
+        "app.js",
+        "GET /api/posts/{sid}",
+        "打开详情、撤销冲突后取服务端权威状态、裁决后异步校正"
+      ],
+      [
+        "app.js",
+        "POST /api/posts/{sid}/comments · PUT/DELETE …/{cid}",
+        "批注新增与行内编辑、两步删除"
+      ],
+      [
+        "app.js",
+        "POST /api/posts/bulk-status",
+        "多选模式批量保留/不要"
+      ],
+      [
+        "app.js",
+        "POST /api/purge?days=N · POST /api/crawl",
+        "手动清理弹窗；立即抓取"
+      ],
+      [
+        "post-actions.js",
+        "POST /api/posts/{sid}/status · /restore · /reaffirm · /favorite",
+        "乐观标记、6 秒撤销、次数 ±1、收藏切换（全部串行队列）"
+      ],
+      [
+        "timeline.js",
+        "GET /api/timeline/outline",
+        "编年态按日聚合（与 /api/posts 同一筛选口径）"
+      ],
+      [
+        "review.js",
+        "GET /api/review/next?limit=N",
+        "回看选组（后端 review_candidates 分配名额）"
+      ],
+      [
+        "slideshow.js",
+        "GET /api/posts?limit=50",
+        "放映片单边放边取（私有游标）"
+      ],
+      [
+        "notes.js",
+        "GET /api/comments?limit=100&cursor=…",
+        "批注流倒序分页"
+      ],
+      [
+        "author-view.js",
+        "GET /api/authors/{key}/profile · /{uid}/bio",
+        "博主视图统计与签名"
+      ],
+      [
+        "settings.js",
+        "POST/DELETE /api/groups · POST /api/groups/discover",
+        "分组管理与一键拉取（discover 为前端逐个 POST，无事务性）"
+      ],
+      [
+        "settings.js",
+        "POST/DELETE /api/settings/cookie · /api/settings/x-auth · POST /api/settings/{source}/check",
+        "凭据保存、清除与探活"
+      ],
+      [
+        "settings.js",
+        "POST /api/device/code · GET /api/lan · GET /qr.svg",
+        "配对码签发、局域网地址、二维码"
+      ],
+      [
+        "devices.js",
+        "GET /api/devices · DELETE /api/devices/{id} · DELETE /api/device/session",
+        "设备列表、撤销配对、本机登出"
+      ],
+      [
+        "maintenance-jobs.js",
+        "GET /api/jobs/{kind} · POST /api/{kind}/retry",
+        "维护任务轮询（2 秒）与启动"
+      ],
+      [
+        "batch-download.js",
+        "GET /api/download/options · GET /api/download/zip",
+        "打包预览与隐藏 iframe 触发下载"
+      ],
+      [
+        "pair.js",
+        "POST /api/device/pair",
+        "配对页提交（扫码携带 code）"
+      ],
+      [
+        "quad.js",
+        "（无直接 API；复用注入的 mark/load，原图预取用 new Image()）",
+        "—"
+      ]
+    ],
+    "backendOnly": [
+      [
+        "GET /api/health",
+        "外部探活（compose healthcheck）"
+      ],
+      [
+        "POST /api/crawl/x",
+        "X 立即抓取（预留手动触发）"
+      ],
+      [
+        "POST /api/groups/{list_id}/backfill",
+        "指定分组回补（预留）"
+      ],
+      [
+        "POST /api/ingest/harvest · /api/ingest/x",
+        "浏览器代抓通道：CORS 仅放行 weibo.com/x.com，由 Cookie 助手扩展或 Console 脚本调用"
+      ],
+      [
+        "POST/DELETE /api/demo",
+        "演示数据种子（preview 实例用）"
+      ],
+      [
+        "GET /api/export/zip",
+        "当日归档打包（预留）"
+      ],
+      [
+        "GET /media/{path}",
+        "图片与缩略图静态供出（各模块 img src）"
+      ]
+    ]
+  },
+  "mechanics": [
+    {
+      "id": "m-optimistic",
+      "title": "机制一：乐观更新、串行写队列与分页防竞态闭环",
+      "scenario": "涉及模块：post-actions.js（mark / undoLastMark / reaffirm）→ requests.js（serialQueue）→ app.js（load 对账）。要解决的根本问题：用户在分拣时高频按键，写请求天然乱序返回，同时无限滚动会在写请求在途时拉取新页——三者叠加会产生「卡片诈尸」与「撤销覆盖新操作」两类事故。",
+      "mermaid": "flowchart TB\n  A[\"用户按 F / D\"] --> B[\"mark：乐观改 p + S.decisions 登记\\nbeginWrite：_pendingWrites++ · _settledAt=null\"]\n  B --> C[\"syncPost：matchesView 判去留\\n按 comparePosts 排序入位\"]\n  C --> D[\"enqueue：/status 请求进串行队列\\n记录 op.request 引用\"]\n  D --> E[\"6 秒撤销窗：lastDrop + undoTimer\"]\n  E -->|\"用户按 Z\"| F[\"undoLastMark：先排到原请求后\\nawait op.request 取服务端快照\"]\n  F --> G[\"POST /restore\\nprevious + expected 双比对乐观锁\"]\n  D -->|\"响应返回\"| H{\"p._operation === op ?\"}\n  H -->|\"是\"| I[\"合并 r.decision · queueStatusRefresh\"]\n  H -->|\"否（已被更新操作取代）\"| J[\"静默丢弃本次响应\"]\n  H -->|\"失败且是当前 op\"| K[\"回滚 previous · 清 lastDrop\"]",
+      "tables": [
+        {
+          "title": "并发冲突场景与防御判定矩阵",
+          "headers": [
+            "并发冲突场景",
+            "核心状态字段 / 版本令牌",
+            "防御判定逻辑",
+            "解决的具体事故"
+          ],
+          "rows": [
+            [
+              "分页拉取与在途写重叠",
+              "S.decisions · p._pendingWrites · p._settledAt",
+              "写开始时 beginWrite 把本地对象登记进 S.decisions 并清空 _settledAt；写结束 finishWrite 记录结算时刻。load 收到响应时仅当 local._settledAt < 请求发起时刻才清理缓存，否则强制用本地最新状态覆盖服务端返回的旧行。",
+              "用户在待审视图快速分拣触发自动翻页时，服务端尚未落盘的旧状态把刚淘汰的卡片重新渲染出来（卡片诈尸）"
+            ],
+            [
+              "同一帖高频连续切换状态",
+              "p._operation（对象引用令牌）",
+              "每次 mark / undoLastMark 生成全新操作对象赋给 p._operation；异步响应返回时仅当令牌全等才允许写回状态或回滚。",
+              "前一次过期的网络响应覆盖用户随后发起的最新操作"
+            ],
+            [
+              "连续狂按 ± 或连点收藏",
+              "p._reaffirmRevision · p._favoriteRevision（自增修订号）",
+              "每次调用递增修订号；异步返回或失败回滚前校验修订号未变才执行赋值，成功时以服务端权威 keep_count 覆盖。",
+              "高频乐观累加时中间过程的旧响应造成数字跳变回退"
+            ],
+            [
+              "标记后立刻撤销的请求逆序",
+              "serialQueue 串行链 + await op.request",
+              "undoLastMark 先入队占位，队内先 await 正向请求完成拿到服务端快照，再构造 restore 请求——服务端收包顺序严格等于操作顺序。",
+              "撤销请求比正向标记请求更早到达后端，导致恢复到一个从未存在的状态"
+            ],
+            [
+              "批量操作使撤销通道失效",
+              "decision_undos 表（服务端）",
+              "set_status_bulk 直接清空该帖撤销快照——批量操作设计上不提供单帖撤销，前端 6 秒撤销仅覆盖单帖 mark。",
+              "（设计边界）用户对批量结果按 Z 无效，属预期行为"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "m-doublebuffer",
+      "title": "机制二：详情双缓冲 DOM（Double-Buffering）与多模式复用",
+      "scenario": "涉及模块：app.js（#detail 传送带）← review.js（整组接管）。要解决的根本问题：快筛时逐帖裁决要求「下一张零延迟就位」，若每次裁决后再发起渲染与图片加载，网络往返会直接打断分拣节奏。",
+      "mermaid": "flowchart TB\n  A[\"renderStackAt(frontPost)\"] --> B[\"前卡立即渲染（当前帖）\"]\n  A --> C[\"从 S.posts 找 nextInView\\n渲染进 back 卡 · 图片 eager 预载\"]\n  C --> D[\"用户看前卡的整段时间\\n= 次位卡的加载窗口\"]\n  D --> E[\"detailAdvance(status) 裁决\"]\n  E --> F[\"1 先定 upNext（先定目标再摘卡）\"]\n  F --> G[\"2 mark 乐观标记 + 会话计数\"]\n  G --> H[\"3 flyOutGhost：克隆前卡播飞出动画\"]\n  H --> I[\"4 角色互换：back 升 front\\n旧 front reset 后降 back（inert）\"]\n  I --> J[\"5 滚动复位 + 焦点交回新前卡\"]\n  J --> K[\"6 旧前卡装新的下一张继续预载\"]\n  K --> L[\"7 异步 fetch 服务端数据校正前卡\"]"
+    },
+    {
+      "id": "m-keyboard",
+      "title": "机制三：全局键盘路由责任链（Keyboard Router Stack）",
+      "scenario": "涉及模块：app.js 顶层 keydown 监听器（约 804-924 行）统一接收全部按键，按模态优先级逐层分发；quad 自身没有任何监听器，全部键经转发获得。责任链的顺序就是「越打断性越高的界面越先拿键」。",
+      "tables": [
+        {
+          "title": "键盘分发优先级矩阵（自上而下，命中即 return）",
+          "headers": [
+            "优先级",
+            "触发条件",
+            "行为",
+            "位置（app.js）"
+          ],
+          "rows": [
+            [
+              "1",
+              "ctrlKey / metaKey / altKey 按下",
+              "直接 return——组合键全归浏览器（缩放、开发者工具不受影响）",
+              ":806"
+            ],
+            [
+              "2",
+              "存在打开的 .modal 弹窗",
+              "Escape 走 closeModal；Tab 走 trapTab 焦点圈；其余键吞掉——模态优先于输入框守卫",
+              ":807-811"
+            ],
+            [
+              "3",
+              "target 为输入框 / textarea / 可编辑元素",
+              "记 editing 标记（不立即返回：Escape 仍可关闭浮层）",
+              ":813-817"
+            ],
+            [
+              "4",
+              "e.repeat 连发",
+              "仅放行 ←→、PageUp/PageDown、大图开启时的 ↑↓；其余连发丢弃",
+              ":833-837"
+            ],
+            [
+              "5",
+              "Escape 逐层剥离栈",
+              "lightbox → detail（焦点在评论输入框时第一下只 blur）→ slideshow → notes → quad → 退出多选",
+              ":838-851"
+            ],
+            [
+              "6",
+              "editing 为真",
+              "return——输入态此后不再消费任何单键",
+              ":852"
+            ],
+            [
+              "7",
+              "Shift+Q / W",
+              "进入快筛会话 startQuickTriage（桌面=四格）",
+              ":859-863"
+            ],
+            [
+              "8",
+              "详情开启且 review.active()",
+              "转发 review.key——↑/F 点赞、←→ 导航、D/↓ 显式忽略（回看没有否定）",
+              ":871-872"
+            ],
+            [
+              "9",
+              "slideshow.active()",
+              "转发 slideshow.key——空格/单击暂停、←→ 翻页、M 收藏",
+              ":873"
+            ],
+            [
+              "10",
+              "quad 开启且 lightbox 关闭",
+              "转发 quad.key——↑/F/↓/D 裁决、Z 撤销、Enter 细看、空格大图（细看态 Esc 逐层退回）",
+              ":874"
+            ],
+            [
+              "11",
+              "非多选模式按数字 1-4",
+              "switchStatusView：1 保留 / 2 已删除 / 3 收藏 / 4 全部",
+              ":875-879"
+            ],
+            [
+              "12",
+              "大图开启",
+              "←→ 导航；↑↓ 长图滚动 0.8 屏；空格关闭；L 打开原帖；Tab 焦点圈",
+              ":880-896"
+            ],
+            [
+              "13",
+              "详情开启",
+              "↑/↓/F/D 裁决并前进；PageUp/PageDown 翻帖；←→ 双击判定（350ms 内同向=翻帖，否则切图）；+/- 次数；M/L/T/空格",
+              ":897-948"
+            ],
+            [
+              "14",
+              "非多选模式按空格",
+              "currentCard() 取视口露出面积最大的卡，打开其大图",
+              ":949-954"
+            ]
+          ]
+        },
+        {
+          "title": "责任链之外的次级监听器（独立共存，不进主链）",
+          "headers": [
+            "监听器",
+            "位置",
+            "说明"
+          ],
+          "rows": [
+            [
+              "V 键布局切换",
+              "timeline.js:384-392（独立 document 监听）",
+              "自带输入框守卫；实际切换被 canSwitch 闸门拦截——详情/大图/放映/四格/回看/多选全关才允许切换布局"
+            ],
+            [
+              "#f-search keydown stopPropagation",
+              "app.js:1947-1950",
+              "搜索框内按键不进入全局责任链"
+            ],
+            [
+              "评论行内编辑 Esc / Enter",
+              "app.js:1219 · 1347-1349",
+              "行内编辑的 Esc 阻止冒泡（只退出编辑）；.dt-cinput 的 Enter 发送批注"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "m-dualayout",
+      "title": "机制四：双布局引擎无缝切换（最短列瀑布流 × 按日编年）",
+      "scenario": "涉及模块：app.js（feedCols 列栈引擎）× timeline.js（日卷 + 时间密度尺）。核心设计约束：编年不是另一个页面，而是同一份数据的另一种「卡片分组方式」——它必须复用墙的全部收卡口与标记链路，才能保证标记、大图、详情行为完全一致。",
+      "tables": [
+        {
+          "title": "切换协同的六个关键触点",
+          "headers": [
+            "触点",
+            "墙态行为（app.js）",
+            "编年态行为（timeline.js）",
+            "位置"
+          ],
+          "rows": [
+            [
+              "收卡守卫：appendToShortestCol / insertCardAt / ensureFeedCols",
+              "最短列 append / 参照位插入 / 建列栈",
+              "三个函数首行检测 timeline.active() 即转发给 timeline 的 appendCard / insertCard，或直接 return 让位日卷分块",
+              "app.js:188-216 · timeline.js:122-139"
+            ],
+            [
+              "结构变化观察",
+              "（无）",
+              "MutationObserver 挂 #feed（childList+subtree）：任一 .card / .tday 被移除即标记 needOutline，120ms 防抖后清理空日卷、必要时 refreshOutline，最后 updateCursor 重算括号",
+              "timeline.js:310-326"
+            ],
+            [
+              "数据源",
+              "GET /api/posts 分页",
+              "GET /api/timeline/outline 按日聚合（同一筛选口径）+ /api/posts 分页流入收卡口",
+              "timeline.js:289-306"
+            ],
+            [
+              "尺子交互（#truler）",
+              "（无）",
+              "pointerdown/move 显示日期气泡，pointerup 按命中几何行 gotoDay：目标日未装载时循环 load(false)+settle 至多 60 页，再平滑滚到日卷头",
+              "timeline.js:143-199 · 265-285"
+            ],
+            [
+              "切换闸门",
+              "canSwitch()：详情/大图/放映/四格/回看/多选全关才许切换；编年态强制清空 S.sort（次数序不打时间序）",
+              "setLayout(on)：applyLayoutDom 写 html[data-layout] 与 --tl-top 令牌；sections.clear 后 refreshOutline，再一律 load(true) 重建",
+              "app.js:2039-2040 · timeline.js:356-372"
+            ],
+            [
+              "持久化与静默应用",
+              "偏好 pwSetPref('layout') 持久化",
+              "init 时记忆布局「静默应用」：只应用 DOM 标记并 refreshOutline，不触发 load——首屏那次 load 自然流入编年收卡口",
+              "timeline.js:394-408"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t-feature",
+      "name": "加一个新功能（后端 API）",
+      "goal": "从「想要一个新能力」到合并完成的完整路径。按顺序走，每一步都有现成参照，不用自己发明做法。",
+      "steps": [
+        {
+          "text": "想清楚数据从哪来、到哪去：需要新表或新列 → 看 db.py 卡；只是查询组合 → 看 queries 卡",
+          "refs": [
+            "db",
+            "queries"
+          ]
+        },
+        {
+          "text": "server.py 加路由，照 list_posts 的样子写；需要鉴权就沿用现有设备会话依赖，不要自己造认证",
+          "refs": [
+            "server"
+          ]
+        },
+        {
+          "text": "前端在 app/static 对应模块里用 requests.js 的 api() 调用后端",
+          "refs": [
+            "appjs"
+          ]
+        },
+        {
+          "text": "写测试：tests/ 下新建 test_*.py（unittest 风格；用 tests/auth_support.py 拿管理员请求头，测试跑在临时数据目录，不碰真实 data/）",
+          "refs": []
+        }
+      ],
+      "done": [
+        "make picwall-test 全绿",
+        "make picwall 重建容器后实测",
+        "用户可见行为同步 README 与使用手册（README §8 更新规则 1）",
+        "CHANGELOG 文末追加一条"
+      ]
+    },
+    {
+      "id": "t-source",
+      "name": "接入一个新的采集平台/来源",
+      "goal": "PWALL 目前有三个来源（微博、X、浏览器代抓）。加第四个来源时，代码里有六处「按来源写死」的收口点必须一起动。",
+      "steps": [
+        {
+          "text": "先决定形态：服务端定时抓（参考 sources/xapi.py）还是浏览器代抓（参考 sources/x.py）；两者都要实现 base.py 的统一 post 契约与错误四分类",
+          "refs": [
+            "contract",
+            "xapi"
+          ]
+        },
+        {
+          "text": "六处收口点逐一过：media_fetch 域名白名单 → connections 探活分支 → db.active_groups 前缀推断 → server 的 ingest CORS 映射 → /api/status 来源元组 → lifespan 调度任务",
+          "refs": [
+            "media_fetch",
+            "connections",
+            "server"
+          ]
+        },
+        {
+          "text": "抓取编排挂进 crawler（翻页/去重/入库已有现成管道），sid 记得带来源前缀防撞（如 平台:<id>）",
+          "refs": [
+            "crawler",
+            "db"
+          ]
+        }
+      ],
+      "done": [
+        "真实抓一批数据落库，墙卡来源标记与筛选贯通",
+        "登录失效/限流/结构变化三类错误分别有出路",
+        "契约测试 + make picwall-test 全绿",
+        "架构总览与 README 采集节同步"
+      ]
+    },
+    {
+      "id": "t-env",
+      "name": "新增一个环境变量",
+      "goal": "环境变量是容器部署最容易翻车的地方：compose 是白名单，漏声明则容器看不见、配了等于没配（本项目踩过两次，已有测试钉死）。",
+      "steps": [
+        {
+          "text": "app/config.py 读入并定默认值（int 型注意空串会炸，默认值必须给）",
+          "refs": [
+            "config"
+          ]
+        },
+        {
+          "text": "docker-compose.yml 的 environment 显式声明一行，写法用 ${VAR:-默认值}（保底安全默认）",
+          "refs": []
+        },
+        {
+          "text": "README §3 配置表加一行说明",
+          "refs": []
+        },
+        {
+          "text": "tests/test_docs.py 的 COMPOSE_VARS 契约集合加上同一个名字（不加测试会红，这是故意的）",
+          "refs": []
+        }
+      ],
+      "done": [
+        "make picwall-test 全绿（含环境变量契约与文档契约）",
+        "make picwall 重建后进容器 echo $VAR 确认真看得见"
+      ]
+    },
+    {
+      "id": "t-schema",
+      "name": "改数据库结构（schema 迁移）",
+      "goal": "库结构升级不删库重抓：启动时自动做增量迁移。前提：meta 表存着库版本号；程序启动发现「库比代码新」会拒绝启动（版本前向拒绝），因为旧代码不认识新结构、硬跑会写坏数据。",
+      "steps": [
+        {
+          "text": "db.py 的 _SCHEMA_VERSION 加一（当前 v8）",
+          "refs": [
+            "db"
+          ]
+        },
+        {
+          "text": "在 init_db 的迁移序列里写幂等迁移：缺列补列、缺表建表；「幂等」= 同一段迁移跑多次结果一样，崩溃重跑安全",
+          "refs": [
+            "db"
+          ]
+        },
+        {
+          "text": "需要强约束（状态只能取某些值、时间必须一致）就加 DB 触发器，让坏数据在库层就被拒绝",
+          "refs": [
+            "db"
+          ]
+        },
+        {
+          "text": "同步三处文档：架构总览基线行（版本号）、README 数据节迁移清单、本图谱 db 卡",
+          "refs": []
+        }
+      ],
+      "done": [
+        "老库启动自动迁移、数据无损",
+        "全新空库从零建库正常",
+        "tests/test_migration.py 全绿",
+        "三处文档版本号一致"
+      ]
+    },
+    {
+      "id": "t-bugfix",
+      "name": "修一个 bug",
+      "goal": "定位路径是固定的：症状 → 状态页 → 排障表 → 模块卡。错误详情约定写在状态页（/api/status）而不是日志里，所以先看状态页。",
+      "steps": [
+        {
+          "text": "复现并归类症状：页面行为不对 / 数据不对 / 抓取失败——三类走不同入口",
+          "refs": []
+        },
+        {
+          "text": "打开 /api/status 看 last_error 与 x_last_error；错误分四类：auth（重发 Cookie）/ network（等或配代理）/ rate_limit（等）/ structure（平台改版，对照升级）",
+          "refs": [
+            "connections"
+          ]
+        },
+        {
+          "text": "按症状打开对应模块卡（README §6 也有排障表），点契约旁的 ↗ 按钮直达源码行",
+          "refs": [
+            "server",
+            "weibo",
+            "xapi"
+          ]
+        },
+        {
+          "text": "最小修复 + 补一个回归测试钉住它（防止将来改回去）",
+          "refs": []
+        }
+      ],
+      "done": [
+        "新测试 + 全量 make picwall-test 全绿",
+        "容器重建实测原症状消失",
+        "CHANGELOG 记一条（修了什么 + 怎么验证）"
+      ]
+    },
+    {
+      "id": "t-frontend",
+      "name": "改前端交互 / 加界面功能",
+      "goal": "前端无框架无构建。约定：单一 S 状态对象 + 显式 sync 函数替代响应式；新模块通过依赖注入接入 app.js，不互相 import。",
+      "steps": [
+        {
+          "text": "找对应模块：墙/详情/大图 → app.js；编年 → timeline.js；四格 → quad.js；回看/放映 → review.js / slideshow.js；设置 → settings.js",
+          "refs": [
+            "appjs",
+            "timeline",
+            "quad",
+            "review"
+          ]
+        },
+        {
+          "text": "新插卡路径必须过编年守卫（appendToShortestCol / insertCardAt / ensureFeedCols 三处），否则编年视图漏卡",
+          "refs": [
+            "appjs"
+          ]
+        },
+        {
+          "text": "改完用 make picwall-preview 起 18081 临时演示实例过一遍（退出自动销毁，不碰真实数据）",
+          "refs": []
+        },
+        {
+          "text": "行为或键位有变：同步使用手册对应节 + 键位总表（§7）+ README 能力地图",
+          "refs": []
+        }
+      ],
+      "done": [
+        "preview 实例桌面/手机两视口过一遍",
+        "前端契约测试（tests/frontend.test.mjs）全绿",
+        "手册与键位表已同步"
+      ]
+    },
+    {
+      "id": "t-discipline",
+      "name": "动手前后必做（通用纪律）",
+      "goal": "所有任务共用的底线清单。先跑基线再动手，收工有验证、有记录，文档与图谱不过夜。",
+      "steps": [
+        {
+          "text": "动手前：make picwall-test 确认全绿基线；涉及结构/数据的先读 docs/architecture.md 对应节",
+          "refs": []
+        },
+        {
+          "text": "提交口径：用户可见变更与文档同一提交；后端结构变更先改架构总览再合码（README §8 规则 1/2）",
+          "refs": []
+        },
+        {
+          "text": "动了模块结构或函数行号：更新本图谱 ATLAS_DATA 数据段，跑 scripts/verify_atlas.py 必须 exit 0",
+          "refs": []
+        }
+      ],
+      "done": [
+        "make picwall-test 全绿",
+        "scripts/verify_atlas.py exit 0",
+        "CHANGELOG 有本条迭代",
+        "图谱/手册/架构无过期表述"
+      ]
+    }
+  ],
+  "concepts": [
+    {
+      "id": "c-addressing",
+      "name": "内容寻址存储",
+      "say": "文件名 = 文件内容的 sha1 指纹。同一张图不管从哪个分组抓到，指纹都一样 → 磁盘只存一份。",
+      "detail": "图片不按帖子命名，而是按「内容指纹」存成 pics/年/月/<sha1>.jpg。好处：天然去重（十个分组发同一张图也只占一份空间）；删除安全（删图前数一数还有几个帖子引用这个指纹，大于零就不删——这就是「引用计数保图」）。",
+      "where": [
+        {
+          "text": "storage.py 落盘、缩略图、归档都建立在指纹之上",
+          "ref": "storage"
+        },
+        {
+          "text": "purge.py 删图前查引用计数",
+          "ref": "purge"
+        }
+      ]
+    },
+    {
+      "id": "c-tombstone",
+      "name": "墓碑（tombstone）",
+      "say": "帖子被硬删后在 tombstones 表留一行「这个 id 已经死了」。",
+      "detail": "作用是防「复活」：抓取翻页如果再遇到同一个帖子 id（平台时间线里旧帖还会出现），入库通道先查墓碑，直接丢弃。没有墓碑的话，深翻页会把用户删掉的帖悄悄加回来。",
+      "where": [
+        {
+          "text": "purge.py 硬删时立碑",
+          "ref": "purge"
+        },
+        {
+          "text": "crawler/db 所有入库通道先拦墓碑",
+          "ref": "db"
+        }
+      ]
+    },
+    {
+      "id": "c-decision",
+      "name": "决策版本与撤销",
+      "say": "每次保留/不要都让该帖的 decision_version +1，并把改动前的状态存成快照；撤销 = 按快照回滚。",
+      "detail": "为什么需要版本号：你可能用两台设备同时操作同一帖。撤销请求必须带「我以为的版本号」，和服务端当前版本对得上才执行——否则 A 设备的旧撤销会把 B 设备刚做的新操作覆盖掉。对不上时提示刷新。",
+      "where": [
+        {
+          "text": "db.mark_snapshot / restore_snapshot 是这套机制的实现",
+          "ref": "db"
+        },
+        {
+          "text": "前端 6 秒撤销 toast 调的就是快照回滚",
+          "ref": "appjs"
+        }
+      ]
+    },
+    {
+      "id": "c-flock",
+      "name": "flock 组合锁",
+      "say": "flock 是操作系统级的「文件锁」：多个进程想改同一份数据时排队，谁拿到锁谁先写。",
+      "detail": "PWALL 把 flock（跨进程）和线程锁（进程内）叠成一个可重入的 WriteLock：保证「写文件 + 写数据库」这类成对操作要么整体完成、要么整体没发生，不会被并发打断在半路。「可重入」= 同一个执行流里嵌套拿锁不会自己卡死自己。前提是单进程架构；将来加 worker 进程必须重新设计。",
+      "where": [
+        {
+          "text": "gate.py 定义 DataGate + WriteLock",
+          "ref": "config"
+        },
+        {
+          "text": "backup 固定快照、purge 删图都全程持锁",
+          "ref": "backup"
+        }
+      ]
+    },
+    {
+      "id": "c-localowner",
+      "name": "LocalOwner（本机管理员）",
+      "say": "从本机 8081 入口进来的请求，由服务端直接打上「本机管理员」标记——因为 8081 只绑定回环地址，能连上它的只能是本机自己。",
+      "detail": "关键在「身份由入口决定，不由请求声称」：局域网 8082 入口没有这个标记，必须配对换会话。客户端伪造 Host、IP 或转发头都变不出管理员权限。这就是「本机免密、局域网配对」的安全边界。",
+      "where": [
+        {
+          "text": "serve.py 双监听器注入标记",
+          "ref": "serve"
+        },
+        {
+          "text": "auth.py 的角色矩阵管局域网侧权限",
+          "ref": "auth"
+        }
+      ]
+    },
+    {
+      "id": "c-whitelist",
+      "name": "compose 环境变量白名单",
+      "say": "容器只能看见 docker-compose.yml environment 里显式列出的变量；.env 里写了但没声明 = 容器看不见。",
+      "detail": "这是 Docker 的机制不是 bug：环境变量按声明逐条传入容器。本项目两次踩坑（PICWALL_MAX_IMAGE_PIXELS、PURGE_DAYS 系）后，把「README 配置表 ↔ compose 声明」的对应关系用测试钉死（tests/test_docs.py），新增变量忘声明会直接测试红。",
+      "where": [
+        {
+          "text": "config.py 是变量进入代码的唯一入口",
+          "ref": "config"
+        },
+        {
+          "text": "任务「新增环境变量」有完整步骤",
+          "ref": null
+        }
+      ]
+    },
+    {
+      "id": "c-migration",
+      "name": "schema 幂等迁移",
+      "say": "库结构升级不删库重抓：启动时对比版本号，缺的列补上，迁移记录写进 schema_migrations 表。",
+      "detail": "「幂等」= 同一段迁移逻辑跑一次和跑多次结果相同，所以中途崩溃重跑是安全的。库版本存于 meta 表；版本前向拒绝（库比代码新就拒绝启动）防止旧代码写坏新结构。历史 v2→v8 的每版加了什么，见 README 数据节。",
+      "where": [
+        {
+          "text": "db.init_db 是迁移的唯一入口",
+          "ref": "db"
+        },
+        {
+          "text": "改结构的完整步骤见任务 T4",
+          "ref": null
+        }
+      ]
+    },
+    {
+      "id": "c-keyset",
+      "name": "keyset 游标翻页",
+      "say": "分页不用「跳过前 N 条」，而用「上一页最后一条的位置」当书签——数据怎么变都不会重帖漏帖。",
+      "detail": "传统 OFFSET 分页（跳过前 N 条）有个隐患：翻页期间有人抓了新帖或删了帖，窗口整体漂移，就会看到重复或漏掉帖子。PWALL 用 keyset：游标是尾行排序键的 base64 JSON（默认 created_at+sid 两键；按次数排序是 keep_count+created_at+sid 三键），下一页只取「排在书签之后」的行，谓词形如 (created_at < ? OR (created_at = ? AND sid > ?))——同秒帖子按 sid 决胜，全序稳定。取 limit+1 行探测有没有下一页。",
+      "where": [
+        {
+          "text": "server 的 /api/posts 实现与游标校验",
+          "ref": "server"
+        },
+        {
+          "text": "前端 load() 持游标驱动「加载更多」",
+          "ref": "appjs"
+        }
+      ]
+    },
+    {
+      "id": "c-optimistic",
+      "name": "乐观更新（optimistic update）",
+      "say": "先改界面、再等服务器：点「保留」立刻变样式，后台慢慢落账，失败才回滚。",
+      "detail": "如果每次点击都等服务器返回再更新界面，快筛会一顿一顿的。前端模式三步：①本地立即改状态并记住改动前样子；②把落账请求排进全局串行队列（保证服务端收到顺序 = 操作顺序）；③成功用服务端返回的权威值覆盖，失败回滚 previous 并提示。撤销也走同一队列——先排到原标记请求后面（占住位置），再发恢复请求，防止被别的操作插队。",
+      "where": [
+        {
+          "text": "app.js + post-actions 的 mark/reaffirm 全是这一模式",
+          "ref": "appjs"
+        },
+        {
+          "text": "回看与放映的计次同模式",
+          "ref": "review"
+        }
+      ]
+    },
+    {
+      "id": "c-concurrency",
+      "name": "并发写：last-write-wins 与乐观锁",
+      "say": "两台设备同时改同一帖怎么办？本项目两种策略并存：普通改状态是「后写覆盖」，撤销是「乐观锁比对」。",
+      "detail": "last-write-wins（后写覆盖）= 不做检查，后到的写直接生效——实现最简单，单机单人场景够用，status 接口如此。乐观锁 = 写入时声明「我以为的当前版本」，服务端比对不匹配就拒绝（HTTP 409），客户端提示刷新——restore（撤销）如此，因为一台设备迟到的旧撤销绝不能覆盖另一台刚做的新操作。decision_version 单调递增就是给乐观锁比对的版本号。",
+      "where": [
+        {
+          "text": "server 里 status 与 restore 两个路由分别对应两种策略",
+          "ref": "server"
+        },
+        {
+          "text": "db 的 mark_snapshot / restore_snapshot 是机制实现",
+          "ref": "db"
+        }
+      ]
+    },
+    {
+      "id": "c-ssrf",
+      "name": "SSRF（服务端请求伪造）",
+      "say": "服务器去下载「外部数据里给的 URL」时，攻击者可以伪造 URL 借你的服务器之手访问内网——所以下载地址必须过白名单。",
+      "detail": "PWALL 的图片地址来自微博/X 返回的数据，属于不可信输入。若不加防护，构造的 URL 可以指向内网（如 http://localhost:8081 打自己的接口、云主机元数据地址等），让服务器替攻击者发请求。防护在 media_fetch：域名白名单（只认图片 CDN）+ 仅 https + 重定向每一跳重新校验 + 体积/类型预算。",
+      "where": [
+        {
+          "text": "media_fetch 是全部图片下载的唯一守门",
+          "ref": "media_fetch"
+        },
+        {
+          "text": "crawler 落图走同一管道",
+          "ref": "crawler"
+        }
+      ]
+    },
+    {
+      "id": "c-traversal",
+      "name": "路径穿越（path traversal）",
+      "say": "用 ../ 之类的路径从目标目录「逃出去」读写任意文件——恢复备份、生成文件名时必须防。",
+      "detail": "manifest 里的文件路径若来自不可信来源，写 ../../etc/xxx 就能把内容恢复到目标目录之外。backup.restore 的预检明确禁止绝对路径与包含 .. 的相对路径，违规整体失败；写盘侧由 sanitize_filename 剔除路径分隔符与 Windows 保留字符——两边各守一道。",
+      "where": [
+        {
+          "text": "backup restore 的 manifest 预检",
+          "ref": "backup"
+        },
+        {
+          "text": "storage 的文件名清洗唯一出口",
+          "ref": "storage"
+        }
+      ]
+    },
+    {
+      "id": "c-cors",
+      "name": "跨站与 CORS",
+      "say": "浏览器规定别的网站不能随便对你的站点发请求——PWALL 反过来利用这套机制区分「谁有资格调用代抓接口」。",
+      "detail": "三个相关机制：①CORS——跨源请求需要服务端用响应头明确放行，ingest 只放行 weibo.com/x.com 且必须带 Bearer 令牌；②Sec-Fetch-Site——浏览器自动附带的来源标记，标记为 cross-site 的子资源请求（如外页里的 <img>）不授本机管理员权限，防外站网页借图床请求打你的 API；③Cookie samesite=strict——配对 Cookie 不随跨站请求发送。三者合起来：外站既调不动写接口，也蹭不到本机免密。",
+      "where": [
+        {
+          "text": "server 的 ingest 校验链与 local_owner 排除",
+          "ref": "server"
+        },
+        {
+          "text": "auth 的 Cookie 属性与请求预算",
+          "ref": "auth"
+        }
+      ]
+    },
+    {
+      "id": "c-di",
+      "name": "依赖注入（前端组装方式）",
+      "say": "前端子模块不互相 import，而是像「领工具」：app.js 组装时把 $、api、toast 等当参数传进去。",
+      "detail": "形态如 createQuad({ S, $, toast, api, … })。好处：模块之间零直接耦合（任何一个模块可独立替换/测试）、测试时传假依赖即可跑。代价：app.js 是唯一知道全局的组装根——新增模块必须在那里接线。这是「无框架」路线的配套约定：没有框架的容器机制，就手工传参。",
+      "where": [
+        {
+          "text": "app.js 是唯一的组装根",
+          "ref": "appjs"
+        },
+        {
+          "text": "quad/review/author-view 都是这一形态",
+          "ref": "quad"
+        }
+      ]
+    },
+    {
+      "id": "c-eventloop",
+      "name": "单进程事件循环前提",
+      "say": "整个服务是一个进程里的一条 asyncio 事件循环——内存里的防重入旗标、锁、调度器都以「永远只有一个进程」为前提。",
+      "detail": "crawler 防重入靠模块级 state.running 布尔量（单进程内可靠）；WriteLock 靠进程内线程锁叠本机 flock；调度器与任务都在同一事件循环。如果将来起第二个 worker 进程：旗标人手一份（防重入失效）、flock 语义要重设计、SQLite 并发写上升。所以「加 worker」不是部署选项而是架构变更——多张卡片标注的这条边界指的就是它。",
+      "where": [
+        {
+          "text": "crawler 的 running 旗标",
+          "ref": "crawler"
+        },
+        {
+          "text": "config/gate 的锁语义",
+          "ref": "config"
+        }
+      ]
+    },
+    {
+      "id": "c-atomic",
+      "name": "原子写（tmp + rename）",
+      "say": "先写临时文件、写完一口气「改名」成正名——改名是原子操作，磁盘上任何时刻只有完整文件或没有文件。",
+      "detail": "直接写目标文件的话，崩溃或断电会留下半截文件。PWALL 的原图落盘、备份目录发布、评论.txt 重建统一用 mkstemp（临时文件）+ os.replace（原子改名）模式：读的人永远看不到半成品。「原子」= 操作要么整体发生、要么整体没发生，不存在中间态。",
+      "where": [
+        {
+          "text": "storage 的图片落盘与评论.txt 重建",
+          "ref": "storage"
+        },
+        {
+          "text": "backup 的快照目录发布",
+          "ref": "backup"
+        }
+      ]
+    },
+    {
+      "id": "c-idempotent",
+      "name": "幂等（idempotent）",
+      "say": "一个操作执行一次和执行多次，结果相同——所以意外重跑是安全的。",
+      "detail": "本项目的惯用防御：schema 迁移崩溃后重跑不会重复加列；jobs.start 遇到同 kind 还在跑就直接返回已有任务（防重入）；备份恢复全有或全无、失败清场后可重来。写新代码时问一句「这段逻辑被意外跑两次会怎样」，答不上来就补防护。",
+      "where": [
+        {
+          "text": "db 的 init_db 迁移",
+          "ref": "db"
+        },
+        {
+          "text": "jobs 的 Runner 防重入",
+          "ref": "jobs"
+        }
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "id": "weibo",
+      "layer": "be-ingest",
+      "name": "weibo.py",
+      "file": "app/weibo.py",
+      "summary": "采集层平台适配器（Scraper Adapter）：负责调用微博 Web 端非官方 Ajax 接口拉取分组时间线，并将深层嵌套的异构 JSON 清洗、归一化为系统标准的 Post 领域字典。",
+      "upstream": [
+        "crawler",
+        "server"
+      ],
+      "downstream": [
+        "contract",
+        "crawler",
+        "media_fetch"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/weibo.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：通信（I/O）与解析（CPU）彻底解耦",
+          "constraint": "微博不提供官方 API，Web 端 Ajax 接口属于无版本保障的私有实现，返回结构随时可能改版，且未登录/风控信号分散在 HTTP 状态码、重定向地址与业务错误码三个层级。",
+          "rejected": "若把 HTTP 请求、登录态判定与 JSON 解析揉在同一个函数里，接口任何局部改版都会抛出未捕获异常，导致整轮抓取任务中断。",
+          "decision": "模块把带状态的 HTTP 会话请求封装在底层通信函数（统一将各类反爬/未登录信号翻译为 CookieExpired 领域异常），而把结构解析全部实现为无状态纯函数。接口局部字段改版时，最坏结果仅是单条帖子解析返回 None 被静默跳过，绝不会中断整轮批处理。"
+        },
+        {
+          "title": "权衡二：元数据提取与二进制下载分阶段解耦",
+          "constraint": "时间线翻页的吞吐率取决于单页处理耗时；图片文件下载是慢速网络 I/O，且原图地址存在多级档位回退需求。",
+          "rejected": "若在抓取阶段同步下载图片文件，时间线翻页会被慢速图片 I/O 阻塞，且无法为下游提供原图失败后的中图回退路径。",
+          "decision": "weibo.py 仅通过字段回退链与正则重写生成包含 full（原图）与 mid（中图）双地址的 pics 元数据列表，绝不在采集阶段发起图片下载请求；二进制下载推迟到下游 media_fetch 异步执行，mid 档保留为原图 404 时的保底下载源。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "group_timeline",
+          "signature": "async (client, cookie, list_id, page) -> list[dict]",
+          "role": "请求指定微博分组的单页时间线接口，返回原始微博条目字典列表。",
+          "sideEffects": "网络 I/O：携带 Cookie 与自动提取的 X-XSRF-TOKEN 请求头发起 GET；会话失效时向上抛出 CookieExpired。",
+          "file": "app/weibo.py",
+          "line": 64
+        },
+        {
+          "name": "parse_mblog",
+          "signature": "(item: dict) -> dict | None",
+          "role": "将单条原始微博 JSON 清洗转换为统一 Post 结构（含转发穿透、主键校验、图片提取与时间归一化）。",
+          "sideEffects": "纯函数（无网络 I/O、无共享状态修改）；无图帖或缺失主键时静默返回 None。",
+          "file": "app/weibo.py",
+          "line": 263
+        },
+        {
+          "symbol_note": "",
+          "name": "parse_groups",
+          "signature": "(data) -> list[dict]",
+          "role": "解析用户分组列表供「管理分组」导入。",
+          "sideEffects": "纯函数；强制过滤 sysgroup == 2 的系统聚合分组。",
+          "file": "app/weibo.py",
+          "line": 82
+        },
+        {
+          "name": "all_groups",
+          "signature": "async (client, cookie) -> list[dict]",
+          "role": "拉取账号全部分组；同时被 connections 模块用作凭据探活的只读探针。",
+          "sideEffects": "网络 I/O；登录失效抛 CookieExpired。",
+          "file": "app/weibo.py",
+          "line": 70
+        },
+        {
+          "name": "profile_bio",
+          "signature": "async (client, cookie, uid) -> str",
+          "role": "拉取作者签名（博主视图头部的悬停文案）。",
+          "sideEffects": "网络 I/O；失败返回空串由前端优雅降级。",
+          "file": "app/weibo.py",
+          "line": 122
+        },
+        {
+          "name": "CookieExpired",
+          "signature": "class CookieExpired(WeiboError)",
+          "role": "登录态失效或触发反爬通行证重定向的专用领域异常。",
+          "sideEffects": "供上层调度器捕获，进而更新 /api/status 的连接状态为 expired 并触发前端顶部告警横幅。",
+          "file": "app/weibo.py",
+          "line": 25
+        }
+      ],
+      "l2_callTree": "├── group_timeline(list_id, page, cookie)   [Public: 分页拉取入口]\n│   └── _get_json(url, cookie)              [Private: 从 Cookie 提取 X-XSRF-TOKEN 注入请求头\n│                                            + 统一拦截登录失效信号 → CookieExpired]\n├── all_groups(cookie)                      [Public: 全部分组（兼作凭据探活探针）]\n│   └── parse_groups(data)                  [Public: 过滤 sysgroup == 2 系统聚合分组]\n├── parse_mblog(item)                       [Public: 单帖解析主干纯函数]\n│   ├── 1. 转发穿透：若含 retweeted_status，取原博为图片提取源，\n│   │        正文拼接为「原博正文（@转发者 转发：转发理由）」\n│   ├── 2. 主键校验：sid = mblogid · uid = user.id；任一缺失立即返回 None\n│   ├── 3. extract_pics(src)                [Private: 提取图片并按 pid 去重；空列表（无图帖）→ None]\n│   │   ├── _norm_pic(pid, full, mid)       [Private: 组装双档位元数据]\n│   │   └── _to_large(url)                  [Private: 缩放档路径段正则重写为 /large/]\n│   └── 4. parse_time(raw)                  [Private: 标准时间与 6 种相对时间归一化；非法值兜底 now]\n└── profile_bio(cookie, uid)                [Public: 作者签名（失败返回空串）]",
+      "l3_tables": [
+        {
+          "title": "表 1 · _get_json 登录失效（CookieExpired）判定矩阵",
+          "headers": [
+            "检测层级",
+            "匹配条件",
+            "触发结果",
+            "工程背景"
+          ],
+          "rows": [
+            [
+              "HTTP 响应状态码",
+              "status_code ∈ {301, 302, 401, 432}",
+              "抛出 CookieExpired",
+              "微博未认证或触发高频风控拦截时的标准 HTTP 状态码"
+            ],
+            [
+              "重定向目标地址",
+              "响应头 Location 包含子串 passport",
+              "抛出 CookieExpired",
+              "会话过期时微博默认将请求 302 重定向至 passport.weibo.com"
+            ],
+            [
+              "业务层 JSON 错误码",
+              "响应体 ok == 0 且 code ∈ {21331, 21332}",
+              "抛出 CookieExpired",
+              "接口返回 HTTP 200，但在业务载荷中声明 Token 失效或未登录"
+            ]
+          ]
+        },
+        {
+          "title": "表 2 · extract_pics 与 _to_large 图片多级提取与 URL 重写规则",
+          "headers": [
+            "处理步骤",
+            "优先级回退链 / 转换逻辑",
+            "边界条件与历史踩坑防御"
+          ],
+          "rows": [
+            [
+              "1. 图片源容器选择",
+              "优先读取 pic_infos（字典结构）；不存在则降级读取 pics（数组结构），并以 pid 为唯一键去重",
+              "兼容微博网页端新旧两套时间线接口的数据结构差异"
+            ],
+            [
+              "2. 原图地址（full）推导",
+              "① 字段四级回退：largest → large → mw2000 → bw2000；② 强制调用 _to_large 正则改写 /orj960/、/sti960/、/mw690/、/thumbnail/ 等缩放段为 /large/",
+              "历史故障防御：部分接口即使在 largest 字段也会返回 orj960（960px 窄图）URL；不经正则强制改写会导致压缩图被误当原图入库"
+            ],
+            [
+              "3. 回退中图（mid）推导",
+              "字段二级回退：mw2000 → mw690；严禁调用 _to_large 改写",
+              "保留原生中图档位 URL，作为下游 media_fetch 拉取原图失败时的保底下载源"
+            ]
+          ]
+        },
+        {
+          "title": "表 3 · 特殊业务边界与静默降级规则",
+          "headers": [
+            "边界场景",
+            "识别特征",
+            "处理策略",
+            "设计原因"
+          ],
+          "rows": [
+            [
+              "长微博截断正文",
+              "is_long == True",
+              "仅保存时间线返回的截断文本并标记 text_complete，不发起单帖全文展开请求",
+              "避免列表抓取阶段产生 N+1 次额外 HTTP 请求而触发风控；前端通过 weibo_url 引导跳回原博读全文"
+            ],
+            [
+              "系统虚拟聚合分组",
+              "分组属性 sysgroup == 2",
+              "在 parse_groups 阶段直接过滤剔除",
+              "对系统虚拟分组调用分组时间线接口必返 HTTP 400"
+            ],
+            [
+              "跨年相对时间与非法日期",
+              "如「12-15」或非法值「02-30」",
+              "相对时间按当前年份补全（一月初看上月帖存在跨年误差）；非法日期兜底赋值为当前时刻",
+              "相对时间仅作近似排序参考；兜底策略保证解析纯函数在任何脏数据下绝不抛出异常"
+            ],
+            [
+              "像素级内嵌水印",
+              "原图自带微博右下角水印",
+              "不做处理（无法通过 URL 档位去除）",
+              "该类水印系作者上传时由服务端直接烧录进图片像素，切换任何尺寸档位均无法消除"
+            ]
+          ]
+        }
+      ],
+      "tags": "微博 cookie ajax 解析 时间线"
+    },
+    {
+      "id": "xapi",
+      "layer": "be-ingest",
+      "name": "sources/xapi.py",
+      "file": "app/sources/xapi.py",
+      "summary": "X 平台的 GraphQL 采集适配器：移植自 gallery-dl 的端点常量与会话伪装策略，用 auth_token 定时抓取列表与用户主页的带图推文，并归一化为标准条目。",
+      "upstream": [
+        "server"
+      ],
+      "downstream": [
+        "contract",
+        "crawler"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/sources/xapi.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：以 gallery-dl 为兼容基线而非自行逆向",
+          "constraint": "X 强制登录才能查看时间线，GraphQL 端点的 queryId 随版本发布漂移，且非浏览器 User-Agent 直接返回空 404。",
+          "rejected": "若自行抓包维护 queryId 与请求特征，每次 X 改版都需要重新逆向，维护成本不可控。",
+          "decision": "ENDPOINTS/FEATURES 常量与 Chrome UA 伪装策略全部对照 gallery-dl 同版本实现；X 改版时升级本地 gallery-dl 并对照更新常量即可，把逆向成本外部化给上游开源社区。"
+        },
+        {
+          "title": "权衡二：结构不认识时严格失败而非静默空结果",
+          "constraint": "X 的 GraphQL 响应存在列表与用户主页两种根结构，且字段随版本变化。",
+          "rejected": "旧实现遇到不认识的响应结构时静默返回空列表，曾导致列表抓取无声空转、数据库零条目且无任何错误信号。",
+          "decision": "_walk_tweets 泛化匹配双根结构，识别失败即抛 StructureError 严格失败——错误信号显式上浮到状态页，宁可抓不到也不无声假成功。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "XGraphQL",
+          "signature": "class XGraphQL: (auth_token, ct0) · _call(endpoint, variables, features) -> dict",
+          "role": "GraphQL 会话客户端：固定携带 Chrome UA 与 ct0 CSRF 头，统一发起 GraphQL 查询。",
+          "sideEffects": "网络 I/O；按 HTTP 状态码与业务错误码归类抛出 XApiError（auth/structure/rate_limit）；响应 Set-Cookie 的 ct0 自动回写后续请求头（自愈）。",
+          "file": "app/sources/xapi.py",
+          "line": 86
+        },
+        {
+          "name": "parse_list_timeline",
+          "signature": "(data: dict) -> (list[dict], cursor | None)",
+          "role": "解析列表时间线响应为标准条目列表与下一页游标。",
+          "sideEffects": "纯函数；结构不认识抛 StructureError。",
+          "file": "app/sources/xapi.py",
+          "line": 346
+        },
+        {
+          "name": "crawl_lists",
+          "signature": "async (client, auth_token, list_id, …) -> (items, cursor)",
+          "role": "按列表端点翻页抓取。",
+          "sideEffects": "网络 I/O；经 XGraphQL 会话。",
+          "file": "app/sources/xapi.py",
+          "line": 358
+        },
+        {
+          "name": "crawl_users",
+          "signature": "async (client, auth_token, handle, …) -> (items, cursor)",
+          "role": "按用户主页端点翻页抓取（先 UserByScreenName 校验存在）。",
+          "sideEffects": "网络 I/O；用户不存在映射为 auth/structure 错误。",
+          "file": "app/sources/xapi.py",
+          "line": 405
+        },
+        {
+          "name": "XApiError",
+          "signature": "class XApiError(Exception) · kind 属性",
+          "role": "X 侧错误领域异常：kind ∈ auth / structure / rate_limit / access。",
+          "sideEffects": "供 server._crawl_x 捕获并写入状态页 x_last_error。",
+          "file": "app/sources/xapi.py",
+          "line": 78
+        }
+      ],
+      "l2_callTree": "├── crawl_lists(client, auth_token, list_id)     [Public: 列表翻页抓取]\n│   └── XGraphQL._call(endpoint, variables)       [Private: Chrome UA + ct0 自愈 + 错误分类]\n│       └── _walk_tweets(data, root)              [Private: 泛化遍历双根结构找推文节点\n│                                                  结构不认识 → StructureError（严格失败）]\n│           └── _tweet_to_item(result)           [Private: 归一化 8 键标准条目]\n│               ├── 头像兜底：avatar.image_url → legacy.profile_image_url_https（去 _normal）\n│               ├── 图片：extended_entities 中 type == photo，URL 追加 ?name=orig\n│               └── 时间：strptime 解析后转东八区 ISO8601\n└── crawl_users(client, auth_token, handle)      [Public: 用户主页抓取]\n    └── UserByScreenName（添加目标时的实连校验）→ UserTweets 翻页",
+      "l3_tables": [
+        {
+          "title": "表 1 · X 错误分类矩阵（_call 内归类）",
+          "headers": [
+            "检测条件",
+            "归类 kind",
+            "上层处置"
+          ],
+          "rows": [
+            [
+              "HTTP 401，或业务错误码 ∈ {32, 89, 135, 215}",
+              "auth",
+              "连接状态标记 expired，提示重发 auth_token"
+            ],
+            [
+              "HTTP 404（含非浏览器 UA 的空 404）",
+              "structure",
+              "对照 gallery-dl 升级 queryId / FEATURES / UA"
+            ],
+            [
+              "HTTP 429",
+              "rate_limit",
+              "退避等待下一轮调度"
+            ],
+            [
+              "HTTP 403 且响应非 JSON",
+              "access",
+              "账号权限或风控拦截，人工介入"
+            ]
+          ]
+        },
+        {
+          "title": "表 2 · _tweet_to_item 字段归一化与降级回退链",
+          "headers": [
+            "字段",
+            "回退链 / 转换逻辑",
+            "说明"
+          ],
+          "rows": [
+            [
+              "推文 id",
+              "legacy.id_str；为空 → 返回 None 跳过",
+              "无 id 条目无法入库，静默跳过"
+            ],
+            [
+              "头像",
+              "result.avatar.image_url（新版）→ legacy.profile_image_url_https（旧版），并替换 _normal 后缀取大图",
+              "新旧 API 版本字段双兜底；历史缺陷曾致 123 帖头像全空"
+            ],
+            [
+              "图片",
+              "extended_entities.media 中 type == photo 的项；URL 追加 ?name=orig",
+              "视频/GIF 跳过（只抓带图推文）"
+            ],
+            [
+              "时间",
+              "strptime('%a %b %d %H:%M:%S %z %Y') → astimezone 东八区 ISO8601；解析失败留空串",
+              "空串由下游契约校验拦截"
+            ]
+          ]
+        }
+      ],
+      "tags": "X twitter graphql gallery-dl auth_token"
+    },
+    {
+      "id": "contract",
+      "layer": "be-ingest",
+      "name": "sources/base + x",
+      "file": "app/sources/base.py",
+      "summary": "来源契约层：定义「什么是一条合法帖子」的 12 键 Schema（POST_CONTRACT）与错误五分类领域异常，并把浏览器代抓的推文归一化为与服务端抓取同构的数据。",
+      "upstream": [
+        "weibo",
+        "xapi",
+        "server"
+      ],
+      "downstream": [
+        "crawler",
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/sources/base.py"
+        },
+        {
+          "path": "app/sources/x.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：以统一 Schema 收敛三条入库通道",
+          "constraint": "微博服务端抓取、X 服务端抓取、浏览器代抓三条通道的数据形态各异；没有统一契约时，每条通道都要复制一份下游入库逻辑，且错误处置无法统一。",
+          "rejected": "若在各通道内各自校验各自入库，字段缺失类缺陷会分散在三处且行为不一致，错误处置也无法按类别分流（重发凭据 / 等待 / 升级适配）。",
+          "decision": "所有通道的产出必须通过 validate_post 的 12 键 Schema 校验才能入库（tombstone 拦截之后的最后一道闸）；错误统一归类为五类领域异常，上层按类别选择处置方式。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "POST_CONTRACT",
+          "signature": "frozenset：12 个必填键",
+          "role": "统一 Post 的必填键集合：sid / source / uid / author / avatar / text / created_at / fetched_at / weibo_url / via / is_long / pics。",
+          "sideEffects": "纯常量；契约测试（tests/test_sources.py）把缺键失败前移到单测阶段。",
+          "file": "app/sources/base.py",
+          "line": 32
+        },
+        {
+          "name": "validate_post",
+          "signature": "(p: dict) -> None（违规抛 StructureError）",
+          "role": "入库前最后一道闸：非 dict、缺键、sid 为空三类违规即拒绝。",
+          "sideEffects": "纯校验函数；不深查字段类型与时间格式（由各解析层自防）。",
+          "file": "app/sources/base.py",
+          "line": 38
+        },
+        {
+          "name": "normalize_tweet",
+          "signature": "(tweet: dict, fetched_at) -> dict | None",
+          "role": "浏览器代抓推文 → 8 键标准条目（时间转东八区 ISO8601）。",
+          "sideEffects": "纯函数。",
+          "file": "app/sources/x.py",
+          "line": 120
+        },
+        {
+          "name": "SourceError",
+          "signature": "AuthError / NetworkError / RateLimitError / StructureError",
+          "role": "错误五分类领域异常（外加 access 变体）。",
+          "sideEffects": "供上层按类别处置：重发凭据 / 重试 / 退避 / 升级适配。",
+          "file": "app/sources/base.py",
+          "line": 8
+        }
+      ],
+      "l2_callTree": "├── validate_post(p)                    [Public: 最后一道闸]\n│   ├── 非 dict → StructureError\n│   ├── POST_CONTRACT - set(p) 非空 → StructureError（缺键）\n│   └── sid 为空 → StructureError\n└── x.normalize_tweets(items, fetched_at)  [Public: 代抓批量归一化]\n    ├── x.is_x_group / group_list_id / group_user_id   [组 id 形态：x:<id> · xu:<handle>]\n    ├── normalize_created_at(s)          [ISO8601 东八区]\n    └── normalize_tweet(t)               [输出 8 键：id/url/author/text/created_at/via/images …]",
+      "l3_tables": [
+        {
+          "title": "表 · 错误五分类与处置矩阵",
+          "headers": [
+            "类别",
+            "典型触发",
+            "上层处置"
+          ],
+          "rows": [
+            [
+              "auth",
+              "Cookie/auth_token 失效",
+              "触发前端提醒，重发凭据"
+            ],
+            [
+              "network",
+              "超时、DNS、连接重置",
+              "自动重试或等待下一轮"
+            ],
+            [
+              "rate_limit",
+              "平台限流",
+              "退避等待下一轮调度"
+            ],
+            [
+              "structure",
+              "响应结构不认识（平台改版）",
+              "对照 gallery-dl/抓包升级适配层"
+            ],
+            [
+              "access",
+              "账号权限或风控（403 非 JSON）",
+              "人工介入"
+            ]
+          ]
+        }
+      ],
+      "tags": "契约 校验 归一化 代抓 错误分类 sid"
+    },
+    {
+      "id": "crawler",
+      "layer": "be-ingest",
+      "name": "crawler.py",
+      "file": "app/crawler.py",
+      "summary": "抓取编排器：以分组为单位驱动「翻页拉取 → 去重过滤 → 登记队列 → 下载落盘」的完整流水线，并负责新分组深度回补、断点续传、缺图补抓队列与进度上报。",
+      "upstream": [
+        "server",
+        "contract"
+      ],
+      "downstream": [
+        "weibo",
+        "media_fetch",
+        "db",
+        "storage"
+      ],
+      "readsState": [
+        "Post.status"
+      ],
+      "writesState": [
+        "Post.status",
+        "Post.created_at"
+      ],
+      "files": [
+        {
+          "path": "app/crawler.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：元数据入库与图片下载解耦（先登记后执行）",
+          "constraint": "图片下载是慢速且可能部分失败的批量 I/O；帖子元数据则是轻量且必须尽快可见的数据。",
+          "rejected": "若入库与下载在同一同步事务内完成，一张图的失败会回滚整帖甚至整页；且进程中断时无法区分「没抓到」与「抓到没下完」。",
+          "decision": "解析结果先经 image_jobs 表登记再逐帖下载：全部图片失败的帖不进 posts 表（不污染相册），但队列记录完整保留 payload 供 retry_missing 补抓——「先登记后执行」使中断可续、失败可救。"
+        },
+        {
+          "title": "权衡二：回补深度用日期边界而非页数上限决定停止",
+          "constraint": "新分组需要回补近 30 天历史，但平台接口只有「继续往后翻」没有按日期查询能力。",
+          "rejected": "仅用页数上限回补会过早截断（漏历史帖）或永不停止（整页都是旧帖时仍继续）。",
+          "decision": "deep_stop 双条件判定：本轮零新帖 且 整页 created_at 均早于截止时间才停止；同时保留页数硬上限（100 页）作为失控保险。终止原因落 coverage 五态，供下轮决策。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "crawl",
+          "signature": "async (trigger: str, only: str | None, backfill_days) -> dict 汇总",
+          "role": "抓取总入口（定时与手动共用）：逐分组翻页 → 过滤 → 登记下载 → 汇总 outcome。",
+          "sideEffects": "网络 I/O；写 meta（last_attempt/last_crawl/checkpoint）；模块级 state.running 防重入，重复调用直接拒绝。",
+          "file": "app/crawler.py",
+          "line": 403
+        },
+        {
+          "name": "retry_missing",
+          "signature": "async (manual: bool, cancelled, progress) -> dict",
+          "role": "消化缺图补抓队列：取 image_jobs 中 attempts<3 且到期的记录，每轮至多 100 帖。",
+          "sideEffects": "网络 I/O + DB；媒体失败 attempts+1 且 next_retry_at = now+4h；attempts≥3 后仅手动触发可救。",
+          "file": "app/crawler.py",
+          "line": 286
+        },
+        {
+          "name": "deep_stop",
+          "signature": "(parsed, fresh_count, cutoff) -> bool",
+          "role": "深度回补终止判定：本轮零新帖且整页 created_at 早于截止日期。",
+          "sideEffects": "纯函数。",
+          "file": "app/crawler.py",
+          "line": 35
+        },
+        {
+          "name": "fresh_posts",
+          "signature": "(parsed) -> list",
+          "role": "三重过滤：sid 本轮首现 + 非墓碑 + 未入库（不在 posts 且不在 image_jobs）。",
+          "sideEffects": "纯函数（查询 DB）。",
+          "file": "app/crawler.py",
+          "line": 68
+        },
+        {
+          "name": "catch_up_if_stale",
+          "signature": "async () -> None",
+          "role": "启动追赶：距上次成功抓取超 20 小时且启动 20 秒后自动补一轮。",
+          "sideEffects": "网络 I/O；经 lifespan 派发。",
+          "file": "app/crawler.py",
+          "line": 538
+        }
+      ],
+      "l2_callTree": "├── crawl(trigger, only)\n│   ├── 前置：state.running 防重入 → meta last_attempt → 无 Cookie 记 cookie_state\n│   └── 逐分组 _crawl_group(list_id)\n│       ├── 首次判定：meta group_seen:<id> 不存在 → deep 回补（30 天 / 100 页上限）\n│       ├── 翻页循环：weibo.group_timeline → observe_post → fresh_posts → queue_posts\n│       │   ├── queue_posts → 登记 image_jobs → 逐帖 _store_post（下载落盘）\n│       │   └── 全部图失败的帖不入 posts，留在队列等补抓\n│       ├── 终止：end（空页）· date_boundary（deep_stop）· known_page（整页旧帖）· page_limit\n│       │   └── 仅 end / date_boundary 写 group_seen（page_limit 下轮继续深补）\n│       └── @db · @tombstones：入库通道统一先拦墓碑防复活\n└── retry_missing(manual)\n    ├── queue_missing_files：扫描磁盘缺失图 → 入队（墓碑过滤）\n    └── SQL：attempts < 3 AND 到期 · ORDER BY attempts · LIMIT 100\n        └── X 来源帖走 _x_http_client 代理通道",
+      "l3_tables": [
+        {
+          "title": "表 · coverage 终止五态与下轮行为",
+          "headers": [
+            "coverage",
+            "触发条件",
+            "group_seen 写入",
+            "下轮行为"
+          ],
+          "rows": [
+            [
+              "end",
+              "返回空页",
+              "写入",
+              "按日常节奏增量抓取"
+            ],
+            [
+              "date_boundary",
+              "深回补：零新帖且整页早于截止日",
+              "写入",
+              "转为日常增量"
+            ],
+            [
+              "known_page",
+              "日常抓取：整页全是已入库帖",
+              "—",
+              "下轮正常增量"
+            ],
+            [
+              "page_limit",
+              "翻到页数硬上限（回补 100 / 日常 2）",
+              "不写（仍算首次）",
+              "下轮继续深补未完成的历史窗口"
+            ],
+            [
+              "interrupted",
+              "接口异常中断",
+              "不写",
+              "断点续跑（checkpoint 记录页位）"
+            ]
+          ]
+        },
+        {
+          "title": "表 · 补抓队列（image_jobs）规则",
+          "headers": [
+            "规则",
+            "取值",
+            "依据位置"
+          ],
+          "rows": [
+            [
+              "重试上限",
+              "每帖 attempts < 3",
+              "SQL WHERE 条件（crawler.py:233-235）"
+            ],
+            [
+              "单轮批量",
+              "LIMIT 100（按 attempts 升序）",
+              "同上"
+            ],
+            [
+              "退避间隔",
+              "媒体失败后 next_retry_at = now + 4 小时",
+              "crawler.py:189-191"
+            ],
+            [
+              "手动兜底",
+              "manual=True 去掉 WHERE 条件，attempts≥3 仍可救",
+              "retry_missing 参数"
+            ],
+            [
+              "入库门槛",
+              "全部图片失败的帖不入 posts 表",
+              "crawler.py:119,171-183（有可用文件才 insert_post）"
+            ]
+          ]
+        }
+      ],
+      "tags": "抓取 编排 回补 断点 checkpoint 补抓 image_jobs coverage"
+    },
+    {
+      "id": "media_fetch",
+      "layer": "be-ingest",
+      "name": "media_fetch.py",
+      "file": "app/media_fetch.py",
+      "summary": "媒体下载守门员（Download Gatekeeper）：全系统所有图片下载的唯一通道，集中实施域名白名单、重定向逐跳重验与流式体积预算三类防护。",
+      "upstream": [
+        "crawler",
+        "server"
+      ],
+      "downstream": [
+        "storage",
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/media_fetch.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：把 SSRF 防护收口到唯一下载函数",
+          "constraint": "图片 URL 来自平台返回的外部数据，属于不可信输入；攻击者可构造指向内网（localhost、云元数据地址）或非 HTTPS 端点的地址，让服务器替其发请求（SSRF）。",
+          "rejected": "若允许各模块自行用 httpx 下载，防护逻辑必然遗漏某条支路，且重定向跳转可在校验之后把请求引向内网。",
+          "decision": "全系统约定只有 media_fetch.fetch 允许发起媒体下载：白名单（仅 sinaimg.cn 与 twimg 图片域、仅 https:443）在每一跳重定向后重新校验，体积以 64KB 分块流式累计、超限即时掐断——防护与下载物理上不可分离。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "permitted",
+          "signature": "(url: str) -> bool",
+          "role": "URL 白名单单点校验：scheme 必须 https、禁止内嵌账号密码、端口仅 443 或缺省、域名仅 sinaimg.cn（含子域）与 pbs/abs.twimg.com。",
+          "sideEffects": "纯函数。",
+          "file": "app/media_fetch.py",
+          "line": 9
+        },
+        {
+          "name": "fetch",
+          "signature": "async (client, url, headers) -> bytes | None",
+          "role": "带预算的流式下载：最多 5 跳重定向、每跳重新过白名单、声明体积与流式累计双重 64MiB 上限、<100 字节视为无效。",
+          "sideEffects": "网络 I/O；所有失败（403/超限/非图/网络错）折叠为返回 None——调用方以「原图失败回落 mid 档」兜底。",
+          "file": "app/media_fetch.py",
+          "line": 21
+        }
+      ],
+      "l2_callTree": "├── permitted(url)                      [Public: 白名单三查（scheme/端口/域名）]\n└── fetch(client, url, headers)         [Public: 流式下载]\n    ├── 循环至多 5 跳：每跳开头重新 permitted（相对 Location 经 urljoin 解析）\n    ├── raise_for_status（非 2xx 拒绝）\n    ├── content-type 含 html / json / text → 拒绝（防错误页伪装图片）\n    ├── content-length 声明 > MAX_IMAGE_BYTES(64MiB) → 拒绝\n    ├── aiter_bytes(64KB) 流式累计：累计超限 → 中途掐断\n    └── 累计 < 100 字节 → 视为无效返回 None",
+      "l3_tables": [
+        {
+          "title": "表 · 三层预算与防护清单",
+          "headers": [
+            "防护层",
+            "规则",
+            "失败表现"
+          ],
+          "rows": [
+            [
+              "域名白名单",
+              "sinaimg.cn（含子域）· pbs.twimg.com · abs.twimg.com；仅 https:443；禁 userinfo",
+              "返回 None；接新平台必须先扩白名单"
+            ],
+            [
+              "重定向逐跳重验",
+              "至多 5 跳；每跳重新 permitted",
+              "超跳数或跳向非白名单域 → None"
+            ],
+            [
+              "类型与体积",
+              "content-type 禁 html/json/text；声明与流式累计均 ≤64MiB；≥100 字节",
+              "None；调用方回落 mid 档位"
+            ],
+            [
+              "像素预算（下游）",
+              "storage.save_image 用 PIL 查 ≤100MP（可经 PICWALL_MAX_IMAGE_PIXELS 放宽）",
+              "save_image 抛错，帖入补抓队列"
+            ]
+          ]
+        }
+      ],
+      "tags": "下载 ssrf 白名单 流式 体积 重定向"
+    },
+    {
+      "id": "db",
+      "layer": "be-data",
+      "name": "db.py",
+      "file": "app/db.py",
+      "summary": "数据持久层（Single Source of Truth）：集中全部 19 张表的 DDL、幂等迁移、存取函数与决定状态机的库层不变量触发器——全系统唯一的 SQLite 说话人。",
+      "upstream": [
+        "crawler",
+        "server",
+        "purge",
+        "queries"
+      ],
+      "downstream": [],
+      "readsState": [],
+      "writesState": [
+        "Post.status",
+        "Post.keep_count",
+        "Post.favorite",
+        "Post.decision_version",
+        "Post.created_at"
+      ],
+      "files": [
+        {
+          "path": "app/db.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：状态机约束下沉到数据库触发器",
+          "constraint": "保留/删除/收藏的状态机有严格的字段一致性要求（status 三值、favorite 0/1、时间戳与状态配对），而写入口分散在抓取、代抓、API、批量、撤销多条路径。",
+          "rejected": "仅靠应用层自律校验，任何一个新写入口遗漏校验就会写脏数据，且脏数据一旦落库会污染备份与统计。",
+          "decision": "validate_posts_* / validate_post_times_* 触发器在库层 RAISE(ABORT) 拒绝非法写入——坏数据物理上进不了库；应用层校验只作用户体验优化而非安全边界。"
+        },
+        {
+          "title": "权衡二：撤销采用「版本化快照」而非「操作日志回放」",
+          "constraint": "多设备并发下，撤销请求可能迟到；撤销必须只作用于「用户以为的那个状态」。",
+          "rejected": "操作日志回放实现复杂且难以验证；简单的「恢复上一状态」在并发下会把别人的新操作覆盖掉。",
+          "decision": "mark_snapshot 在每次决定变更时保存改动前四元组快照并将 decision_version 单调 +1；restore_snapshot 要求当前行逐键等于 expected 且 undo.version == 当前 version 且 undo.previous == previous 四重校验全过才回写——回写后 version 仍 +1（只增不减），单步撤销闭环且并发安全。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "init_db",
+          "signature": "() -> None",
+          "role": "建库与幂等迁移：BEGIN IMMEDIATE 逐条 DDL → 缺列补列 → 幂等回填 → 脏数据计数>0 即中止 → 建 4 个校验触发器 → 记 schema_migrations。",
+          "sideEffects": "修改数据库结构；版本前向拒绝（库比代码新直接报错）。",
+          "file": "app/db.py",
+          "line": 213
+        },
+        {
+          "name": "mark_snapshot",
+          "signature": "(sid, status) -> {previous, decision} | None",
+          "role": "决定变更入口：写新状态（时间戳只在对应状态写微秒值；转 kept 同时盖 last_confirm_at 当日账）、version+1、落撤销快照。",
+          "sideEffects": "DB 写（持 _write_lock 由调用方保证）；帖不存在返回 None → 上层 404。",
+          "file": "app/db.py",
+          "line": 383
+        },
+        {
+          "name": "restore_snapshot",
+          "signature": "(sid, previous, expected) -> bool",
+          "role": "单步撤销：四重校验（行全等 / undo 存在 / version 相等 / previous 相等）全过才回写旧状态。",
+          "sideEffects": "DB 写；任一校验失败返回 False → 路由层 409 提示刷新。",
+          "file": "app/db.py",
+          "line": 405
+        },
+        {
+          "name": "insert_post",
+          "signature": "(p: dict, list_id: str) -> None",
+          "role": "帖子入库：先拦墓碑（已硬删的 sid 静默跳过），写 posts 并挂接分组。",
+          "sideEffects": "DB 写；需在 _write_lock 临界区内调用。",
+          "file": "app/db.py",
+          "line": 325
+        },
+        {
+          "name": "author_key",
+          "signature": "(source, uid) -> str",
+          "role": "跨来源作者键：微博 = uid，非微博 = source:uid（如 x:12345678）。",
+          "sideEffects": "纯函数。",
+          "file": "app/db.py",
+          "line": 341
+        },
+        {
+          "name": "_review_count",
+          "signature": "(sid, delta, action) -> dict | None",
+          "role": "回看计次统一入口：reaffirm(+1)/undo(−1)；+1 受每帖每天一次限流（last_confirm_at 东八区同日拒绝，卡上点赞/详情±1/回看/放映同限），刷新 last_confirm_at；undo 时 keep_count≤1 拒绝、不清当日账。",
+          "sideEffects": "DB 写 + 写 review_events 审计行；仅 kept 帖允许。",
+          "file": "app/db.py",
+          "line": 711
+        }
+      ],
+      "l2_callTree": "├── init_db()                           [幂等迁移总入口]\n│   ├── 读 meta.schema_version → 版本前向拒绝\n│   ├── BEGIN IMMEDIATE：逐条执行 _SCHEMA（19 表 DDL）\n│   ├── pics 按 MIN(id) 去重 + 唯一索引 → posts 补列 → 幂等回填\n│   ├── 脏数据计数 > 0 → 中止（无效决定 / 时间矛盾）\n│   ├── CREATE TRIGGER validate_posts_* / validate_post_times_*  [库层 RAISE(ABORT)]\n│   └── 记 schema_migrations + meta\n├── 决定状态机\n│   ├── mark_snapshot → decision_undos 快照（@server 的 status 路由调用）\n│   ├── restore_snapshot → 四重校验回写（@server 的 restore 路由调用）\n│   └── set_status_bulk → 直接清空 decision_undos（批量无单帖撤销）\n├── 回看计次：reaffirm / undo_reaffirm → _review_count → review_events 审计\n└── 墓碑：has_tombstone → insert_post 见碑静默 return（全部入库通道经过）",
+      "l3_tables": [
+        {
+          "title": "表 1 · 核心领域表速览（完整字段见 db.py::_SCHEMA）",
+          "headers": [
+            "表",
+            "关键字段",
+            "职责"
+          ],
+          "rows": [
+            [
+              "posts",
+              "sid PK · status · kept_at · discarded_at · favorite · decision_version · keep_count · source · created_at",
+              "帖子主表；决定四元组受触发器保护"
+            ],
+            [
+              "decision_undos",
+              "sid PK · version · previous(JSON)",
+              "单步撤销快照；version 全等才允许恢复"
+            ],
+            [
+              "tombstones",
+              "sid PK · purged_at",
+              "硬删墓碑；所有入库通道先拦，防深翻页复活"
+            ],
+            [
+              "review_events",
+              "sid · action(shown/reaffirm/undo) · created_at",
+              "回看与计次的审计流水"
+            ],
+            [
+              "media_contents",
+              "sha256 PK · file UNIQUE · size",
+              "内容寻址目录：查重与清理依据"
+            ],
+            [
+              "image_jobs",
+              "sid PK · payload(JSON) · attempts · next_retry_at · error_kind",
+              "缺图补抓队列（先登记后下载）"
+            ]
+          ]
+        },
+        {
+          "title": "表 2 · 写路径约定与已知边界",
+          "headers": [
+            "主题",
+            "规则",
+            "后果 / 边界"
+          ],
+          "rows": [
+            [
+              "锁",
+              "db 写统一持 _write_lock（gate 组合锁）；「写文件+插行」必须走 _insert_pic_locked",
+              "WriteLock 本身不可重入：嵌套获取必死锁"
+            ],
+            [
+              "版本语义",
+              "撤销成功后 decision_version 仍 +1（只增不减）",
+              "版本比对靠快照全等而非数值还原"
+            ],
+            [
+              "批量边界",
+              "set_status_bulk 清空 decision_undos",
+              "批量操作后单帖撤销通道永久失效（设计取舍）"
+            ],
+            [
+              "收藏联动",
+              "favorite 1→0 且已 discarded：version+1 并重置 discarded_at",
+              "取消收藏重置清理计时；可能使进行中的撤销撞 409"
+            ],
+            [
+              "进程前提",
+              "单进程 asyncio：旗标/锁/调度均以单进程为前提",
+              "加 worker 属架构变更，需整体重设计锁语义"
+            ]
+          ]
+        }
+      ],
+      "tags": "sqlite schema 迁移 触发器 状态机 撤销 墓碑 decision_version"
+    },
+    {
+      "id": "storage",
+      "layer": "be-data",
+      "name": "storage.py",
+      "file": "app/storage.py",
+      "summary": "媒体持久层：按内容指纹（sha256 查重 + sha1 文件名）落盘图片并生成缩略图，维护保留归档（export/）台账与批注文本重建，是「引用计数删图」安全性的实现方。",
+      "upstream": [
+        "crawler",
+        "server",
+        "purge"
+      ],
+      "downstream": [],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/storage.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：双哈希分工（sha256 管查重、sha1 管命名）",
+          "constraint": "同一张图会从多个分组重复到达；文件系统需要稳定且不冲突的文件名；删图需要精确的引用判断。",
+          "rejected": "只用单一哈希既当查重键又当文件名会把「内容去重」与「命名规则」耦合在一起，任何一端调整都会破坏另一端。",
+          "decision": "media_contents 表以 sha256 为主键做内容查重（命中且旧文件重哈希相等则复用），文件名取 sha1[:16] 落盘 pics/年/月/；归档台账 archive_entries 独立于帖子状态记录首次归档日，使「删除帖子」不影响「曾经归档过」的历史。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "save_image",
+          "signature": "(data: bytes, url: str) -> (rel, w, h, thumb_rel)",
+          "role": "验证（64MiB / 100MP / im.verify）→ sha256 查重 → 原子落盘 → 宽 >720 生成缩略图 → 登记 media_contents。",
+          "sideEffects": "磁盘写（mkstemp+os.replace 原子写）+ DB upsert；超预算抛 ValueError。",
+          "file": "app/storage.py",
+          "line": 96
+        },
+        {
+          "name": "_export_one",
+          "signature": "(rel, kept_day) -> 'exported'|'dup'|'restored'|'failed'",
+          "role": "单图归档：以首次归档日为基准（旧 day 优先）；源图哈希与基准不符且归档副本完好时反向恢复原图。",
+          "sideEffects": "磁盘写 + archive_entries 台账更新。",
+          "file": "app/storage.py",
+          "line": 217
+        },
+        {
+          "name": "rebuild_day_notes",
+          "signature": "(day: str) -> bool",
+          "role": "全量重写当日 export/<day>/评论.txt（kept 帖 JOIN 批注，帖序 sid、条序 id）；无批注时删除文件。",
+          "sideEffects": "磁盘写/删（tmp+replace 原子替换）。",
+          "file": "app/storage.py",
+          "line": 466
+        },
+        {
+          "name": "sanitize_filename",
+          "signature": "(name, max_len=80) -> str",
+          "role": "文件名清洗唯一出口：剔除路径分隔符与 Windows 保留字符、保留名加前缀、空片段回退。",
+          "sideEffects": "纯函数。",
+          "file": "app/storage.py",
+          "line": 417
+        },
+        {
+          "name": "remove_pic_files",
+          "signature": "(file_rel: str) -> bool",
+          "role": "物理删除原图与 t_ 缩略图变体；不做引用判断（引用计数是 purge 的职责）。",
+          "sideEffects": "磁盘删除。",
+          "file": "app/storage.py",
+          "line": 399
+        }
+      ],
+      "l2_callTree": "├── save_image(data, url)\n│   ├── 体积/像素/PIL verify 三重验证（先验证后落盘）\n│   ├── sha256 查 media_contents：命中且旧文件重哈希相等 → 复用旧文件\n│   ├── mkstemp + os.replace 原子写原图\n│   ├── _make_wide_thumb（宽 >720 才生成，LANCZOS q85）\n│   └── media_contents upsert\n├── 保留归档\n│   ├── export_pics → _export_one(rel, kept_day)\n│   │   ├── 基准查询：archive_entries.file → 回退 meta exported:<rel>\n│   │   ├── 源哈希≠基准 且 归档副本完好 → 反向恢复原图（restored）\n│   │   └── 副本已存在且哈希相等 → dup；否则 tmp 复制 + 校验 + replace\n│   └── export_report 汇总（exported/dup/restored/failed + archive_complete）\n└── rebuild_day_notes(day)\n    └── kept 帖 JOIN post_comments（sid, id 排序）→ format_notes → 原子重写；无批注即 unlink",
+      "l3_tables": [
+        {
+          "title": "表 · 归档四态与评论.txt 生命周期",
+          "headers": [
+            "项",
+            "取值 / 触发",
+            "语义"
+          ],
+          "rows": [
+            [
+              "_export_one 返回",
+              "exported / dup / restored / failed",
+              "新归档 / 副本已存在 / 反向恢复原图 / 失败（记 archive_entries.error）"
+            ],
+            [
+              "quality 标记",
+              "full · mid · unknown · thumbnail",
+              "mid 表示曾从中图档补抓（原图拉不到的回退位）"
+            ],
+            [
+              "评论.txt 重建触发",
+              "先批注后保留；保留帖评论增改删",
+              "两处 server 调用点驱动 rebuild_day_notes"
+            ],
+            [
+              "评论.txt 移除",
+              "该日不再有带批注的保留帖",
+              "删除文件而非留空文件（避免空文件歧义）"
+            ]
+          ]
+        }
+      ],
+      "tags": "sha1 sha256 内容寻址 缩略图 归档 export 评论.txt 引用计数"
+    },
+    {
+      "id": "purge",
+      "layer": "be-data",
+      "name": "purge.py",
+      "file": "app/purge.py",
+      "summary": "生命周期终点执行器：每日 04:10 将「不要」超过 PURGE_DAYS 的帖子硬删——行删除覆盖 8 张表、文件删除持锁判引用、删除后立墓碑，并提供删图失败的持久重试队列。",
+      "upstream": [
+        "server"
+      ],
+      "downstream": [
+        "db",
+        "storage"
+      ],
+      "readsState": [
+        "Post.status",
+        "Post.favorite"
+      ],
+      "writesState": [
+        "Post.status"
+      ],
+      "files": [
+        {
+          "path": "app/purge.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：行先删、文件后删，且两步必须同锁",
+          "constraint": "同一物理文件（内容寻址）可能被多个帖子引用；行删除与文件删除之间存在时间窗，窗口内同月同字节的图可能被重新抓取。",
+          "rejected": "若先删文件后删行，重抓帖会立即引用到不存在的文件；若不加锁，引用计数判断与 unlink 之间可能插入新的引用行。",
+          "decision": "_purge_post 在持 _write_lock 的临界区内先重验豁免条件、删 8 张表的行，再逐文件判断 pics 表引用（file 列即引用）归零后才 unlink——引用判断与删除物理上不可分离；删除失败的文件进 file_jobs 队列按 attempts 升序持久重试。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "run",
+          "signature": "() -> dict",
+          "role": "每日 04:10 入口：purge_expired + retry_files，结果 JSON 写 meta last_purge。",
+          "sideEffects": "DB 硬删 + 磁盘删除；由调度器触发。",
+          "file": "app/purge.py",
+          "line": 117
+        },
+        {
+          "name": "purge_expired",
+          "signature": "(days=None) -> dict{purged_posts, removed_files, remaining}",
+          "role": "筛选超期 discarded（非收藏、无批注、discarded_at 非空、早于截止）并逐帖硬删。",
+          "sideEffects": "DB 硬删；days 缺省取 PURGE_DAYS=3。",
+          "file": "app/purge.py",
+          "line": 14
+        },
+        {
+          "name": "_purge_post",
+          "signature": "(sid, cutoff) -> int | None",
+          "role": "单帖硬删：锁内重验豁免条件 → 删 8 张表行 → 登记 file_jobs → 立墓碑。",
+          "sideEffects": "DB 硬删；预览到删除期间被恢复/收藏则返回 None 放弃。",
+          "file": "app/purge.py",
+          "line": 35
+        },
+        {
+          "name": "retry_files",
+          "signature": "() -> dict",
+          "role": "删图失败重试：file_jobs 按 attempts 升序每轮取 100。",
+          "sideEffects": "磁盘删除 + DB。",
+          "file": "app/purge.py",
+          "line": 95
+        }
+      ],
+      "l2_callTree": "├── run()\n│   ├── purge_expired(days)\n│   │   ├── 筛选 SQL：discarded + 非收藏 + 无评论（NOT EXISTS）+ 超 cutoff\n│   │   └── 逐帖 _purge_post(sid, cutoff)\n│   │       ├── 锁内重验同一条件（期间被恢复/收藏 → 放弃）\n│   │       ├── 删行顺序：pics → posts → image_jobs → decision_undos\n│   │       │            → post_groups → post_observations → post_comments → review_events\n│   │       ├── 每文件 INSERT OR IGNORE file_jobs → 锁内 _remove_file_locked\n│   │       │   ├── pics 仍有引用 → 只删队列行不删文件\n│   │       │   └── 无引用 → @storage.remove_pic_files + 删 media_contents\n│   │       └── INSERT OR IGNORE tombstones（立墓碑防复活）\n│   └── retry_files（attempts 升序 LIMIT 100）",
+      "l3_tables": [
+        {
+          "title": "表 · 清理豁免与重试规则",
+          "headers": [
+            "规则",
+            "条件",
+            "依据"
+          ],
+          "rows": [
+            [
+              "收藏豁免",
+              "COALESCE(favorite,0)=0 才入选；取消收藏重新计时",
+              "筛选 SQL（purge.py:19-23）"
+            ],
+            [
+              "批注豁免",
+              "NOT EXISTS(post_comments)；删光评论即恢复清理资格",
+              "同上"
+            ],
+            [
+              "重试上限",
+              "每轮按 attempts 升序取 100 个",
+              "retry_files（purge.py:97）"
+            ],
+            [
+              "失败记账",
+              "OSError/ValueError → attempts+1 + 错误类名入 file_jobs.error",
+              "purge.py:87-91"
+            ]
+          ]
+        }
+      ],
+      "tags": "清理 硬删 引用计数 墓碑 tombstone 04:10"
+    },
+    {
+      "id": "queries",
+      "layer": "be-data",
+      "name": "queries + downloads",
+      "file": "app/queries.py",
+      "summary": "查询与打包计划层：把前端筛选参数翻译为 SQL 的 post_filter 是列表、编年聚合与打包下载共用的唯一口径；downloads 基于同一口径产出带去重与命名的打包文件计划。",
+      "upstream": [
+        "server"
+      ],
+      "downstream": [
+        "db"
+      ],
+      "readsState": [
+        "Post.status",
+        "Post.favorite",
+        "Post.created_at"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/queries.py"
+        },
+        {
+          "path": "app/downloads.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：三种消费场景共用同一筛选函数",
+          "constraint": "墙列表、编年聚合、打包下载三处必须对「同一筛选条件看到多少帖」给出完全一致的答案，否则会出现「列表 100 张、打包 80 张」的静默口径分叉。",
+          "rejected": "各消费方自行拼 WHERE 条件，筛选语义会随迭代逐步发散且无法被单测覆盖。",
+          "decision": "post_filter 作为唯一 WHERE 构造点（7 参数：status/group/author/type_/range/has_cmts/source），打包计划 plan 基于同一函数取数；超 500 帖时打包路径选择「降级元数据预览 + over_limit 标记」而不是静默截断，把缩范围的决定权交还用户。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "post_filter",
+          "signature": "(status, group, author, type_, range, has_cmts, source) -> (where_sql, args)",
+          "role": "构造列表/编年/打包共用的 WHERE：favorites→favorite=1 跨三态；author 按 source:uid 拆分；range 时间字面量硬编码东八区。",
+          "sideEffects": "纯函数。",
+          "file": "app/queries.py",
+          "line": 8
+        },
+        {
+          "name": "plan",
+          "signature": "(…) -> {posts, pics, missing, entries, rows, quality}",
+          "role": "打包文件计划：全局路径去重、zip_entry_name 命名、缺失盘点；单包上限 500 帖。",
+          "sideEffects": "读 DB 与磁盘文件存在性。",
+          "file": "app/downloads.py",
+          "line": 18
+        },
+        {
+          "name": "preview",
+          "signature": "(scope, authors, dates, select, thumb) -> dict",
+          "role": "打包预览：与 ZIP 严格共用 plan 的文件口径；over_limit 时 rows 只回元数据供前端引导拆批。",
+          "sideEffects": "读 DB。",
+          "file": "app/downloads.py",
+          "line": 121
+        }
+      ],
+      "l2_callTree": "├── post_filter(status, group, author, type_, range, has_cmts, source)\n│   ├── status='favorites' → p.favorite=1（跨保留/删除三态）\n│   ├── source → COALESCE(NULLIF(p.source,''),'weibo')=?（旧数据空串归微博）\n│   ├── author → 按 source:uid 冒号拆分（无冒号视作微博）\n│   └── range → BETWEEN/≥ 硬编码 +08:00 字面量（业务日界固定东八区）\n└── downloads.plan(…)\n    ├── select 路径：sids > 500 → HTTPException 400「单包最多 500 帖」\n    ├── 筛选路径：COUNT > 500 → 降级 rows（仅元数据）+ over_limit 标记\n    ├── LEFT JOIN pics 全序取行 → 同文件去重（质量冲突降级 mid/unknown）\n    └── storage.zip_entry_name：日期_作者(清洗截60B)_sid(截40)_{序号:02d}[_正文前30字]",
+      "l3_tables": [
+        {
+          "title": "表 · 500 帖上限的两条路径行为",
+          "headers": [
+            "路径",
+            "超限行为",
+            "用户体验"
+          ],
+          "rows": [
+            [
+              "勾选路径（select）",
+              "直接 HTTP 400，文案「单包最多 500 帖」",
+              "立即失败并提示"
+            ],
+            [
+              "筛选路径（status+细分）",
+              "rows 降级为仅元数据（file/thumb 置空）+ over_limit=true",
+              "前端提示按博主/日期分批，服务端拒绝静默截断"
+            ]
+          ]
+        }
+      ],
+      "tags": "筛选 打包 下载 zip 去重 口径 500"
+    },
+    {
+      "id": "jobs",
+      "layer": "be-service",
+      "name": "jobs.py",
+      "file": "app/jobs.py",
+      "summary": "长任务持久化执行器：缺图补抓、归档重试等以分钟计的任务先持久化登记再派发，崩溃后重启可标「已中断」，同 kind 单飞防重复派发。",
+      "upstream": [
+        "server",
+        "maintenance_jobs"
+      ],
+      "downstream": [
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/jobs.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：登记与派发之间不 await",
+          "constraint": "任务以分钟计，页面会刷新、服务会重启；「正在跑」这个事实必须活在数据库里而不是进程内存。",
+          "rejected": "先 create_task 再写 meta，则登记前的崩溃会留下「没有任何记录的任务」；写 meta 后再 create_task，两步之间仍有一个不可取消的窗口。",
+          "decision": "start 先持写锁把任务 JSON 写进 meta（登记即持久化），登记后立即 create_task 且中间不 await——崩溃窗口被压缩到只剩「queued 幽灵」，由 recover_interrupted 在重启时统一标 interrupted（可从页面重试）。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "Runner",
+          "signature": "class Runner · start(kind, work) / shutdown()",
+          "role": "任务执行器：start 幂等（同 kind ACTIVE 时直接返回已有 job，防重复派发）；shutdown 先 stop 信号等 5 秒再 cancel。",
+          "sideEffects": "写 meta；派发 asyncio 任务。",
+          "file": "app/jobs.py",
+          "line": 55
+        },
+        {
+          "name": "recover_interrupted",
+          "signature": "() -> None",
+          "role": "启动时把所有 ACTIVE 任务标为 interrupted（排队幽灵与半程任务统一处置）。",
+          "sideEffects": "写 meta。",
+          "file": "app/jobs.py",
+          "line": 45
+        },
+        {
+          "name": "status",
+          "signature": "(kind) -> dict",
+          "role": "按 kind 读取任务状态（/api/jobs/{kind} 的数据源）。",
+          "sideEffects": "读 meta。",
+          "file": "app/jobs.py",
+          "line": 31
+        }
+      ],
+      "l2_callTree": "├── start(kind, work)\n│   ├── 持 _write_lock 读 meta job:<kind> → ACTIVE 则返回已有 job（幂等）\n│   ├── 构造 {id=uuid4, state:'queued', progress…} 写 meta（登记即持久化）\n│   └── 不 await 直接 asyncio.create_task → done_callback 自清\n├── _execute\n│   ├── _update(state='running') → work(cancelled, progress)\n│   └── _update 双条件：id 匹配且 state ∈ ACTIVE 才写（旧任务迟到写入被静默丢弃）\n├── 完成分支：result.ok → complete/failed；CancelledError → interrupted；ENOSPC 专属文案\n└── recover_interrupted：启动单次，ACTIVE → interrupted",
+      "l3_tables": [
+        {
+          "title": "表 · 任务状态机（job:<kind> 的 state 字段）",
+          "headers": [
+            "state",
+            "进入条件",
+            "离开条件"
+          ],
+          "rows": [
+            [
+              "queued",
+              "start 登记完成（create_task 尚未跑）",
+              "_execute 置 running；或重启被标 interrupted"
+            ],
+            [
+              "running",
+              "_execute 开始",
+              "完成 → complete/failed；取消 → interrupted"
+            ],
+            [
+              "complete / failed",
+              "work 返回 / 抛错（按 result.ok）",
+              "终态；新一轮 start 覆盖"
+            ],
+            [
+              "interrupted",
+              "重启恢复，或 shutdown 超时取消",
+              "终态；页面可重新 start"
+            ]
+          ]
+        }
+      ],
+      "tags": "任务 runner 中断 恢复 幂等"
+    },
+    {
+      "id": "backup",
+      "layer": "be-service",
+      "name": "backup + cloud",
+      "file": "app/backup.py",
+      "summary": "备份与恢复层（v2）：gate 内固定快照 → 逐文件 sha256 清单（manifest）→ 媒体 blob 直传本地或夸克网盘、凭据只留快照 local/ 子目录；恢复必须以空目录为目标并逐文件校验，全有或全无。",
+      "upstream": [
+        "server",
+        "tools"
+      ],
+      "downstream": [
+        "db",
+        "storage",
+        "config"
+      ],
+      "readsState": [
+        "Post.status",
+        "Post.favorite",
+        "Post.decision_version"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/backup.py"
+        },
+        {
+          "path": "app/cloud.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：以「逐文件哈希清单」替代「文件数量一致」",
+          "constraint": "个人数据不可再生；备份介质（本地目录/网盘）可能部分损坏或部分上传失败。",
+          "rejected": "传统做法只备份数据库与图片目录，「文件数量相同」无法证明内容正确，也无法发现「行在图丢」。",
+          "decision": "manifest 记录每个文件的 sha256 与 size，恢复时逐文件回源并复核；decisions_sha256 对全部帖子决定行排序序列化再哈希，恢复后重算比对——「行在、决定被改」也逃不掉。任何一步失败 rmtree 清场，保证全有或全无。"
+        },
+        {
+          "title": "权衡二：凭据与媒体分离存储",
+          "constraint": "凭据（Cookie/auth_token）等同登录态，泄露危害远大于图片；而 blob 库（网盘）的泄露面大于本地。",
+          "rejected": "凭据随 blob 一并上云，等于把登录态暴露在网盘泄露面上，与「备份不扩大攻击面」矛盾。",
+          "decision": "manifest 的 local_only 清单标记凭据文件，它们只随快照目录的 local/ 子目录（0600）留存、永不进 blob 库；恢复时凭据只能从快照 local/ 回源——丢本地快照则整体失败，宁可不可恢复也不扩大泄露。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "create",
+          "signature": "(keep=7, store=None) -> dict",
+          "role": "完整增量备份：gate 固定快照 → 硬链接收集 → 哈希清单 → 三道发布前校验 → 原子发布 → 滚动留 7 份。",
+          "sideEffects": "磁盘写 + 网络上传（夸克后端）；需在宿主侧 make 环境执行（容器内永不执行备份）。",
+          "file": "app/backup.py",
+          "line": 42
+        },
+        {
+          "name": "restore",
+          "signature": "(batch, target, store=None) -> dict",
+          "role": "空目录恢复：manifest 预检 → 逐文件回源 sha256 复核 → 库完整性 + 决定摘要比对 → 清空设备三表；失败 rmtree 清场。",
+          "sideEffects": "整目录写；恢复出的文件全部 0600。",
+          "file": "app/backup.py",
+          "line": 118
+        },
+        {
+          "name": "LocalBlobs",
+          "signature": "BlobStore 协议：ensure_many(keys) / fetch_into(key, dest)",
+          "role": "本地 blob 后端（data/backups/blobs/，历史行为逐位保留）。",
+          "sideEffects": "磁盘写。",
+          "file": "app/cloud.py",
+          "line": 132
+        },
+        {
+          "name": "QuarkBlobs",
+          "signature": "BlobStore 协议：ensure_many(keys) / fetch_into(key, dest)",
+          "role": "夸克网盘后端（CLI 子进程）。",
+          "sideEffects": "网络上传/下载；CLI 无删除能力，云端 blob 只增不减。",
+          "file": "app/cloud.py",
+          "line": 170
+        }
+      ],
+      "l2_callTree": "├── create(keep, store)\n│   ├── backups 目录 chmod 700 → TemporaryDirectory staging\n│   ├── 「with gate」：sqlite backup API 复制 db + pics/export 硬链接（拒符号链接）\n│   ├── 凭据（cookie.txt/x_auth.txt）→ staging local/（0600）· 永不进 blob 库\n│   ├── 逐文件 digest → files{rel:{sha256,size}} → store.ensure_many（local_only 除外）\n│   ├── 发布前校验：integrity_check · 重算 decisions_sha256 · preexisting_missing 盘点\n│   └── manifest + os.replace 原子发布 → 滚动删除留 7 份（快照与同名 .db 独立计数）\n└── restore(batch, target, store)\n    ├── 目标必须空目录 → manifest 预检（禁绝对路径 / 禁 .. / 哈希 64 位 hex）\n    ├── 逐文件回源（local_only 从快照 local/，其余从 store）+ sha256 复核 + chmod 600\n    ├── 库 integrity_check + decisions_sha256 重算比对\n    ├── 清空 device_sessions / device_codes / pairing_attempts（旧快照不复活设备）\n    └── except BaseException → rmtree(target) 后 re-raise（全有或全无）",
+      "l3_tables": [
+        {
+          "title": "表 · manifest.json 字段清单",
+          "headers": [
+            "字段",
+            "内容",
+            "用途"
+          ],
+          "rows": [
+            [
+              "format / created_at / duration_seconds",
+              "格式版本 · 创建时刻 · 耗时",
+              "兼容性与观测"
+            ],
+            [
+              "files",
+              "{相对路径: {sha256, size}}",
+              "逐文件恢复与复核的依据"
+            ],
+            [
+              "blob_store",
+              "产生该清单的后端名（local/quark）",
+              "恢复时选择回源通道"
+            ],
+            [
+              "local_only",
+              "仅存快照 local/ 的文件清单（凭据）",
+              "永不进 blob 库"
+            ],
+            [
+              "posts / decisions_sha256",
+              "帖子条数 · 决定行排序序列化的 sha256",
+              "恢复后重算比对，防「行在决定丢」"
+            ],
+            [
+              "preexisting_missing",
+              "备份时 DB 引用但磁盘已缺的文件",
+              "只记录不阻断（历史缺失基线）"
+            ]
+          ]
+        }
+      ],
+      "tags": "备份 manifest 恢复 夸克 blob sha256 decisions_sha256"
+    },
+    {
+      "id": "maintenance",
+      "layer": "be-service",
+      "name": "maintenance + demo",
+      "file": "app/maintenance.py",
+      "summary": "可重建内容修复与深度体检：严格区分「可重建」（缩略图、头像、归档副本）与「用户数据」（决定、批注），只修复前者；体检如实区分当前完整性与历史缺失，绝不把「检查完成」当作「全部齐全」。",
+      "upstream": [
+        "server"
+      ],
+      "downstream": [
+        "storage",
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/maintenance.py"
+        },
+        {
+          "path": "app/demo.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：修复的安全边界 = 可重建性",
+          "constraint": "缩略图可从原图重生成、归档副本可从原图重导出；而用户决定与批注不可再生。",
+          "rejected": "「顺手把缺的东西都补上」的修复策略一旦误删或改写用户数据，损失不可逆。",
+          "decision": "repair_local 只重建三类可重建媒体且全程持锁；health 体检将「当前图片完整」与「历史归档完整」分开报告，历史缺失保留问题记录而不是谎报补齐。demo.seed 仅服务隔离的 preview 实例，绝不触碰真实数据目录。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "repair_local",
+          "signature": "() -> dict",
+          "role": "每 24 小时修复可重建媒体：重建缩略图、补头像引用、补历史归档；不改变任何用户决定。",
+          "sideEffects": "磁盘写 + DB；经调度器与 make picwall-repair 触发。",
+          "file": "app/maintenance.py",
+          "line": 9
+        },
+        {
+          "name": "health",
+          "signature": "() -> dict",
+          "role": "深度体检：原图/缩略图/头像/历史归档内容级校验，缺失保留问题记录。",
+          "sideEffects": "读磁盘与 DB。",
+          "file": "app/maintenance.py",
+          "line": 74
+        },
+        {
+          "name": "seed",
+          "signature": "() -> dict（demo.py）",
+          "role": "灌入 120 帖隔离演示数据，支撑 make picwall-preview 验收实例（18081，退出销毁）。",
+          "sideEffects": "写隔离数据目录；仅 preview 实例使用。",
+          "file": "app/demo.py",
+          "line": 48
+        }
+      ],
+      "l2_callTree": "├── repair_local()            [每 24h 调度 + make picwall-repair]\n│   ├── 重建缺失缩略图 → 补头像引用 → 补历史归档（全部持锁）\n│   └── 结果区分「已修复」与「历史缺失保留记录」\n├── health(deep)              [make picwall-health]\n│   └── 原图 / 缩略图 / 头像 / 归档 内容级校验，分别报告\n└── demo.seed() / demo.clear()  [仅 preview 隔离实例]",
+      "l3_tables": [],
+      "tags": "修复 体检 缩略图 归档 demo preview"
+    },
+    {
+      "id": "config",
+      "layer": "be-service",
+      "name": "config + gate",
+      "file": "app/config.py",
+      "summary": "配置叶子与组合锁：config 是依赖 DAG 的根（所有模块 import 它，它不 import 任何模块），环境变量在此一处定型；gate 提供跨进程 flock + 进程内线程锁的分层组合写锁。",
+      "upstream": [],
+      "downstream": [
+        "db",
+        "storage",
+        "backup",
+        "crawler"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/config.py"
+        },
+        {
+          "path": "app/gate.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：可重入层与不可重入层的物理分离",
+          "constraint": "「写文件 + 写数据库」需要跨进程互斥（Mac 宿主与容器不共享 flock）；同一执行流内的嵌套调用又要求锁可重入；而 db 写临界区要求绝对串行。",
+          "rejected": "把三层语义揉进一把锁：要么嵌套死锁（不可重入锁被递归获取），要么临界区过大（可重入锁覆盖过宽导致并发度损失）。",
+          "decision": "DataGate（flock + threading RLock，depth 计数可重入）管跨进程与跨线程互斥；WriteLock = DataGate 之内再套一把普通 threading.Lock 专管 db 写临界区、本身不可重入——层级口诀：gate（可重入）⊃ WriteLock（不可重入），嵌套写锁必死锁是明示约定。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "DATA_DIR",
+          "signature": "Path（env PICWALL_DATA_DIR 可覆盖）",
+          "role": "数据目录唯一来源；DB_PATH/COOKIE_FILE/X_AUTH_FILE 均由它派生。",
+          "sideEffects": "模块导入时定型。",
+          "file": "app/config.py",
+          "line": 30
+        },
+        {
+          "name": "PAIR_ROLE",
+          "signature": "str ∈ {admin, editor, viewer, collector}（默认 editor）",
+          "role": "固定配对码角色；非法值回退 editor——宁可落到分拣也不静默禁用配对。",
+          "sideEffects": "模块导入时定型。",
+          "file": "app/config.py",
+          "line": 63
+        },
+        {
+          "name": "DataGate",
+          "signature": "class（上下文管理器）",
+          "role": "跨进程 flock（data/.mutation.lock，Windows 走 msvcrt）+ 线程 RLock + depth 计数可重入。",
+          "sideEffects": "获取/释放文件锁；@guarded 装饰器将其应用于整个函数。",
+          "file": "app/gate.py",
+          "line": 12
+        },
+        {
+          "name": "WriteLock",
+          "signature": "class（上下文管理器）",
+          "role": "DataGate 之内的 db 写临界区串行化；本身不可重入，嵌套获取必死锁。",
+          "sideEffects": "db._write_lock 即其实例，被 9 个模块跨用。",
+          "file": "app/gate.py",
+          "line": 63
+        }
+      ],
+      "l2_callTree": "├── config.py（叶子：不 import 其他 app 模块）\n│   ├── env 读入定型：抓取参数 / X 代理 / 像素与字节预算 / 配对码\n│   ├── get_cookie / save_cookie / get_x_auth / save_x_auth（0600 密钥文件读写）\n│   └── ensure_dirs / crawl_hm\n└── gate.py\n    ├── DataGate.__enter__：线程 RLock 挡跨线程 → depth==0 才 open+flock → depth+1\n    ├── DataGate.__exit__：depth-1，归零才解锁关文件\n    ├── WriteLock：with DataGate + threading.Lock（不可重入）\n    └── @guarded(fn)：整个函数包进 DataGate（storage / backup 在用）",
+      "l3_tables": [
+        {
+          "title": "表 · 环境变量的两条工程纪律",
+          "headers": [
+            "纪律",
+            "内容",
+            "兜底机制"
+          ],
+          "rows": [
+            [
+              "compose 白名单",
+              "新变量必须在 docker-compose environment 显式声明，否则容器看不见",
+              "tests/test_docs.py 的 COMPOSE_VARS 契约测试"
+            ],
+            [
+              "int 型安全默认",
+              "空字符串会使 int() 崩溃；compose 声明必须写 ${VAR:-默认值}",
+              "config 侧默认值 + compose 侧默认值双保险"
+            ]
+          ]
+        }
+      ],
+      "tags": "配置 环境变量 锁 flock datagate write_lock 白名单"
+    },
+    {
+      "id": "server",
+      "layer": "be-service",
+      "name": "server.py",
+      "file": "app/server.py",
+      "summary": "组合根（Composition Root）：全部 50+ REST 路由、ASGI 中间件（本机身份/CORS/请求预算）、调度器注册与三条采集通道的汇合点。刻意保持单文件——路由即文档。",
+      "upstream": [
+        "appjs",
+        "post_actions",
+        "settings",
+        "timeline",
+        "review"
+      ],
+      "downstream": [
+        "db",
+        "queries",
+        "crawler",
+        "connections",
+        "jobs",
+        "auth",
+        "maintenance"
+      ],
+      "readsState": [
+        "Post.status",
+        "Post.keep_count",
+        "Post.decision_version"
+      ],
+      "writesState": [
+        "Post.status",
+        "Post.favorite",
+        "Post.decision_version"
+      ],
+      "files": [
+        {
+          "path": "app/server.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：胖单文件组合根 vs 分层路由模块",
+          "constraint": "单人维护的个人项目，路由数量约 50 个且与采集编排强耦合；拆分模块会引入导入图管理成本。",
+          "rejected": "按资源域拆成多个 router 文件，路由即文档的优势消失，找一条路由要在多个文件间跳转。",
+          "decision": "全部路由留在单文件（1300+ 行）并在架构总览明示首要拆分点（_crawl_x 与 ingest 编排和 crawler 职责重叠）；拆分是已规划的演进方向而非当前债务。"
+        },
+        {
+          "title": "权衡：错误出口写状态页而非日志",
+          "constraint": "排障的第一现场是「用户看到什么」，而容器日志需要登机器查看且难以与业务状态关联。",
+          "rejected": "错误只写日志，前端只能显示笼统失败，排障必须登机器翻日志。",
+          "decision": "抓取/任务错误写进 meta 状态字段（last_error / x_last_error / job.error），/api/status 聚合暴露——「先看状态页，再看容器日志」成为成文约定；应用日志仅保留个位数关键调用点。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "lifespan",
+          "signature": "async contextmanager(app)",
+          "role": "启动：建库 → 恢复中断任务 → 注册 5 个定时任务（微博 09:30 / 清理 04:10 / X 每 2h / 补抓每 4h / 修复每 24h，misfire 宽限 1 小时=睡眠错过仍补跑）→ 启动追赶；停机时调度器与 Runner 优雅收尾。",
+          "sideEffects": "注册 asyncio 任务；网络 I/O（追赶抓取）。",
+          "file": "app/server.py",
+          "line": 81
+        },
+        {
+          "name": "list_posts",
+          "signature": "GET /api/posts → keyset 分页 JSON",
+          "role": "列表主接口：keyset 游标（尾行排序键 base64；次数序三键）+ limit+1 探测 has_more + 批量补图片/评论预览/搜索命中批注。",
+          "sideEffects": "读 DB；游标解码失败返回 400。",
+          "file": "app/server.py",
+          "line": 501
+        },
+        {
+          "name": "mark",
+          "signature": "POST /api/posts/{sid}/status → {decision}",
+          "role": "决定变更：mark_snapshot 快照式落账（last-write-wins）；kept 时同步归档报告并重建当日批注文本。",
+          "sideEffects": "DB 写 + 磁盘归档；并发冲突防护不在本路由（在 /restore 的乐观锁）。",
+          "file": "app/server.py",
+          "line": 653
+        },
+        {
+          "name": "ingest_harvest",
+          "signature": "POST /api/ingest/harvest → capture_result",
+          "role": "浏览器代抓导入：CORS 仅放行 weibo.com + Bearer 采集令牌 + 单批 ≤100 条 + running 占坑（check→set 无 await，并发双发只进一个）。",
+          "sideEffects": "DB 写 + 网络下载；只写 last_ingest 不写 last_result（代抓不证明完整覆盖）。",
+          "file": "app/server.py",
+          "line": 1405
+        },
+        {
+          "name": "restore",
+          "signature": "POST /api/posts/{sid}/restore → 200 | 409",
+          "role": "撤销端点：previous + expected 双比对乐观锁，不匹配 409 提示刷新——跨设备冲突防护的唯一入口。",
+          "sideEffects": "DB 写（经 db.restore_snapshot）。",
+          "file": "app/server.py",
+          "line": 684
+        }
+      ],
+      "l2_callTree": "├── 中间件（http 每请求）\n│   ├── 地址白名单 allowed_host → local_listener 回环校验\n│   ├── _request_cors（仅 ingest 路径）→ OPTIONS 204\n│   ├── 会话解析：local_owner（监听器注入，非 cross-site 无 Origin）或 Bearer/Cookie 会话\n│   ├── public 路径豁免；未配对 → 401；写操作 can_write 矩阵 → 403\n│   └── /api/* /media/* 响应 no-store\n├── @app.get /atlas → FileResponse docs/project_atlas.html（仅管理设备）\n├── 设备域：pair / code / session / devices（admin 校验）\n├── 内容域：/api/posts（keyset）· /status · /restore · /favorite · /reaffirm · /comments · /bulk-status\n├── 采集域：/api/crawl · /api/crawl/x（_crawl_x → _x_http_client 统一代理）\n│   └── /api/ingest/harvest · /api/ingest/x（CORS+Bearer+占坑）\n├── 运维域：/api/purge · /api/jobs/{kind} · /api/{kind}/retry · /api/download/* · /api/demo\n└── lifespan → 调度 5 任务 + catch_up_if_stale",
+      "l3_tables": [
+        {
+          "title": "表 · 请求身份判定（中间件级，客户端不可伪造）",
+          "headers": [
+            "判定",
+            "条件",
+            "结果"
+          ],
+          "rows": [
+            [
+              "local_owner",
+              "本机监听器注入 scope 标记 + host ∈ 回环 + 无 Origin/同 Origin + 无 Bearer + 非 Sec-Fetch-Site: cross-site",
+              "授予 {role: admin, local_owner: true}，不查库"
+            ],
+            [
+              "配对会话",
+              "Cookie pwall_device 或 Bearer 令牌命中 device_sessions 且未过期",
+              "按会话角色 admin/editor/viewer/collector"
+            ],
+            [
+              "未配对",
+              "无有效会话",
+              "非 public 路径一律 401"
+            ],
+            [
+              "跨站防护",
+              "Sec-Fetch-Site: cross-site 的子资源请求",
+              "即使来自本机也不授 local_owner（防外站 <img> 打 API）"
+            ]
+          ]
+        }
+      ],
+      "tags": "fastapi 路由 调度 组合根 中间件 keyset ingest"
+    },
+    {
+      "id": "serve",
+      "layer": "be-service",
+      "name": "serve.py",
+      "file": "app/serve.py",
+      "summary": "进程入口与双监听器编排：同一 app 经两个 uvicorn 监听器服务「本机免密」与「局域网配对」两个入口，本机身份由监听器以裸 ASGI 包装注入 scope，客户端无法伪造。",
+      "upstream": [],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/serve.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：身份由「网络拓扑」决定而非由「请求声称」决定",
+          "constraint": "需要同时满足「本机免密直用」与「局域网必须配对」两个矛盾需求，且客户端可能伪造 Host、X-Forwarded-For、Cookie。",
+          "rejected": "按请求头判断是否本机（X-Forwarded-For、Host），任何头都可被客户端伪造，免密入口即成为全网漏洞。",
+          "decision": "8081 监听器只绑回环地址并用裸 ASGI 包装类向 scope 注入 pwall_local_owner 标记——「能建立这条 TCP 连接」本身就是身份证明，标记不经过任何客户端可写的字段；局域网入口没有该标记，必须走配对会话。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "server_configs",
+          "signature": "(in_container=None) -> list[uvicorn.Config]",
+          "role": "按 /.dockerenv 判定容器；返回两份配置：局域网 0.0.0.0:8080(容器)/8082(裸机)、本机 LocalOwner(app) 绑容器 8082/裸机 127.0.0.1:8081。",
+          "sideEffects": "纯配置构造。",
+          "file": "app/serve.py",
+          "line": 37
+        },
+        {
+          "name": "LocalOwner",
+          "signature": "裸 ASGI 类：__call__(scope, receive, send)",
+          "role": "向 http scope 注入 pwall_local_owner=True 后转交 app——不是 Starlette 中间件，不经过任何客户端可写字段。",
+          "sideEffects": "修改 ASGI scope。",
+          "file": "app/serve.py",
+          "line": 16
+        },
+        {
+          "name": "run",
+          "signature": "async () -> None",
+          "role": "先手动进 lifespan（建库起调度）再并行起两个监听器；信号统一接管；任一退出即全停。",
+          "sideEffects": "进程生命周期管理。",
+          "file": "app/serve.py",
+          "line": 48
+        }
+      ],
+      "l2_callTree": "├── server_configs()\n│   ├── 容器判定：/.dockerenv 存在\n│   ├── 监听器 A（局域网配对入口）：0.0.0.0 · 容器 8080 / 裸机 8082 · 裸 app\n│   └── 监听器 B（本机免密入口）：LocalOwner(app) · 容器 0.0.0.0:8082（宿主映射 127.0.0.1:8081）\n│       ·                              裸机 127.0.0.1:8081\n└── run()\n    ├── async with lifespan(app)：先建库、起调度器，再开端口（数据就绪才对外服务）\n    ├── 双 ManagedServer 并行 serve（capture_signals no-op，信号统一接管）\n    └── FIRST_COMPLETED → 全停 → gather 回收",
+      "l3_tables": [],
+      "tags": "uvicorn 双监听器 localowner scope 入口"
+    },
+    {
+      "id": "auth",
+      "layer": "be-service",
+      "name": "auth.py",
+      "file": "app/auth.py",
+      "summary": "设备信任层：一次性/固定双轨配对码（只存哈希）、30 天会话、四角色写权限矩阵、双窗口配对限流与请求体预算中间件——「局域网暴露面」的全部收敛点。",
+      "upstream": [
+        "server",
+        "serve"
+      ],
+      "downstream": [
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/auth.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：双窗口限流先于验码执行",
+          "constraint": "配对码是 12 位随机串，穷举攻击在数学上可行（约 1.4 万次/天的尝试窗口）。",
+          "rejected": "先验码后计数，攻击者可在限流生效前完成大量尝试；且有效码的试错也应消耗额度。",
+          "decision": "exchange 在验码之前累加失败计数（10 分钟滑动窗：全局 ≥100 或单 client ≥10 → 429），验码成功才清除——把「尝试」本身视为消耗资源的行为；码只存 sha256，泄库不泄凭据。"
+        },
+        {
+          "title": "权衡：请求体预算在 ASGI 层拦截",
+          "constraint": "ingest 通道接收不可信来源的批量数据，超大请求体可在业务校验之前耗尽内存。",
+          "rejected": "在 FastAPI 处理器内读取完整 body 后再校验长度，恶意分块传输已把内存吃满。",
+          "decision": "RequestBudget 作为最外层 ASGI 中间件：非 GET 请求累积 body 分块超过 2MiB 直接 413，不信任 Content-Length；组装后的 body 经 bounded_receive 一次性回放给下游。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "issue_code",
+          "signature": "(role='editor') -> str（XXXX-XXXX-XXXX）",
+          "role": "签发一次性配对码：12 位无歧义字母表（去 0/1/I/O），TTL 600 秒，库存 sha256。",
+          "sideEffects": "DB 写 device_codes；清过期码。",
+          "file": "app/auth.py",
+          "line": 59
+        },
+        {
+          "name": "exchange",
+          "signature": "(code, name, client) -> {token,id,role} | {error,status}",
+          "role": "码换会话：限流 → 验码（临时码命中即删；未命中比对固定码）→ 建 30 天会话。",
+          "sideEffects": "DB 写/删 + 限流计数；429/400 语义化错误。",
+          "file": "app/auth.py",
+          "line": 70
+        },
+        {
+          "name": "session",
+          "signature": "(token) -> dict | None",
+          "role": "会话校验：token 长度钳位后 sha256 比对 device_sessions 且未过期。",
+          "sideEffects": "只读 DB。",
+          "file": "app/auth.py",
+          "line": 99
+        },
+        {
+          "name": "can_write",
+          "signature": "(role, path) -> bool",
+          "role": "角色写权限矩阵：admin 全通；collector 仅两个 ingest 端点；editor 帖子决定/评论类；viewer 恒 False。",
+          "sideEffects": "纯函数（注意 editor 按路径尾段匹配）。",
+          "file": "app/auth.py",
+          "line": 112
+        },
+        {
+          "name": "RequestBudget",
+          "signature": "ASGI 中间件",
+          "role": "非 GET 请求体累积分块，>2MiB 直接 413；不信任 Content-Length，分块传输同限。",
+          "sideEffects": "读取并回放请求体。",
+          "file": "app/auth.py",
+          "line": 17
+        }
+      ],
+      "l2_callTree": "├── issue_code(role)\n│   └── secrets.choice(32 字母表去 0/1/I/O) × 12 → sha256 入库（TTL 600s）\n├── exchange(code, name, client)\n│   ├── 限流：清过期窗 → 全局失败 ≥100 或单 client ≥10 → 429\n│   ├── device_codes 命中 → 删码（一次性）；未命中 → 比对 config.PAIR_CODE（固定码不删）\n│   ├── 未命中 → failures+1 → 400\n│   └── 命中 → 清该 client 计数 · 清过期会话 · token_urlsafe(32) · 30 天会话入库\n├── session(token) → sha256 比对 + 过期检查\n├── RequestBudget(scope, receive, send)\n│   ├── GET/HEAD/OPTIONS 直通\n│   └── 循环 receive 累计 body > 2MiB → 413（bounded_receive 回放组装结果）\n└── can_write(role, path)：admin → collector(仅 ingest) → editor(决定/评论) → viewer False",
+      "l3_tables": [
+        {
+          "title": "表 · 角色写权限矩阵（can_write）",
+          "headers": [
+            "角色",
+            "可写路径",
+            "典型用途"
+          ],
+          "rows": [
+            [
+              "admin",
+              "全部",
+              "本机入口与开发管理设备"
+            ],
+            [
+              "editor",
+              "/api/posts/bulk-status；/api/posts/{sid}/（status·restore·favorite·reaffirm）；评论增删改",
+              "日常分拣设备（默认角色）"
+            ],
+            [
+              "viewer",
+              "无（恒 False）",
+              "只读展示设备"
+            ],
+            [
+              "collector",
+              "仅 /api/ingest/harvest 与 /api/ingest/x",
+              "Cookie 助手扩展与 Console 采集脚本"
+            ]
+          ]
+        }
+      ],
+      "tags": "配对 会话 角色 权限 哈希 限流 RequestBudget"
+    },
+    {
+      "id": "connections",
+      "layer": "be-service",
+      "name": "connections.py",
+      "file": "app/connections.py",
+      "summary": "凭据探活与状态指纹：把「Cookie 还活着吗」变成可独立调用的只读探针（微博真调 allGroups、X 真拉列表 1 条），状态以指纹形式落 meta 且绝不回显凭据原文。",
+      "upstream": [
+        "server",
+        "settings"
+      ],
+      "downstream": [
+        "weibo",
+        "xapi"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/connections.py"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：探活与抓取分离，且写状态前比对指纹",
+          "constraint": "Cookie 过期是最高频故障；扩展希望「只重发凭据、不触发整轮抓取」，且多个异步任务的迟到回写可能覆盖最新状态。",
+          "rejected": "用「跑一次抓取」当探活，代价高且污染抓取统计；状态无版本比对，旧任务的失败回写会覆盖用户刚更新的新凭据状态。",
+          "decision": "probe 做最小只读验证（不导入任何帖子）；record 写 meta 前比对 current(source) 的凭据指纹，凭据已变则丢弃本次写入——迟到的旧任务无法覆盖新状态。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "probe",
+          "signature": "async (source, credential, ct0='') -> {state}",
+          "role": "只读探活：微博调 allGroups（301/401/432 或 passport 跳转、code 21332/21331 → expired）；X 用 XGraphQL 拉列表最新 1 条（data.list 非 dict → structure）。",
+          "sideEffects": "网络 I/O；绝不导入帖子。",
+          "file": "app/connections.py",
+          "line": 86
+        },
+        {
+          "name": "record",
+          "signature": "(source, credential, state, error='', updated=False) -> None",
+          "role": "状态落 meta（cookie_/x_cookie_ 前缀 + _state/_error/_fingerprint/_checked_at）；写前比对指纹防迟到覆盖。",
+          "sideEffects": "写 meta；不回显凭据原文。",
+          "file": "app/connections.py",
+          "line": 56
+        },
+        {
+          "name": "normalize_x",
+          "signature": "(value, ct0='') -> (token, ct0)",
+          "role": "X 凭据规范化（auth_token + ct0 成对）。",
+          "sideEffects": "纯函数。",
+          "file": "app/connections.py",
+          "line": 36
+        }
+      ],
+      "l2_callTree": "├── probe(source, credential, ct0)\n│   ├── weibo → weibo.all_groups 真调接口\n│   │   ├── CookieExpired → expired · WeiboError/HTTPError → error\n│   ├── x → XGraphQL._call(list_latest, count=1)\n│   │   ├── data.list 非 dict → StructureError\n│   │   └── 无启用 X 分组 → 直接 saved「添加列表后可校验」\n│   └── XApiError.kind == auth → expired，其余 → error\n├── record(source, credential, state)  [指纹比对防覆盖]\n└── status(source)  [五态 ok/saved/expired/error/unset，白名单外回退]",
+      "l3_tables": [
+        {
+          "title": "表 · 连接状态五态（前端弹窗文案映射）",
+          "headers": [
+            "state",
+            "含义",
+            "前端处置"
+          ],
+          "rows": [
+            [
+              "ok",
+              "探活通过",
+              "显示最近检查时间，可单独重新检查"
+            ],
+            [
+              "saved",
+              "已保存但未验证 / 暂无可验证目标",
+              "「已保存 · 待验证」"
+            ],
+            [
+              "expired",
+              "登录失效",
+              "提醒重发凭据"
+            ],
+            [
+              "error",
+              "网络或未知错误",
+              "提示检查网络后重试"
+            ],
+            [
+              "unset",
+              "从未设置",
+              "引导前往 Cookie 入口"
+            ]
+          ]
+        }
+      ],
+      "tags": "凭据 探活 状态 auth_token ct0 指纹"
+    },
+    {
+      "id": "requests",
+      "layer": "fe-comm",
+      "name": "requests.js",
+      "file": "app/static/requests.js",
+      "summary": "HTTP 基座：api() 统一封装 fetch（JSON、30 秒超时、AbortController 级联、错误文案归一化）与 serialQueue 串行化工厂（写操作严格按入队顺序执行且前序失败不断链）。",
+      "upstream": [
+        "appjs",
+        "post_actions"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/requests.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：串行队列取消「并发写」的能力以换取顺序确定性",
+          "constraint": "高频分拣时同一帖子的写请求天然乱序返回（撤销可能先于标记到达服务端）。",
+          "rejected": "依赖 HTTP 层并发 + 前端版本号全量对账，逻辑分散在每处调用且难以穷尽竞态组合。",
+          "decision": "serialQueue 以 tail.catch(()=>{}).then(action) 单尾链把全部写请求 FIFO 化——服务端收包顺序严格等于操作顺序；代价是无取消/去重能力，语义由调用方（enqueueMutation）保证。错误归一化只接受 string 型 detail，避免 FastAPI 校验错误数组显示成 [object Object]。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "api",
+          "signature": "async (path, method='GET', body?, options?) -> data",
+          "role": "统一 fetch 封装：JSON 编解码、30 秒超时（外层 AbortController）、外部 signal 级联取消、错误消息中文化（string detail → data.msg → HTTP {status}）。",
+          "sideEffects": "网络 I/O；失败/超时抛 Error（message 可直显）。",
+          "file": "app/static/requests.js",
+          "line": 1
+        },
+        {
+          "name": "serialQueue",
+          "signature": "() -> (action: () => Promise) => Promise",
+          "role": "串行化工厂：返回把任意 async action 挂到单尾链的入队函数。",
+          "sideEffects": "无 I/O；前序失败不断链。",
+          "file": "app/static/requests.js",
+          "line": 29
+        }
+      ],
+      "l2_callTree": "├── api(path, method, body, options)\n│   ├── 外层 AbortController + setTimeout(30s) 超时\n│   ├── options.signal 级联（外部 cancel 以外部 reason abort 内部）\n│   ├── res.json() 失败静默降级为 {}\n│   └── detail 仅接受 string → 否则 data.msg → HTTP {status}\n└── serialQueue()\n    └── 入队 = tail.catch(()=>{}).then(action)  [单尾链：FIFO + 失败隔离]",
+      "l3_tables": [],
+      "tags": "http fetch 超时 串行队列 基座"
+    },
+    {
+      "id": "view_state",
+      "layer": "fe-comm",
+      "name": "view-state.js",
+      "file": "app/static/view-state.js",
+      "summary": "视图规则纯函数集：与服务端日界、搜索口径和稳定排序逐一对齐的客户端二次过滤与排序——matchesView/comparePosts/keepBadge/avatarSrc 四个无副作用函数。",
+      "upstream": [
+        "appjs",
+        "post_actions"
+      ],
+      "downstream": [],
+      "readsState": [
+        "S.sort",
+        "S.searchText",
+        "S.source"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/view-state.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：客户端兜底过滤与服务端口径逐字对齐",
+          "constraint": "服务端 post_filter 与前端缓存重放各过滤一次，两端口径必须完全一致否则出现「服务端给了、前端丢弃」的静默丢卡。",
+          "rejected": "前端凭感觉重写一份过滤规则，迭代中必然与 SQL 口径漂移（历史上评论命中、来源前缀都漂移过并已修复）。",
+          "decision": "matchesView 逐条件对齐 post_filter（favorites 跨三态、来源空串归微博、author_key 直接相等、range 硬编码东八区、搜索正文与 comment_match 同权），并以契约测试钉住。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "comparePosts",
+          "signature": "(a, b, sort='') -> -1|0|1",
+          "role": "稳定排序：keep_count 序时三键（次数降序 → created_at 降序 → sid 字典序），与服务端 keyset 一致。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/view-state.js",
+          "line": 20
+        },
+        {
+          "name": "matchesView",
+          "signature": "(p, s, now=Date.now()) -> bool",
+          "role": "客户端二次过滤：status/source/group/author/type/favOnly/searchText（正文与 comment_match 同权）/range（东八区）。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/view-state.js",
+          "line": 40
+        },
+        {
+          "name": "keepBadge",
+          "signature": "(count) -> {text, tier, title}",
+          "role": "点赞次数徽章四档：×2 灰 → ×3-4 主题色 → ×5-9 金 → ×10+ 反白。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/view-state.js",
+          "line": 30
+        },
+        {
+          "name": "avatarSrc",
+          "signature": "(url) -> url",
+          "role": "入库相对路径 avatars/… 映射为 /media/…；其余原样。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/view-state.js",
+          "line": 35
+        }
+      ],
+      "l2_callTree": "├── comparePosts(a, b, sort)\n│   └── keep_count 降序（缺省当 1）→ created_at 降序 → sid 字典序  [三键与服务端一致]\n└── matchesView(p, s, now)\n    ├── status：favorites → p.favorite；否则等于 p.status\n    ├── source：'x' 特判，缺省 weibo\n    ├── group：list_id 相等 或 p.groups 包含\n    ├── author：payload uid 已带来源前缀（author_key），直接相等\n    ├── searchText：正文与 comment_match 同权命中\n    └── range：today/yesterday/7d/30d（now+8h 取 ISO 日界，硬编码东八区）",
+      "l3_tables": [],
+      "tags": "纯函数 视图匹配 排序 徽章 东八区"
+    },
+    {
+      "id": "content_state",
+      "layer": "fe-comm",
+      "name": "content-state.js",
+      "file": "app/static/content-state.js",
+      "summary": "状态文案映射器：把采集进度、画质档位与空态决策树翻译成用户可读文案——核心原则是「不把处理结束当作全部齐全」，failed/missing 一律如实呈现。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [],
+      "readsState": [
+        "S.st"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/content-state.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：空态即引导（决策树而非提示语）",
+          "constraint": "空 feed 有六种成因（筛选过严、无保留、Cookie 未连/过期、新增未筛完……），笼统的「暂无内容」让用户无从下手。",
+          "rejected": "在 app.js 里内联 if-else 生成提示，文案与跳转动作会和状态语义耦合在主链路里。",
+          "decision": "emptyState(s) 按决策树返回 {text, action?}（action ∈ connection/groups/crawl 供一键直达对应设置弹窗），文案与跳转集中在本模块维护。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "downloadLabel",
+          "signature": "(pic) -> {text, title}",
+          "role": "画质三档下载文案；mid/unknown 的 title 明示「原图仍待补抓/未核验」。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/content-state.js",
+          "line": 2
+        },
+        {
+          "name": "captureGroupText",
+          "signature": "(g|result) -> string",
+          "role": "采集进度句与 outcome 标题映射（完成/部分完成/中断…）。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/content-state.js",
+          "line": 8
+        },
+        {
+          "name": "emptyState",
+          "signature": "(s) -> {text, action?}",
+          "role": "空态决策树：先判筛选过严，再按 status / st.counts / cookie 状态给出带 action 的引导。",
+          "sideEffects": "纯函数（依赖 S.st 缓存形状）。",
+          "file": "app/static/content-state.js",
+          "line": 29
+        }
+      ],
+      "l2_callTree": "├── downloadLabel(pic)：full / mid / unknown 三档文案 + title 明示补抓状态\n├── captureGroupText(g)：pending/接收/处理/新增/跳过/未齐/待处理/中断/coverage 逐段拼接\n├── captureTitle(result)：outcome → 标题映射，兜底看 error\n└── emptyState(s)\n    ├── 有筛选条件 → 「调整筛选」建议\n    ├── status 分支（favorites/kept/discarded）\n    ├── st.counts 新增已筛完 → 引导快筛\n    └── cookie unset/expired → 引导连微博（admin 与非 admin 文案不同 + action 直达）",
+      "l3_tables": [],
+      "tags": "文案 空态 画质 采集进度"
+    },
+    {
+      "id": "notifications",
+      "layer": "fe-comm",
+      "name": "notifications.js",
+      "file": "app/static/notifications.js",
+      "summary": "单例 toast 渲染器：只管 #toast 一个容器——新 toast 顶掉旧的，带 action（撤销型）停 6000ms、纯提示停 2800ms，persistent 用于不可吞掉的错误。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/notifications.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：单例互顶 vs 队列堆叠",
+          "constraint": "撤销类 toast 必须稳定驻留 6 秒供反悔；但后台任务完成提示会随时出现。",
+          "rejected": "多 toast 堆叠会遮挡卡片并使撤销按钮的视觉焦点漂移。",
+          "decision": "接受「新顶旧」的单例模型——撤销的 6 秒窗口与后台提示同时出现时，后者会覆盖前者（已知取舍，persistent 参数留给不可吞错误）。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "toast",
+          "signature": "(msg, action?: {label, fn}, options?: {persistent?}) -> void",
+          "role": "渲染 toast：action 按钮点击先收起再执行（撤销型）；带 action 停 6000ms、纯提示 2800ms。",
+          "sideEffects": "改 DOM；action.fn 由调用方定义（可能含网络请求）。",
+          "file": "app/static/notifications.js",
+          "line": 67
+        }
+      ],
+      "l2_callTree": "└── toast(msg, action, options)\n    ├── clearTimeout(toastTimer)（单例顶替）\n    ├── #toast 重写内容（action → 追加按钮，onclick 先收起再 fn）\n    └── persistent ? 不定时 : setTimeout(hide, action ? 6000 : 2800)",
+      "l3_tables": [],
+      "tags": "toast 提示 撤销"
+    },
+    {
+      "id": "appjs",
+      "layer": "fe-hub",
+      "name": "app.js",
+      "file": "app/static/app.js",
+      "summary": "前端调度中枢（Hub）与组合根：持有全局状态树 S，按依赖注入组装 16 个无全局副作用的工厂模块，并实现 load 分页（双守卫防竞态）、详情双缓冲传送带、全局键盘路由责任链与双布局引擎切换。",
+      "upstream": [],
+      "downstream": [
+        "requests",
+        "view_state",
+        "content_state",
+        "notifications",
+        "post_actions",
+        "timeline",
+        "authorview",
+        "quad",
+        "review",
+        "slideshow",
+        "lightbox",
+        "notes",
+        "fab",
+        "settings",
+        "devices",
+        "maintenance_jobs",
+        "batch_download",
+        "server"
+      ],
+      "readsState": [
+        "S.posts",
+        "S.decisions",
+        "S.images",
+        "S.st",
+        "S.author",
+        "S.selectMode",
+        "S.cursor",
+        "S.requestVersion"
+      ],
+      "writesState": [
+        "S.posts",
+        "S.images",
+        "S.st",
+        "S.author",
+        "S.selectMode",
+        "S.cursor",
+        "S.requestVersion"
+      ],
+      "files": [
+        {
+          "path": "app/static/app.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：单例状态树 + 依赖注入替代框架响应式",
+          "constraint": "无构建、无框架的约束下需要模块化：16 个工厂模块若各自 import 全局单例，会形成隐式耦合且无法单测。",
+          "rejected": "引入框架或打包器，违背「双击即部署」的项目约束；让子模块互相 import，依赖图失控。",
+          "decision": "app.js 持有唯一的可变状态树 S，所有子模块以 createXxx({S, $, api, toast, …}) 形态接收依赖——模块零相互 import，测试传假依赖即可跑；代价是 app.js 成为唯一组装点（约 2054 行）。"
+        },
+        {
+          "title": "权衡二：load 分页用「版本号 + 本地账本对账」抵御三重竞态",
+          "constraint": "筛选快速切换、写请求在途、无限滚动预载三者叠加，服务端返回的行可能早已过期。",
+          "rejected": "只靠 AbortController 取消旧请求：取消不保证成功，且在途写请求的「服务端旧行」仍会覆盖本地乐观状态（卡片诈尸）。",
+          "decision": "三重防御：S.requestVersion 自增使过期响应整包丢弃；AbortController 中断在途请求；known 去重后用 S.decisions 账本对账——仅当本地决策已结算（_settledAt < 请求发起时刻）才采用服务端行，否则本地最新状态覆盖。"
+        },
+        {
+          "title": "权衡三：键盘与手势统一走「责任链」而非散点监听",
+          "constraint": "九种可聚焦界面（模态/大图/详情/放映/回看/四格/多选/输入态/主流）对同一物理按键有重叠诉求。",
+          "rejected": "每个界面各自挂 document keydown，监听器之间靠运气决定触发顺序。",
+          "decision": "唯一顶层 keydown 责任链按模态优先级逐层分发（模态 → Escape 剥离栈 → 输入守卫 → 连发白名单 → 各消费引擎 → 主流键），命中即 return——优先级是显式代码顺序，可测试可推演。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "load",
+          "signature": "async (reset: bool) -> void",
+          "role": "分页加载：AbortController + S.requestVersion 双守卫；known 去重；S.decisions 对账（结算晚于请求发起则信本地）；编年态卡片经守卫流入日卷。",
+          "sideEffects": "网络 I/O；重写 S.posts/S.images、重渲 feed DOM。",
+          "file": "app/static/app.js",
+          "line": 254
+        },
+        {
+          "name": "renderStackAt",
+          "signature": "(frontPost) -> void",
+          "role": "详情双缓冲渲染：前卡立即渲染，nextInView 渲染进背卡并 eager 预载——「看前卡的时间就是背卡的加载窗口」。",
+          "sideEffects": "重写 .is-front/.is-back 两张常驻卡 DOM。",
+          "file": "app/static/app.js",
+          "line": 1176
+        },
+        {
+          "name": "detailAdvance",
+          "signature": "(status: 'kept'|'discarded') -> void",
+          "role": "裁决并前进：定 upNext → mark 乐观标记 → 克隆前卡播飞出动画 → 角色互换（背卡即刻就位）→ 滚动复位 → 补队尾 → 异步服务端校正；尾批时自动续页。",
+          "sideEffects": "DOM 大改 + 网络（经串行队列）；会话计数与 triage 胶囊更新。",
+          "file": "app/static/app.js",
+          "line": 1656
+        },
+        {
+          "name": "appendToShortestCol",
+          "signature": "(card, p) -> void",
+          "role": "收卡总口：编年态转发 timeline.appendCard 按日归桶，墙态选 scrollHeight 最短列——三处编年守卫之一。",
+          "sideEffects": "改 feed DOM。",
+          "file": "app/static/app.js",
+          "line": 209
+        }
+      ],
+      "l2_callTree": "├── 组装（依赖注入，唯一接线点）\n│   ├── createMaintenanceJobs({api, toast, onJob→S.st.jobs, onComplete})\n│   ├── createPostActions({S, feed, $, api, toast, insertCard, rebuildImages, …})\n│   ├── createLightbox({S, $, animatedHide, cancelHide, resetZoom, crossPosts})\n│   ├── createNotes / createFab / initSettings / initDevices / initBatch / createAuthorView\n│   ├── createTimeline({…}) → bindObserver + mountRuler + bindKeys（V 键）\n│   ├── createQuad / createReview / createSlideshow\n│   └── startQuickTriage：桌面分流 quad.open() 四格会话（窄屏退详情单卡流）\n├── load(reset)\n│   ├── reset：abort 旧请求 · 清 cursor/posts/feed · ++S.requestVersion\n│   ├── GET /api/posts（limit 50 · keyset）→ 版本比对 → known 去重\n│   ├── S.decisions 对账：_settledAt < started 才信服务端，否则本地覆盖\n│   ├── matchesView 兜底过滤 → renderCard → appendToShortestCol（编年守卫）\n│   └── rebuildImages：重建 S.images 扁平池（大图/详情/四格共用）\n├── 详情传送带（双缓冲）\n│   ├── renderStackAt：前卡即时 + 背卡 eager 预载\n│   ├── detailAdvance：定 upNext → mark → flyOutGhost → 角色互换 → 复位 → 补尾 → 异步校正\n│   └── review.active() 早退分支：动作分发交由 review 的组内变体接管\n├── keydown 责任链（14 层优先级，详见「跨模块工程机制」签）\n└── 布局守卫三处：appendToShortestCol / insertCardAt / ensureFeedCols（编年态让位 timeline）",
+      "l3_tables": [
+        {
+          "title": "表 1 · 全局状态树 S 的核心字段（字面量定义 app.js:26-42，运行期另有动态挂载）",
+          "headers": [
+            "字段",
+            "类型",
+            "职责",
+            "主要写入口"
+          ],
+          "rows": [
+            [
+              "S.posts",
+              "Array<Post>",
+              "当前视图已加载队列（created_at 降序，与 feed 同序）——墙/详情/四格/编年共同数据源",
+              "load 清空与 push；post-actions.syncPost 排序插回"
+            ],
+            [
+              "S.decisions",
+              "Map<sid, Post>",
+              "乐观写期间的本地产物账本；分页对账依据",
+              "post-actions.beginWrite 登记"
+            ],
+            [
+              "S.images",
+              "Array<{p, pc, url}>",
+              "扁平图片浏览池（大图/详情/四格共用）",
+              "rebuildImages；review 开关整组换血"
+            ],
+            [
+              "S.st",
+              "Object",
+              "/api/status 响应缓存（连接、分组、计数、任务）",
+              "loadStatus；maintenance-jobs 就地改 S.st.jobs"
+            ],
+            [
+              "S.author",
+              "'all' | author_key",
+              "博主筛选/博主视图钉住；头部条显隐单一事实源",
+              "applyAuthorFilter；authorView.open/close"
+            ],
+            [
+              "S.selectMode / S.selected",
+              "bool · Set<sid>",
+              "多选模式与勾选集",
+              "setSelectMode / togglePick"
+            ],
+            [
+              "S.cursor / S.hasMore",
+              "string | null · bool",
+              "keyset 书签与续页探针",
+              "load 响应回填"
+            ],
+            [
+              "S.requestVersion",
+              "number",
+              "load 竞态版本号（过期响应整包丢弃）",
+              "load reset 时自增"
+            ],
+            [
+              "S.sort / S.searchText / S.source",
+              "枚举 / string / 枚举",
+              "排序、搜索词、来源——load 查询串与 matchesView 共用",
+              "视图面板 / applySearch / f-source"
+            ],
+            [
+              "S.readOnly / S.isAdmin",
+              "bool",
+              "由 html[data-device-role] 推出的能力标记",
+              "初始化一次"
+            ]
+          ]
+        },
+        {
+          "title": "表 2 · 键盘责任链优先级速览（完整 14 层见「跨模块工程机制」签）",
+          "headers": [
+            "层级",
+            "条件",
+            "去向"
+          ],
+          "rows": [
+            [
+              "1-2",
+              "组合键 / 模态弹窗",
+              "归浏览器；Escape 关闭模态、Tab 焦点圈"
+            ],
+            [
+              "3-6",
+              "输入态 / 连发 / Escape 栈",
+              "Escape 按 lightbox→detail→slideshow→notes→quad→多选 剥离；输入态此后不消费"
+            ],
+            [
+              "7-10",
+              "Shift+Q / 回看 / 放映 / 四格",
+              "startQuickTriage；转发 review.key / slideshow.key / quad.key"
+            ],
+            [
+              "11-14",
+              "数字 1-4 / 大图 / 详情 / 主流空格",
+              "switchStatusView；lbNav；detailMarkAdvance/detailNav；currentCard 开大图"
+            ]
+          ]
+        }
+      ],
+      "tags": "组合根 依赖注入 状态树 键盘路由 双缓冲 分页竞态"
+    },
+    {
+      "id": "post_actions",
+      "layer": "fe-mutation",
+      "name": "post-actions.js",
+      "file": "app/static/post-actions.js",
+      "summary": "前端帖子状态变更引擎（Mutation Controller）：集中接管保留/淘汰标记（mark）、6 秒限时撤销（undoLastMark）、保留计数加减（reaffirm）与收藏切换（toggleFavorite），并对外暴露共享串行写通道 enqueueMutation。",
+      "upstream": [
+        "appjs",
+        "quad",
+        "review",
+        "slideshow"
+      ],
+      "downstream": [
+        "requests",
+        "view_state",
+        "server"
+      ],
+      "readsState": [
+        "S.posts",
+        "S.decisions",
+        "S.readOnly"
+      ],
+      "writesState": [
+        "S.posts",
+        "S.decisions"
+      ],
+      "files": [
+        {
+          "path": "app/static/post-actions.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡一：零延迟乐观更新与错误自动回滚",
+          "constraint": "分拣模式下用户高频连续按键（F/D 交替），等待网络往返再更新界面会产生严重卡顿感。",
+          "rejected": "等服务器确认后再改界面：每张卡的裁决节奏被网络 RTT 拖慢，高频分拣不可用。",
+          "decision": "所有写操作先在同步帧内修改内存对象 p 并调 syncPost(p) 重排/移除 DOM，随后才把请求推入串行队列；失败时比对操作令牌（p._operation 或 _reaffirmRevision）把状态与 DOM 原位回滚——卡顿感归零，正确性由令牌与回滚兜底。"
+        },
+        {
+          "title": "权衡二：串行写队列消除「撤销先于标记到达」的逆序事故",
+          "constraint": "「标记淘汰 → 立即按 Z 撤销」的组合下，两个请求并发发出时撤销可能先到服务端，恢复出一个从未存在的状态。",
+          "rejected": "仅在撤销处特判等待，其他写组合（收藏、±1）仍有同类竞态。",
+          "decision": "复用同一个 serialQueue 闭包实例（enqueueMutation 对外共享），undoLastMark 显式 await op.request 等正向请求返回服务端快照后再构造 restore——全部写操作线性化（Linearizability），从根源消除逆序。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "mark",
+          "signature": "(sid, status: 'kept'|'discarded'|'pending', opts?: {toggle?, fromLB?}) -> {p, gone, settled} | null",
+          "role": "乐观变更分拣状态并启动 6 秒撤销窗；返回 null 表示帖已被其他操作摘走（连按竞速守卫）。",
+          "sideEffects": "改 p.status/S.decisions；增删 #feed 卡片；Toast 撤销按钮；POST /status 入串行队列；failed_count>0 提示启动归档维护。",
+          "file": "app/static/post-actions.js",
+          "line": 68
+        },
+        {
+          "name": "undoLastMark",
+          "signature": "(op: Operation) -> Promise<Post | null>",
+          "role": "撤销 6 秒内最近一次 mark：先占队列位等正向请求完成，再发 /restore（previous+expected 乐观锁）。",
+          "sideEffects": "POST /restore（409 时提示刷新）；失败兜底 GET 单帖取服务端权威状态；恢复 DOM 与详情视图。",
+          "file": "app/static/post-actions.js",
+          "line": 112
+        },
+        {
+          "name": "reaffirm",
+          "signature": "(sid, delta: 1|-1) -> Promise<Post | null>",
+          "role": "点赞次数 ±1：仅 kept 允许；delta<0 且 keep_count≤1 时提示走长按删除。",
+          "sideEffects": "递增 p._reaffirmRevision；乐观改 keep_count 并重排；POST/DELETE /reaffirm；失败按修订号回滚。",
+          "file": "app/static/post-actions.js",
+          "line": 142
+        },
+        {
+          "name": "toggleFavorite",
+          "signature": "(sid) -> Promise<void>",
+          "role": "切换收藏星标（独立标记，不改分拣状态）。",
+          "sideEffects": "递增 p._favoriteRevision；乐观更新并同步刷新灯箱与详情星标。",
+          "file": "app/static/post-actions.js",
+          "line": 176
+        },
+        {
+          "name": "enqueue",
+          "signature": "(action: () => Promise) -> Promise",
+          "role": "对外共享底层串行写通道——review/slideshow/app.js 批量操作全部经由它保证线性化。",
+          "sideEffects": "按入队顺序串行执行网络请求。",
+          "file": "app/static/post-actions.js",
+          "line": 7
+        }
+      ],
+      "l2_callTree": "├── mark(sid, status, opts)\n│   ├── beginWrite(p)            [Private: _pendingWrites++ · _settledAt=null · 登记 S.decisions]\n│   ├── syncPost(p)              [Private: matchesView 判去留 → comparePosts 定位插回 → rebuildImages]\n│   ├── lastDrop = op + undoTimer(6000)   [到点清 lastDrop 禁用撤销钮]\n│   ├── enqueue(POST /status)     [入队即记 op.request——撤销占位用]\n│   │   ├── .then：p._operation === op 才合并 r.decision + 二次 syncPost + queueStatusRefresh\n│   │   ├── .catch：令牌全等才回滚 previous · 清 lastDrop\n│   │   └── .finally：finishWrite(p)  [_pendingWrites--；归零记 _settledAt=now]\n│   └── 返回 null 的情况：readOnly / 连按竞速被摘走\n└── undoLastMark(op)\n    ├── 校验 lastDrop === op 且 Date.now() ≤ op.expiresAt（6 秒窗）\n    ├── beginWrite(op.p) 并替换令牌 op.p._operation = marker\n    └── enqueue(async () => { await op.request; return POST /restore {previous, expected} })\n        ├── 成功：合并 r.decision → syncPost → refreshDetail\n        ├── 失败兜底：GET /api/posts/{sid} 拉服务端权威状态覆盖本地\n        └── .finally：finishWrite(op.p)",
+      "l3_tables": [
+        {
+          "title": "表 · 并发冲突场景与防御判定矩阵",
+          "headers": [
+            "并发冲突场景",
+            "核心状态字段 / 版本令牌",
+            "防御判定逻辑",
+            "解决的具体事故"
+          ],
+          "rows": [
+            [
+              "分页拉取与在途写重叠",
+              "S.decisions · p._pendingWrites · p._settledAt",
+              "beginWrite 登记 S.decisions 并清 _settledAt；finishWrite 记结算时刻；load 对账仅当 _settledAt < 请求发起时刻才清缓存，否则本地状态覆盖服务端旧行",
+              "自动翻页时服务端未落盘的旧状态把刚淘汰的卡重新渲染（卡片诈尸）"
+            ],
+            [
+              "同一帖高频连续切换",
+              "p._operation（对象引用令牌）",
+              "每次操作生成全新令牌；异步返回仅当令牌全等才写回或回滚",
+              "过期响应覆盖用户最新操作"
+            ],
+            [
+              "连续狂按 ± / 连点收藏",
+              "p._reaffirmRevision · p._favoriteRevision",
+              "修订号校验未变才赋值；成功以服务端权威值覆盖",
+              "中间旧响应造成计数跳变回退"
+            ],
+            [
+              "标记后立即撤销",
+              "serialQueue + await op.request",
+              "撤销先入队占位，队内等正向请求完成再发 restore",
+              "撤销先于标记到达服务端的逆序事故"
+            ]
+          ]
+        }
+      ],
+      "tags": "乐观更新 串行队列 撤销 令牌 竞态 线性化"
+    },
+    {
+      "id": "maintenance_jobs",
+      "layer": "fe-mutation",
+      "name": "maintenance-jobs.js",
+      "file": "app/static/maintenance-jobs.js",
+      "summary": "后台维护任务观察器：启动补抓/归档检查任务后每 2 秒轮询 /api/jobs/{kind}，观察循环按 kind 单飞且可自愈（服务端换任务 id 时让位重挂），刷新页面后可恢复观察。",
+      "upstream": [
+        "appjs",
+        "post_actions"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [
+        "S.st"
+      ],
+      "writesState": [
+        "S.st"
+      ],
+      "files": [
+        {
+          "path": "app/static/maintenance-jobs.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：观察循环自愈而非一次性轮询",
+          "constraint": "任务以分钟计，页面刷新与服务端重启都会打断观察；同 kind 被快速 start 两次时旧循环必须让位。",
+          "rejected": "一次性 setTimeout 链在刷新后彻底丢失进度；无让位机制会出现两个循环互相覆盖 toast。",
+          "decision": "watching Map 以 kind→job.id 保证每 kind 单观察循环；循环内发现服务端 job id 已变则递归重挂新任务；轮询失败 ≥3 次停盯并给 persistent toast（「刷新核对」）。onComplete 失败也有专属提示「结果已保存，页面刷新失败」。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createMaintenanceJobs",
+          "signature": "({api, toast, onJob, onComplete, pause?}) -> {start, observe}",
+          "role": "工厂：start(kind) POST retry 后进入观察；observe(job) 幂等挂观察循环（2 秒间隔）。",
+          "sideEffects": "网络轮询 + toast；onJob 就地改 S.st.jobs 并 renderBanner。",
+          "file": "app/static/maintenance-jobs.js",
+          "line": 14
+        },
+        {
+          "name": "maintenanceResult",
+          "signature": "(kind, result) -> string",
+          "role": "任务结果文案：media 报补齐/剩余；archive 分「当前归档完整 + 历史缺失/校验失败/未校验」三段拼接——不把完成当齐全。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/maintenance-jobs.js",
+          "line": 2
+        }
+      ],
+      "l2_callTree": "├── start(kind)：POST /api/{kind}/retry → onJob → toast → observe\n└── observe(job)\n    ├── 幂等守卫：无 id / 非活跃(queued|running) / watching 同 id → return\n    └── watch 循环（2s）：GET /api/jobs/{kind}\n        ├── job id 变了 → 删记录 → onJob → observe(新 job)（自愈让位）\n        ├── 失败 ≥3 次 → persistent toast「刷新核对」停盯\n        └── 终态 → maintenanceResult 文案 → onComplete(kind)（media 完成还会 load(true)）",
+      "l3_tables": [],
+      "tags": "维护任务 轮询 自愈 补抓 归档"
+    },
+    {
+      "id": "batch_download",
+      "layer": "fe-mutation",
+      "name": "batch-download.js",
+      "file": "app/static/batch-download.js",
+      "summary": "批量下载配置浮窗：范围（勾选/收藏/保留/全部）与细分（全部/按博主/按日期）的预览统计与打包触发；预览与 ZIP 严格共用同一组查询参数。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [
+        "S.selected",
+        "S.status"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/batch-download.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：自增版本号抵御勾选连点的乱序响应",
+          "constraint": "用户快速切换范围/细分勾选时，多个 /api/download/options 预览请求乱序返回，旧响应会覆盖新 UI。",
+          "rejected": "对每个请求挂 AbortController，管理成本高且不能防「已返回但已过期」。",
+          "decision": "B.version 每次 refresh 自增；响应返回时版本不符直接丢弃——与 load 的 requestVersion 同款模式，三行代码消除整类竞态。ZIP 走隐藏 iframe（浏览器接管下载），主页面筛选态不动。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "openBatch",
+          "signature": "() -> void",
+          "role": "打开浮窗：scope 按优先级（selected > favorites > kept）快照 B.select，重置细分与勾选桶后刷新预览。",
+          "sideEffects": "网络 I/O + DOM。",
+          "file": "app/static/batch-download.js",
+          "line": 170
+        }
+      ],
+      "l2_callTree": "├── openBatch()\n│   ├── scope = selected > favorites > kept · B.select 快照 · B.checked 清空\n│   └── 开浮窗 → refresh(true)\n└── refresh()\n    ├── ++B.version → GET /api/download/options?params\n    ├── 响应版本不符 → 丢弃（勾选连点的乱序防护）\n    ├── over_limit（500 帖）→ 禁用打包按钮 + 提示按博主/日期拆批\n    ├── missing 计数 → 提示先补抓；quality mid/unknown 分别提示\n    └── #b-go → 隐藏 iframe.src = /api/download/zip?params（浏览器接管下载）",
+      "l3_tables": [],
+      "tags": "批量下载 预览 版本号 iframe"
+    },
+    {
+      "id": "timeline",
+      "layer": "fe-view",
+      "name": "timeline.js",
+      "file": "app/static/timeline.js",
+      "summary": "编年布局引擎：右缘时间密度尺（#truler）+ 按日成卷的卡片流。复用墙的全部收卡口与标记链路，仅接管「按日分组」——MutationObserver 监听 feed 结构变化驱动尺子与日卷自愈。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [
+        "S.posts",
+        "S.author",
+        "S.sort",
+        "S.searchText",
+        "S.source",
+        "S.cursor"
+      ],
+      "writesState": [
+        "S.sort"
+      ],
+      "files": [
+        {
+          "path": "app/static/timeline.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：编年作为「收卡口插件」而非独立页面",
+          "constraint": "编年与瀑布流必须共享同一条数据与标记链路，否则标记、大图、详情行为会分叉。",
+          "rejected": "另起一套编年页面与取数链路，两套渲染逐步发散，维护成本翻倍。",
+          "decision": "编年不发起独立取数：墙的 load 在编年态经三处守卫（appendToShortestCol / insertCardAt / ensureFeedCols）流入日卷归桶；自己的增量数据只有 outline 聚合（与 /api/posts 同筛选口径）。MutationObserver 监听 feed 结构变化（120ms 防抖）自愈空日卷、刷新 outline 与滚动括号。"
+        },
+        {
+          "title": "权衡：尺子几何用「开方钳位」压缩动态范围",
+          "constraint": "单日帖数从 1 到数百不等，线性高度会让热门日撑爆尺子、冷门日不可点。",
+          "rejected": "线性映射下动态范围失控；对数映射在低密度区区分度不足。",
+          "decision": "日刻度高 = min(16, 2 + round(sqrt(total)×2))——基高 2px、开方增长、16px 封顶；宽 = max(20, total/maxTotal×100)；kept 占比蓝段、收藏日金点；月份跨界插 14px 标签行。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createTimeline",
+          "signature": "(deps) -> {appendCard, insertCard, active, refreshOutline, setLayout, …}",
+          "role": "编年控制器：日卷 section 管理、observer 绑定、尺子挂载、V 键与面板切换、gotoDay 穿越交互。",
+          "sideEffects": "改 feed DOM（日卷 section）+ 挂 body #truler + 网络（outline）。",
+          "file": "app/static/timeline.js",
+          "line": 55
+        },
+        {
+          "name": "planRows",
+          "signature": "(days: outline 降序) -> 尺子行几何",
+          "role": "密度尺几何：开方钳位高度、峰值归一宽度、kept 占比与 fav 金点、月份标签行。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/timeline.js",
+          "line": 30
+        },
+        {
+          "name": "setLayout",
+          "signature": "(on: bool) -> void",
+          "role": "布局切换：canSwitch 闸门（浮层全关才许切）→ 编年强制清 S.sort → applyLayoutDom（data-layout + --tl-top）→ refreshOutline + load(true) 重建。",
+          "sideEffects": "改根元素属性与 feed 类；持久化偏好 pwSetPref('layout')。",
+          "file": "app/static/timeline.js",
+          "line": 356
+        },
+        {
+          "name": "gotoDay",
+          "signature": "(day) -> void",
+          "role": "穿越到目标日：未装载时循环 load(false)+settle 至多 60 页，再平滑滚动到日卷头（扣顶栏实高）。",
+          "sideEffects": "网络 I/O（分页装载）+ 滚动。",
+          "file": "app/static/timeline.js",
+          "line": 265
+        }
+      ],
+      "l2_callTree": "├── init：记忆布局「静默应用」（applyLayoutDom + refreshOutline，不触发 load——首屏 load 自然流入收卡口）\n├── bindObserver：#feed childList+subtree\n│   └── 回调：.card/.tday 被移除 → needOutline → 120ms 防抖\n│       ├── 清理空日卷 section（同步 sections Map）\n│       ├── needOutline → refreshOutline（GET /api/timeline/outline + outlineSeq 竞态守卫）\n│       └── updateCursor：可见日括号重算（视口落间隙贴最近段；scroll/resize 走 rAF）\n├── appendCard(card, p) / insertCard(card, ref)：日卷归桶 / 按 S.posts 全序找插入点\n├── mountRuler：body>#truler（track/inner/cursor/bubble）\n│   ├── planRows：日行高 min(16, 2+round(sqrt(total)×2)) · 宽 max(20, 占比×100)\n│   ├── pointer 拖动/点按 → showBubble → endScrub 命中 dayAt → gotoDay\n│   └── renderRuler：消费 planRows 重建 geo/totalH\n└── setLayout(on)：canSwitch 闸 → 清 S.sort → applyLayoutDom → refreshOutline → load(true)",
+      "l3_tables": [
+        {
+          "title": "表 · 编年态的不变量与守卫",
+          "headers": [
+            "不变量",
+            "内容",
+            "违反后果"
+          ],
+          "rows": [
+            [
+              "收卡必经守卫",
+              "新插卡路径必须过 appendToShortestCol / insertCardAt / ensureFeedCols 三处",
+              "漏一处则新卡掉进墙列栈，编年漏卡"
+            ],
+            [
+              "次数序不打时间序",
+              "进编年强制清 S.sort 并隐藏排序行",
+              "混排会破坏按日分组的语义"
+            ],
+            [
+              "日界口径",
+              "dayOf 截 created_at 前 10 位 = 服务端 substr 口径",
+              "依赖「created_at 统一东八区」库级不变量"
+            ],
+            [
+              "切换闸门",
+              "canSwitch：浮层/多选全关才可切",
+              "浮层开着切布局会导致滚动与焦点状态错乱"
+            ]
+          ]
+        }
+      ],
+      "tags": "编年 时间线 密度尺 mutationobserver 日卷 truler"
+    },
+    {
+      "id": "authorview",
+      "layer": "fe-view",
+      "name": "author-view.js",
+      "file": "app/static/author-view.js",
+      "summary": "博主视图：点头像进入该作者的全部内容（跨状态）——头部条显隐的单一事实源是 S.author，进入拍筛选快照、退出整组还原，统计与签名走独立端点分开调用互不拖累。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [
+        "S.author",
+        "S.posts"
+      ],
+      "writesState": [
+        "S.author"
+      ],
+      "files": [
+        {
+          "path": "app/static/author-view.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：面板博主行（状态内）与头像进入（跨状态）收敛到同一视图模型",
+          "constraint": "「在当前保留视图里看某博主的保留」与「跨状态看某博主全部」是两种诉求，但筛选参数只有一份。",
+          "rejected": "为博主视图另建一套筛选状态与渲染链路，两处作者语义会漂移。",
+          "decision": "两者统一收敛到 S.author：enterFilters 钉住作者并归位全部伴随筛选（状态切全部）；头部条显隐单一事实源是 S.author，load(true) 统一 sync；进入时拍筛选快照，✕ 退出整组还原进入前状态。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createAuthorView",
+          "signature": "(deps) -> {open, close, sync, active}",
+          "role": "博主视图控制器：头部条渲染（统计/外链/退出）、编年态 --tl-top 让位粘滞头。",
+          "sideEffects": "DOM + 网络（profile/bio）。",
+          "file": "app/static/author-view.js",
+          "line": 58
+        },
+        {
+          "name": "enterFilters",
+          "signature": "(uid) -> 筛选归位对象",
+          "role": "钉住 S.author + 状态切全部 + sort 归时间序 + source 归 all（post_filter 的 author 分支自带来源限定）。",
+          "sideEffects": "纯函数（返回变更集）。",
+          "file": "app/static/author-view.js",
+          "line": 14
+        }
+      ],
+      "l2_callTree": "├── open(uid)\n│   ├── 拍筛选快照 → enterFilters 归位 → S.author 钉住\n│   ├── fetchProfile：GET /api/authors/{key}/profile（纯本地聚合统计）\n│   ├── fetchBio：GET /api/authors/{uid}/bio（微博签名，失败优雅降级；X 跳过）\n│   └── load(true) 统一 sync（面板博主行与头像进入收敛同一视图模型）\n└── close()\n    └── 还原进入前快照 → S.author='all' → sync\n（?author=… 直开无快照 → 退出回全部视图）",
+      "l3_tables": [],
+      "tags": "博主 作者视图 头像 统计 快照"
+    },
+    {
+      "id": "quad",
+      "layer": "fe-immersive",
+      "name": "quad.js",
+      "file": "app/static/quad.js",
+      "summary": "四格快筛引擎（桌面专属）：2×2 固定卡位、聚焦格描边裁决、裁一补一；纯函数 pickNext/nextFocus 与控制器分离，单 500ms 总 tick 驱动卡面轮换。细看层刻意不复用详情传送带。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "post_actions",
+        "appjs"
+      ],
+      "readsState": [
+        "S.posts",
+        "S.readOnly"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/quad.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：键位全经主链转发 + 轻量细看层",
+          "constraint": "四格是强模态界面，但键盘责任链已有多层消费方；细看单张若复用详情传送带会引入会话状态纠缠。",
+          "rejected": "四格自挂 document keydown 会与主链竞争触发顺序；复用 #detail 双缓冲会把快筛会话状态与详情状态搅在一起。",
+          "decision": "quad 不挂任何监听器，全部键经 app.js 责任链第 10 层转发 quad.key(e)；细看用自有 .q-zoom 轻量层（代码注释明示「不复用详情传送带」），Esc 在内部先退细看再退会话。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createQuad",
+          "signature": "(deps) -> {open, close, key, active}",
+          "role": "四格控制器：开合、键位转发处理、裁决与补位、500ms 总 tick 轮换。",
+          "sideEffects": "DOM（#quad 层）+ 经注入 mark 落账。",
+          "file": "app/static/quad.js",
+          "line": 23
+        },
+        {
+          "name": "pickNext",
+          "signature": "(stash, posts, usedSids) -> Post",
+          "role": "补位选择：stash（缓存的下一张）优先，否则从队列取未用帖。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/quad.js",
+          "line": 9
+        },
+        {
+          "name": "nextFocus",
+          "signature": "(slots, from) -> 下一聚焦格",
+          "role": "←→ 换格的聚焦流转。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/quad.js",
+          "line": 15
+        }
+      ],
+      "l2_callTree": "├── createQuad(deps)\n│   ├── decide：mark(...) 返回 null（连按竞速被摘走）→ 直接跳过不误补位\n│   ├── 轮换 tick（500ms）：zoom 细看态跳过 · 聚焦槽 3s / 非聚焦 1.2s 到点换 img.src\n│   ├── 补位：pickNext（stash 优先）· 预取在途封顶 4（new Image 预载原图）\n│   └── 键位：↑/F/↓/D 裁决 · Z 撤销（原帖回格补位退回队首）· Enter 细看 · 空格大图\n└── 细看（.q-zoom）：轻量层，不复用 #detail 传送带（代码注释明示）",
+      "l3_tables": [
+        {
+          "title": "表 · 卡面三档适配（按比例）",
+          "headers": [
+            "档位",
+            "判定",
+            "呈现",
+            "角标"
+          ],
+          "rows": [
+            [
+              "正常图",
+              "比例适中",
+              "整图呈现",
+              "—"
+            ],
+            [
+              "竖长图",
+              "高宽比超阈值",
+              "顶部锚定预览",
+              "「长图」"
+            ],
+            [
+              "横全景",
+              "宽高比超阈值",
+              "居中裁切",
+              "「全景」"
+            ]
+          ]
+        }
+      ],
+      "tags": "四格 快筛 键盘 轮换 补位"
+    },
+    {
+      "id": "review",
+      "layer": "fe-immersive",
+      "name": "review.js",
+      "file": "app/static/review.js",
+      "summary": "回看会话：从后端选组接口取固定数量的保留帖（组序服务端决定），整组接管详情双缓冲 DOM 做单卡回顾——只有「点赞」没有否定，计次走共享串行队列。",
+      "upstream": [
+        "appjs",
+        "fab"
+      ],
+      "downstream": [
+        "server",
+        "post_actions"
+      ],
+      "readsState": [
+        "S.images",
+        "S.posts"
+      ],
+      "writesState": [
+        "S.images"
+      ],
+      "files": [
+        {
+          "path": "app/static/review.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：选组算法放服务端、接管放依赖注入",
+          "constraint": "回看选组需要访问 keep_count/last_shown_at 等库内统计；而渲染必须与详情传送带完全一致。",
+          "rejected": "前端自选组需要拉全量保留帖统计；复制一套详情渲染会与详情行为分叉。",
+          "decision": "选组在 db.review_candidates（名额 2/5 给次数 ≥2 组按次数降序与出场早优先，其余给 =1 组按 kept_at 早优先，见底余额划回；选中即 record_shown 计出场）；渲染经注入 detailCards/renderDetailInto 等接管 #detail 双缓冲——open 时写 data-mode=review 并把 S.images 整组换成本组图、close 还原。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createReview",
+          "signature": "(deps) -> {open, close, key, active, syncBadge}",
+          "role": "回看会话：open 拉选组 → 接管详情双缓冲逐帖回顾；键位 ↑/F 点赞、←→ 导航、T 批注、D/↓ 显式忽略。",
+          "sideEffects": "网络（review/next、reaffirm、favorite）；接管 #detail 与 S.images。",
+          "file": "app/static/review.js",
+          "line": 10
+        }
+      ],
+      "l2_callTree": "├── open()\n│   ├── GET /api/review/next?limit=N（个性化 10/30/100 默认 30）\n│   ├── #detail[data-mode=review] · S.images 整组换本组图（close 还原）\n│   └── render()：front+back 预渲（renderStackAt 组内变体）+ #review-progress 计数\n├── key(e)：↑/F 点赞（enqueueMutation 乐观 + 失败回滚）· ←→ detailNav · T 批注\n│   └── D/↓ 显式忽略（回看没有否定）\n└── close()：还原图像池 · 摘 data-mode",
+      "l3_tables": [
+        {
+          "title": "表 · 后端选组规则（db.review_candidates）",
+          "headers": [
+            "规则",
+            "内容"
+          ],
+          "rows": [
+            [
+              "候选池",
+              "保留帖且 last_shown_at 超 7 天窗口"
+            ],
+            [
+              "名额分配",
+              "limit×2/5 给次数 ≥2 组（次数降序 → 上次出场早优先）；其余给 =1 组（kept_at 早优先）；一组见底余额划回另一组"
+            ],
+            [
+              "出场记账",
+              "选中即 record_shown：shown_count+1 + last_shown_at 刷新 + review_events 审计（单事务）"
+            ],
+            [
+              "展示顺序",
+              "组序固定「≥2 在前、=1 在后」即服务端返回序，前端不重排"
+            ]
+          ]
+        }
+      ],
+      "tags": "回看 选组 reaffirm 接管 计次"
+    },
+    {
+      "id": "slideshow",
+      "layer": "fe-immersive",
+      "name": "slideshow.js",
+      "file": "app/static/slideshow.js",
+      "summary": "放映引擎：当前筛选结果的全屏自动播放——双层交叉淡入淡出、有效停留 2 秒静默计次、批注字幕毛玻璃衬底、静止 2.5 秒自动隐匿；随机档在帖子级洗牌保证套图连播。",
+      "upstream": [
+        "appjs",
+        "fab"
+      ],
+      "downstream": [
+        "server",
+        "post_actions"
+      ],
+      "readsState": [
+        "S.author",
+        "S.status",
+        "S.searchText"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/slideshow.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：计次以「切入激活层」起表、以「翻走」作废",
+          "constraint": "放映的计次要区分「真的看到了」与「一闪而过」；换片动画是双层交叉淡入，切入瞬间用户可能还没看到图。",
+          "rejected": "换片即计次：快速翻页时每张都算一次，污染「按次数排序」。",
+          "decision": "图 onload 换层成功后才 armDwell（2 秒 setTimeout 到点 countView）；翻走先 clearTimeout——2 秒内翻走不计数；暂停/按 M 当场结算；viewed Set 保证每帖每场至多一次且仅 kept 计；计次静默走共享串行队列 /reaffirm，失败吞掉。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createSlideshow",
+          "signature": "(deps) -> {open, close, key, active}",
+          "role": "放映机：片单（上限=回看数量档，LOOKAHEAD=6 预取）、双层交叉淡入、计时线、字幕批注、收藏星标。",
+          "sideEffects": "网络（分页取片单、reaffirm/favorite）+ DOM。",
+          "file": "app/static/slideshow.js",
+          "line": 38
+        },
+        {
+          "name": "expandPosts",
+          "signature": "(posts, prefs) -> 图片项数组",
+          "role": "帖子级随机洗牌后展开成单图序列——套图/条漫保持 1→N 连播不打散。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/slideshow.js",
+          "line": 29
+        },
+        {
+          "name": "ssPrefs",
+          "signature": "(prefs) -> 放映参数",
+          "role": "间隔（3/5/8 默认 5）· 顺序（顺序/随机）· 批注字幕开关的归一化。",
+          "sideEffects": "纯函数。",
+          "file": "app/static/slideshow.js",
+          "line": 17
+        }
+      ],
+      "l2_callTree": "├── fetchBatch：GET /api/posts（私有游标边放边取 · 装满即停预取）\n├── advance()\n│   ├── clearTimeout(SL.dwell)（2 秒内翻走不计次）\n│   └── 双层交叉淡入 → 新图 onload → armDwell(p)：setTimeout(countView, 2000)\n├── countView(p)：viewed Set 每帖每场至多一次 + status==='kept' 才计\n│   └── 静默 enqueueMutation(POST /reaffirm)，失败吞掉\n├── 暂停/按 M：当场结算 countView · 收藏星标 scale 弹跳（失败回滚同步）\n└── 静止隐匿：mousemove/键盘/点击唤醒 · 2.5s 静止加 .is-idle（cursor:none + 关闭钮淡出）",
+      "l3_tables": [],
+      "tags": "放映 幻灯 计次 套图 字幕 隐匿"
+    },
+    {
+      "id": "lightbox",
+      "layer": "fe-immersive",
+      "name": "lightbox.js",
+      "file": "app/static/lightbox.js",
+      "summary": "大图控制器：以 {sid, file} 双键锚点在 S.images 池中定位（列表重排后仍能找到），默认只看当前帖、纯图模式才跨帖（跨帖时 scopeSid 跟帖走）；胶片轨道按池 diff 更新而非重建。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [],
+      "readsState": [
+        "S.images"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/lightbox.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：双键锚点定位与「池 diff」更新胶片轨道",
+          "constraint": "大图打开期间后台可能重排 S.images（乐观标记、分页）；胶片轨道若整体重建会产生闪烁与滚动跳动。",
+          "rejected": "按索引定位并整体重绘轨道：索引随重排漂移错图，重建带来视觉抖动。",
+          "decision": "锚点用 {sid, file} 双键在池中反查（找不到返回 -1 自愈关闭）；胶片轨道以 filmKey（池长度+file 串）判断池是否变化——池没变只更新高亮与 scrollIntoView（nearest/center），data-i 存全局索引免反查。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createLightbox",
+          "signature": "({S,$,animatedHide,cancelHide,resetZoom,crossPosts}) -> {openLB, closeLB, renderLB, lbNav, getIndex}",
+          "role": "大图状态机：锚点定位、导航（默认限本帖/纯图跨帖且 scopeSid 跟帖走）、长图判定与回顶、±1 预加载（decode 兜底）、胶片轨道 diff、双击缩放与单击关闭的 800/320ms 时序仲裁。",
+          "sideEffects": "DOM（#lightbox 与 #lb-film）；预加载用 new Image()；无直接 API。",
+          "file": "app/static/lightbox.js",
+          "line": 3
+        }
+      ],
+      "l2_callTree": "├── openLB(i, sid)：记 {sid,file} 锚点 + scopeSid + returnFocus → 锁滚动 → renderLB\n├── renderLB()\n│   ├── getIndex 反查失效 → 自愈关闭\n│   ├── 长图判定 h/w>2：元数据预判 + onload naturalWidth 校正 · 切图回顶\n│   ├── 导航池：非跨帖 filter(sid===scopeSid) · 跨帖全池 · prev/next disabled 按池边界\n│   ├── 相邻 ±1 预加载（preload.decode?.().catch 兜底）\n│   └── 胶片轨道：filmKey 不变只更新高亮/scrollIntoView；变则重建\n└── lbNav(±1)：锚点移动 · 跨帖时 scopeSid 跟帖走（中途关跨帖也不串帖）\n    └── 单击 vs 双击：touch 后 800ms 内忽略单击；鼠标单击延迟 320ms，e.detail>1 取消",
+      "l3_tables": [],
+      "tags": "大图 灯箱 锚点 胶片轨道 预加载"
+    },
+    {
+      "id": "notes",
+      "layer": "fe-immersive",
+      "name": "notes.js",
+      "file": "app/static/notes.js",
+      "summary": "批注流（轻全屏层）：全库批注按时间倒排的只读浏览与跳转——编辑不在这里（写批注在详情评论区）；cursor 分页滚动续页，点行直达该帖详情并聚焦评论。",
+      "upstream": [
+        "appjs",
+        "fab"
+      ],
+      "downstream": [
+        "server",
+        "appjs"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/notes.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：滚动锁的协同释放",
+          "constraint": "批注流、详情、大图都会锁 body 滚动；多层叠加时任一层关闭就恢复滚动，会让仍打开的层失去滚动锁。",
+          "rejected": "每层 close 都无条件恢复 body 滚动，叠层场景（批注流上开详情）会滚动穿透。",
+          "decision": "close 仅当 #detail 与 #lightbox 都隐藏时才恢复 body 滚动——锁的释放以「所有持锁层都关闭」为准。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createNotes",
+          "signature": "(deps) -> {open, close, active}",
+          "role": "批注流控制器：open 防重入并重置游标拉首批；滚动到底 200px 内且 hasMore&&!loading 续页（passive scroll 监听）；点行 openDetail(sid, 聚焦评论)。",
+          "sideEffects": "网络（GET /api/comments?limit=100&cursor）+ DOM；Esc 经 app.js 责任链第 5 层关闭。",
+          "file": "app/static/notes.js",
+          "line": 3
+        }
+      ],
+      "l2_callTree": "└── open() → 重置 N 四态 → cancelHide + 显示层 → 锁 body 滚动 → fetchBatch(true)\n    └── fetchBatch：GET /api/comments?limit=100&cursor → 行渲染（缩略图 /media/ · 正文 commentBodyHTML · esc 转义）\n        └── 滚动续页（passive 监听）· 点行 → openDetail(it.sid, true)",
+      "l3_tables": [],
+      "tags": "批注流 分页 跳转 滚动锁"
+    },
+    {
+      "id": "settings",
+      "layer": "fe-config",
+      "name": "settings.js",
+      "file": "app/static/settings.js",
+      "summary": "设置中心：个性化偏好渲染（prefs → data-* 属性 → CSS 档位）、分组管理（微博/X 双形态）、Cookie/X-auth 连接维护（busy 门闩 + 五态文案）、二维码与配对码生命周期；弹层生命周期由主页面统一管理，它只 openModal。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "server",
+        "post_actions"
+      ],
+      "readsState": [
+        "S.st"
+      ],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/settings.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：连接状态刷新「立即渲染一次 + loadStatus 后重渲染」",
+          "constraint": "S.st 缓存可能过期，但等 /api/status 返回再渲染会有可感知的空窗。",
+          "rejected": "只等 loadStatus：弹窗打开瞬间显示旧状态甚至空白。",
+          "decision": "openConnections 先用缓存渲染一次再异步 loadStatus 后重渲染；cookieAction 的 finally 里 loadStatus 失败被吞掉（保留操作本身的成败提示，不让次要失败覆盖主要结果）。配对码带 TTL 自毁定时器（setTimeout resetPairCode），二维码 URL 由 /api/lan 兜底 localStorage 缓存。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "initSettings",
+          "signature": "({S,$,api,toast,esc,openModal,loadStatus,toggleFavorite,getLBIndex,getDetailSid,refreshDetail,hooks={}}) -> {openSettings, openGroups, openConnections, mobileBack, closePane}",
+          "role": "设置中心工厂：绑定约 15 个入口（个性化/分组/Cookie/自动抓取/清理/批量下载/二维码/配对码/开发管理链接所在卡的开合）；手机端（≤640px）为推入式导航——openSettings 无显式 id 落根菜单，activate 加 in-pane 态并上提分区名到窗口头，goRoot 收面板清分区态。",
+          "sideEffects": "网络 I/O + DOM + localStorage(pw_qrurl/pw_settings_pane)；返回的 openGroups/openConnections 被空态引导复用，mobileBack 被全局 Esc 拦截复用（手机在面板层先返回根菜单）。",
+          "file": "app/static/settings.js",
+          "line": 4
+        },
+        {
+          "name": "openConnections",
+          "signature": "async (source='weibo') -> void",
+          "role": "打开连接弹窗并渲染五态（unset/saved/ok/expired/error）；cookieAction 三合一（save/check/clear）带 busy 门闩。",
+          "sideEffects": "网络 I/O + DOM。",
+          "file": "app/static/settings.js",
+          "line": 379
+        }
+      ],
+      "l2_callTree": "├── renderPrefs / #modal-prefs 事件委托（id 命名即协议：pref-<key>；ss-comments on→'1' 语义反转）\n├── 推入式导航（手机 ≤640px）：openSettings 无 id → goRoot（收面板/清 on 态/摘 in-pane）｜activate → shell.in-pane + setHeadTitle｜mobileBack 供 Esc 逐层退\n├── openGroups → renderMyGroups（loadStatus → 分组列表 + 移除）\n│   └── discover：前端 for-await 逐个 POST /api/groups（中途失败整段 catch——无事务性）\n├── openConnections(source) → renderConnection（S.st.connections[source]，weibo 兜底旧字段 cookie）\n│   └── cookieAction(save/check/clear)：busy 门闩 → 端点 → finally loadStatus（失败吞掉）→ 重渲染\n├── 配对码：POST /api/device/code → {code, ttl} → 二维码 qrText 拼 ?code= → setTimeout 自毁归位\n│   └── #set-qr：localhost 时问 /api/lan 要宿主 IP → 兜底 localStorage.pw_qrurl · 输入 350ms 防抖\n└── 双击收藏：dblfav 偏好开且 hover 设备 → #lightbox/.dt-pics dblclick → toggleFavorite",
+      "l3_tables": [
+        {
+          "title": "表 · 连接操作三合一（cookieAction）",
+          "headers": [
+            "操作",
+            "端点",
+            "失败语义"
+          ],
+          "rows": [
+            [
+              "save",
+              "POST /api/settings/cookie 或 /api/settings/x-auth",
+              "校验失败保留旧凭据；busy 门闩防连点"
+            ],
+            [
+              "check",
+              "POST /api/settings/{weibo|x}/check",
+              "探活五态映射文案"
+            ],
+            [
+              "clear",
+              "DELETE 同路径",
+              "source==='env' 时禁用（环境配置生效中，网页不可清除）"
+            ]
+          ]
+        }
+      ],
+      "tags": "设置 个性化 分组 连接 配对码 二维码"
+    },
+    {
+      "id": "devices",
+      "layer": "fe-config",
+      "name": "devices.js",
+      "file": "app/static/devices.js",
+      "summary": "设备管理弹窗：admin 拉取设备列表并可撤销配对（撤销自己整页 reload、撤销他人移除 DOM 节点）；非 admin 点击只显示能力文案，不发任何请求。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/devices.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：非 admin 零请求",
+          "constraint": "设置卡的「设备」入口对所有角色可见，但设备列表是 admin 专属数据。",
+          "rejected": "点击即请求 /api/devices，viewer/editor 必然收到 403 并产生无意义的错误噪音。",
+          "decision": "前端先按 html[data-device-role] 分流：非 admin 打开弹窗只显示能力说明文案即 return——请求根本不发出。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "initDevices",
+          "signature": "({$,api,esc,openModal,toast}) -> void",
+          "role": "绑定设备弹窗：admin 并行拉 GET /api/devices + /api/device/session 渲染列表；撤销自己是 location.reload()，撤销他人移除节点；本机入口提供断开（本机入口会被服务端 409 拒绝，模板已隐藏该按钮）。",
+          "sideEffects": "网络 I/O + DOM + 可能整页刷新。",
+          "file": "app/static/devices.js",
+          "line": 3
+        }
+      ],
+      "l2_callTree": "└── set-devices 点击\n    ├── 非 admin（data-device-role）→ 打开弹窗显示能力文案 → return（零请求）\n    └── admin → Promise.all(GET /api/devices · GET /api/device/session) → 列表渲染\n        ├── 撤销自己（data-device === current.id）→ DELETE /api/devices/{id} → location.reload()\n        └── 撤销他人 → DELETE → 移除该行节点",
+      "l3_tables": [],
+      "tags": "设备 撤销配对 角色"
+    },
+    {
+      "id": "fab",
+      "layer": "fe-config",
+      "name": "fab.js",
+      "file": "app/static/fab.js",
+      "summary": "悬浮球：注册表驱动构建菜单（新功能 = 注册表加一行）、意图延迟计时器对（hover 60ms 开 / 180ms 关）、pointer 统一拖动换位（localStorage 持久化 + clamp 夹回屏内）、上半屏菜单向下展开。",
+      "upstream": [
+        "appjs"
+      ],
+      "downstream": [
+        "review",
+        "post_actions"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "app/static/fab.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：拖动与点击的意图仲裁",
+          "constraint": "同一 pointer 序列既可能是拖动换位也可能是点击开菜单，二者互斥且触屏无 hover 意图信号。",
+          "rejected": "click 里直接开菜单会把「拖完松手」误判成点击；仅监听 click 则触屏长按无反馈。",
+          "decision": "pointermove 位移 >6px 判定为拖动（拖动即收菜单），pointerup 置模块级 suppressClick 吞掉尾随 click；触屏以 e.detail===0 || !hoverable() 判定点按开合。位置存 localStorage（try/catch 兼容隐私模式），启动恢复时 clamp 夹回屏内（8px 边距）。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "createFab",
+          "signature": "({$, items}) -> {setHidden}",
+          "role": "悬浮球工厂：items 注册表构建菜单与桌面子飞窗（子项仅 hover 设备渲染，400ms 缓冲可折返）；items 5 项由 app.js 注入（快筛/纯图开关/回看/放映/批注）。；setHidden(v) 供多选模式让位隐藏（fab-off 类，隐藏时顺带收菜单）。",
+          "sideEffects": "DOM + localStorage(pw_fab_pos)。",
+          "file": "app/static/fab.js",
+          "line": 4
+        }
+      ],
+      "l2_callTree": "└── createFab({$, items})\n    ├── 意图延迟对：hover 设备 60ms 开 / 180ms 关（菜单是球的孩子，球↔菜单移动不触发 leave）\n    ├── 触屏：click 且 (e.detail===0 || !hoverable()) → open\n    ├── 拖动：setPointerCapture（合成 pointer try/catch）· 位移 >6px 拖动 → 收菜单\n    │   └── pointerup → suppressClick 吞尾随 click · localStorage 保存 · clamp 夹回\n    └── 子飞窗：mouseenter/focusin 立现 · mouseleave 400ms 缓冲 · focusout 立收",
+      "l3_tables": [],
+      "tags": "悬浮球 菜单 拖动 持久化 注册表"
+    },
+    {
+      "id": "extension",
+      "layer": "periphery",
+      "name": "extension/ Cookie 助手",
+      "file": "extension/popup.js",
+      "summary": "浏览器扩展（Manifest V3）：把微博/X 登录 Cookie 一键发给 PWALL——微博全量 Cookie 按 path 最长优先去重并强制校验 SUB 与 XSRF-TOKEN 存在，X 读 auth_token+ct0（x.com 无则回退 twitter.com）；配对走 bearer 形态令牌存 chrome.storage。",
+      "upstream": [
+        "settings"
+      ],
+      "downstream": [
+        "server"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "extension/popup.js"
+        },
+        {
+          "path": "extension/manifest.json"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：同名 Cookie 按 path 最长优先去重",
+          "constraint": "chrome.cookies.getAll 返回域名下全部 Cookie，同名（如 SUB）可能因不同 path 出现多份，直接拼接会产生重复键污染登录态。",
+          "rejected": "全量拼接或取第一份，可能混出失效的重复 SUB 导致服务端判定未登录。",
+          "decision": "按 path.length 降序排序先到先得——最具体路径的 Cookie 优先；缺 SUB 或 XSRF-TOKEN 时直接报「微博未登录」拒绝发送，不发脏凭据。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "sendWeibo",
+          "signature": "async () -> void",
+          "role": "读 weibo.com 全量 Cookie → 去重拼接 → 校验 SUB/XSRF-TOKEN → POST /api/settings/cookie {cookie}。",
+          "sideEffects": "网络 I/O（Bearer + 20 秒超时）；目标地址需先经 chrome.permissions.request 授权。",
+          "file": "extension/popup.js",
+          "line": 35
+        },
+        {
+          "name": "sendX",
+          "signature": "async () -> void",
+          "role": "读 auth_token(+ct0) → POST /api/settings/x-auth；x.com 无 auth_token 回退 twitter.com 再试。",
+          "sideEffects": "网络 I/O。",
+          "file": "extension/popup.js",
+          "line": 65
+        }
+      ],
+      "l2_callTree": "├── allowDestination(base)：chrome.permissions.request 该 origin → 取 storage 令牌\n├── sendWeibo()\n│   ├── chrome.cookies.getAll({url:'https://weibo.com/'})\n│   ├── 同名去重：path.length 降序先到先得\n│   ├── 缺 SUB / XSRF-TOKEN → 报「微博未登录」不发送\n│   └── POST /api/settings/cookie {cookie}\n├── sendX()：getAll(x.com) 无 auth_token → 回退 twitter.com → POST /api/settings/x-auth {auth_token, ct0}\n└── refresh()：GET /api/status → 渲染 weibo/x 五态连接文案",
+      "l3_tables": [],
+      "tags": "扩展 cookie 助手 ct0 bearer 权限"
+    },
+    {
+      "id": "tools",
+      "layer": "periphery",
+      "name": "tools/ 运维脚本箱",
+      "file": "tools/runtime.py",
+      "summary": "宿主侧命令行工具集：make 目标背后的实现。核心纪律是「Mac 与 Docker 不共享 flock」——凡动媒体文件的操作必须在宿主侧执行或委派进运行中的容器，runtime.py 负责探测并委派，无法核对状态就停止而不猜测。",
+      "upstream": [],
+      "downstream": [
+        "backup",
+        "maintenance",
+        "db"
+      ],
+      "readsState": [],
+      "writesState": [],
+      "files": [
+        {
+          "path": "tools/runtime.py"
+        },
+        {
+          "path": "tools/restore.py"
+        },
+        {
+          "path": "tools/audit.py"
+        },
+        {
+          "path": "tools/x-collector.js"
+        }
+      ],
+      "l1_tradeoffs": [
+        {
+          "title": "权衡：委派而非直连容器",
+          "constraint": "备份/修复要动 data/ 下的媒体文件，但容器内进程与宿主无法共享 flock，绕过锁直接操作会与运行中服务竞态。",
+          "rejected": "宿主直接读写 bind mount 的 data/，绕过容器的写锁，与运行中服务产生竞态。",
+          "decision": "runtime.py 探测容器状态与数据挂载一致性，一致则把备份/体检/设备签发委派进容器执行；无法核对 Docker 状态时命令停止，绝不猜测服务已停机。一次性存量迁移（migrate_to_large / migrate_x_avatars）全部幂等可重跑。"
+        }
+      ],
+      "l2_contracts": [
+        {
+          "name": "delegate",
+          "signature": "探测容器 healthy 与挂载一致 → docker exec 委派",
+          "role": "在线维护的安全入口：备份/体检/设备签发在容器内执行；离线维护要求先停服。",
+          "sideEffects": "docker exec；读 Docker 状态。",
+          "file": "tools/runtime.py",
+          "line": 9
+        },
+        {
+          "name": "restore.py",
+          "signature": "备份恢复入口（空目录 + manifest 校验）",
+          "role": "灾难恢复的宿主入口：数据全丢/换机时的第一步。",
+          "sideEffects": "整目录写。",
+          "file": "tools/restore.py",
+          "line": null
+        },
+        {
+          "name": "x-collector.js",
+          "signature": "浏览器 Console 粘贴脚本（非构建产物）",
+          "role": "代抓采集：被动拦截 x.com 页面自身请求，满 30 条推送 /api/ingest/x。",
+          "sideEffects": "网络 I/O（采集令牌鉴权）；令牌经 make picwall-collector-token 签发且不提交仓库。",
+          "file": "tools/x-collector.js",
+          "line": null
+        }
+      ],
+      "l2_callTree": "├── runtime.py：容器探测 → 挂载核对 → 委派 / 停止（不猜测）\n├── backup.py / restore.py：调 app/backup.py 的快照链路（宿主侧执行）\n├── audit.py：媒体只读审计（体积/重复/库-磁盘一致性；清理决策留给人）\n├── migrate_to_large.py / migrate_x_avatars.py：存量一次性迁移（幂等可重跑）\n├── safari_x_cookie.py：Safari binarycookies 解析现取 X 登录态（需完全磁盘访问）\n└── x-collector.js：Console 代抓（pwXFlush / pwXStop 手动控制）",
+      "l3_tables": [],
+      "tags": "工具 宿主 委派 迁移 审计 代抓 flock"
+    }
+  ]
+}</script></script></script>
+<script>
+const DATA = JSON.parse(document.getElementById('atlas-data').textContent);
+const $ = (s, el=document) => el.querySelector(s);
+// abs_root 是本机 vscode 深链基地址：仓库里存空值（不同人 clone 路径不同），
+// 本地想要跳转 IDE 就在此字段填仓库绝对路径；为空时降级为纯文本展示。
+const vscode = (file, line) => DATA.meta.abs_root ? `vscode://file/${DATA.meta.abs_root}/${file}${line ? ':'+line : ''}` : '';
+const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const MOD_BY_ID = Object.fromEntries(DATA.modules.map(m => [m.id, m]));
+let currentModule = null, currentFlow = 'topology', zoom = 1, hlState = null, lastFocus = null;
+
+/* ---------- 主题 ---------- */
+$('#baseline-chip').textContent = DATA.meta.baseline;
+const applyTheme = dark => {
+  document.documentElement.classList.toggle('dark', dark);
+  $('#btn-theme').textContent = dark ? '🌙 Dark' : '☀️ Light';
+  localStorage.setItem('atlas-theme', dark ? 'dark' : 'light');
+};
+$('#btn-theme').onclick = () => {
+  const dark = !document.documentElement.classList.contains('dark');
+  applyTheme(dark);
+  if (currentFlow) renderCenter(currentFlow);
+};
+applyTheme((localStorage.getItem('atlas-theme') || 'dark') === 'dark');
+
+/* ---------- 文本加工：S.xxx / @模块.符号 / 模块文件名 → 可点 Chip ---------- */
+const STATE_NAMES = DATA.states.map(s => s.name).sort((a,b)=>b.length-a.length);
+function linkify(text) {
+  let out = escHtml(text);
+  out = out.replace(/@([a-z_]+)\.([A-Za-z_][A-Za-z0-9_]*)/g, (m, mid, sym) =>
+    MOD_BY_ID[mid] ? `<button class="chip" data-inspect="${mid}">@${mid}.${sym}</button>` : m);
+  for (const sn of STATE_NAMES) {
+    const re = new RegExp(sn.replace('.', '\\.') + '\\b', 'g');
+    out = out.replace(re, `<button class="chip" data-state="${sn}">${sn}</button>`);
+  }
+  for (const m of DATA.modules) {
+    if (!m.file) continue;
+    const base = m.file.split('/').pop();
+    const re = new RegExp('(\\b' + base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\b)(?![^<]*<\/button>)', 'g');
+    out = out.replace(re, `<button class="chip chip-static" data-inspect="${m.id}">${base}</button>`);
+  }
+  return out;
+}
+document.addEventListener('click', e => {
+  const ins = e.target.closest('[data-inspect]');
+  if (ins) { const m = MOD_BY_ID[ins.dataset.inspect]; if (m) { inspect(m.id); return; } }
+  const st = e.target.closest('[data-state]');
+  if (st) { const s = DATA.states.find(x => x.name === st.dataset.state); if (s) { highlightState(s); showStateInspector(s); } }
+});
+
+/* ---------- 左栏导航树 ---------- */
+const LAYERS = DATA.layers;
+function renderNav() {
+  let html = '';
+  for (const layer of LAYERS) {
+    if (layer.id === 'tasks') {
+      html += `<div class="nav-group-title display">任务入口</div>`;
+      html += DATA.tasks.map((t,i)=>`<button class="nav-item" onclick="openTask('${t.id}')"><span class="mono opacity-60">T${String(i+1).padStart(2,'0')}</span><span>${escHtml(t.name)}</span></button>`).join('');
+      continue;
+    }
+    if (layer.id === 'concepts') {
+      html += `<div class="nav-group-title display">概念前提</div>`;
+      html += DATA.concepts.map((c,i)=>`<button class="nav-item" onclick="openConcept('${c.id}')"><span class="mono opacity-60">C${String(i+1).padStart(2,'0')}</span><span>${escHtml(c.name)}</span></button>`).join('');
+      continue;
+    }
+    const mods = DATA.modules.filter(m => m.layer === layer.id);
+    if (!mods.length) continue;
+    html += `<div class="nav-group-title display">${escHtml(layer.name)}</div>`;
+    html += mods.map(m => `<button class="nav-item" data-mid="${m.id}" onclick="inspect('${m.id}')"><span class="mono">${escHtml(m.name)}</span></button>`).join('');
+  }
+  html += `<div class="nav-group-title display">状态追踪（点击高亮读写方）</div>`;
+  html += DATA.states.map((s,i) =>
+    `<button class="nav-item state-item" data-state-idx="${i}" onclick="stateClick(${i})"><span class="mono">${escHtml(s.name)}</span></button>`).join('');
+  $('#nav-tree').innerHTML = html;
+}
+window.stateClick = function(i) {
+  const s = DATA.states[i];
+  highlightState(s);
+  showStateInspector(s);
+};
+
+/* ---------- 中栏三签 ---------- */
+const TABS = [
+  { id:'topology', name:'拓扑与依赖注入' },
+  { id:'pipeline', name:'数据流与状态机' },
+  { id:'mechanics', name:'跨模块工程机制' }
+];
+function renderTabs() {
+  $('#center-tabs').innerHTML = TABS.map(t =>
+    `<button data-tab="${t.id}" class="flow-tab px-3 py-1.5 rounded-sm text-sm border transition ${t.id===currentFlow?'flow-tab-active font-semibold':''}"
+      style="border-color:rgba(245,158,11,.25)">${t.name}</button>`).join('');
+  document.querySelectorAll('.flow-tab').forEach(b => b.onclick = () => { currentFlow = b.dataset.tab; renderTabs(); renderCenter(currentFlow); });
+}
+const mermaidTheme = () => document.documentElement.classList.contains('dark') ? 'dark' : 'default';
+async function renderMermaid(container, code) {
+  if (!window.mermaid) { container.innerHTML = `<pre class="text-xs whitespace-pre-wrap opacity-70">${escHtml(code)}</pre>`; return; }
+  mermaid.initialize({ startOnLoad:false, theme: mermaidTheme(), securityLevel:'loose', flowchart:{ htmlLabels:true } });
+  try {
+    const { svg } = await mermaid.render('g-'+Math.random().toString(36).slice(2), code);
+    container.innerHTML = `<div class="origin-top-left block w-full" style="transform:scale(${zoom})">${svg}</div>`;
+    if (hlState) paintHighlight();
+  } catch(e) { container.innerHTML = `<pre class="text-xs whitespace-pre-wrap opacity-70">${escHtml(String(e && e.message || e))}\n\n${escHtml(code)}</pre>`; }
+}
+function tableHtml(t) {
+  return `<div class="mb-5"><div class="sec-title">${escHtml(t.title)}</div>
+    <div style="overflow-x:auto"><table class="rule-table">
+    <thead><tr>${t.headers.map(h=>`<th>${escHtml(h)}</th>`).join('')}</tr></thead>
+    <tbody>${t.rows.map(r=>`<tr>${r.map(c=>`<td>${linkify(c)}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table></div></div>`;
+}
+function renderCenter(tab) {
+  const zoomers = $('#zoomers');
+  if (tab === 'topology' || tab === 'pipeline') {
+    zoomers.className = 'flex items-center gap-1';
+    $('#center-body').innerHTML = `<div class="flow-panel"><div id="flow-box" class="flow-box p-4 overflow-auto" style="max-height:calc(100vh - 190px)"></div></div>
+      ${tab==='topology' ? apiMapHtml() : ''}`;
+    renderMermaid($('#flow-box'), DATA.diagrams[tab]);
+    return;
+  }
+  if (tab === 'mechanics') {
+    zoomers.className = 'hidden items-center gap-1';
+    $('#center-body').innerHTML = DATA.mechanics.map(m => `
+      <div class="mb-8 fade-in">
+        <h3 class="display text-base font-bold mb-2">${escHtml(m.title)}</h3>
+        <p class="text-[13px] leading-relaxed opacity-80 mb-3">${escHtml(m.scenario)}</p>
+        ${m.mermaid ? `<div class="flow-panel mb-4"><div class="flow-box p-4 overflow-auto" data-mech="${m.id}"></div></div>` : ''}
+        ${(m.tables||[]).map(tableHtml).join('')}
+      </div>`).join('');
+    DATA.mechanics.forEach(m => {
+      if (m.mermaid) { const box = document.querySelector(`[data-mech="${m.id}"]`); if (box) renderMermaid(box, m.mermaid); }
+    });
+    return;
+  }
+}
+function apiMapHtml() {
+  const a = DATA.apiMap;
+  return `<div class="mt-5 mb-2"><div class="sec-title">前端模块 → 后端端点映射</div>
+    <div style="overflow-x:auto"><table class="rule-table">
+    <thead><tr><th style="width:170px">前端模块</th><th style="width:320px">端点（方法 · 路径）</th><th>触发场景</th></tr></thead>
+    <tbody>${a.rows.map(r=>`<tr><td>${linkify(r[0])}</td><td class="font-mono text-[11.5px]">${escHtml(r[1])}</td><td>${escHtml(r[2])}</td></tr>`).join('')}</tbody></table></div>
+    <div class="sec-title mt-4">后端独有路由（前端 static JS 未调用）</div>
+    <div style="overflow-x:auto"><table class="rule-table">
+    <thead><tr><th style="width:420px">端点</th><th>调用方 / 说明</th></tr></thead>
+    <tbody>${a.backendOnly.map(r=>`<tr><td class="font-mono text-[11.5px]">${escHtml(r[0])}</td><td>${escHtml(r[1])}</td></tr>`).join('')}</tbody></table></div>
+    <p class="text-xs opacity-60 mt-2">${escHtml(a.note)}</p></div>`;
+}
+$('#zoom-in').onclick = () => { zoom = Math.min(2.5, zoom+0.15); renderCenter(currentFlow); };
+$('#zoom-out').onclick = () => { zoom = Math.max(0.4, zoom-0.15); renderCenter(currentFlow); };
+$('#zoom-reset').onclick = () => { zoom = 1; renderCenter(currentFlow); };
+renderTabs(); renderCenter(currentFlow);
+
+/* ---------- 状态高亮（中栏拓扑 + 左栏标记） ---------- */
+function paintHighlight() {
+  if (!hlState) return;
+  const refs = [...new Set([...(hlState.writers||[]), ...(hlState.readers||[])])];
+  for (const id of refs) {
+    const el = document.querySelector(`#flow-box g[id*="-${id}-"]`);
+    if (el) el.classList.add('hl-atlas');
+  }
+}
+function clearHighlight() {
+  document.querySelectorAll('.hl-atlas').forEach(el => el.classList.remove('hl-atlas'));
+  document.querySelectorAll('.state-item.on').forEach(el => el.classList.remove('on'));
+  hlState = null;
+}
+function highlightState(st) {
+  clearHighlight();
+  hlState = st;
+  if (currentFlow !== 'topology') { currentFlow = 'topology'; renderTabs(); renderCenter('topology'); }
+  else paintHighlight();
+  const item = document.querySelector(`[data-state-name="${st.name}"]`);
+  if (item) item.classList.add('on');
+}
+
+/* ---------- 右栏 Inspector ---------- */
+function showDrawerLike(html) { $('#inspector').innerHTML = html; $('#right').scrollTop = 0; }
+function sec(title, inner) { return `<section class="mb-6"><div class="sec-title">${escHtml(title)}</div>${inner}</section>`; }
+function ioChips(m) {
+  const row = (label, arr) => arr && arr.length
+    ? `<div class="text-xs mb-1.5"><span class="opacity-50 mr-1.5">${label}</span>${arr.map(r=>`<button class="chip" data-ref="${escHtml(r)}">${escHtml(r)}</button>`).join('')}</div>` : '';
+  return row('上游', m.upstream) + row('下游', m.downstream)
+    + row('读状态', m.readsState) + row('写状态', m.writesState);
+}
+window.inspect = function(id) {
+  const m = MOD_BY_ID[id]; if (!m) return;
+  currentModule = m; clearHighlight();
+  let html = `<div class="text-xs opacity-50 mb-1">${escHtml(m.layer)}${m.file ? ' · ' + (vscode(m.file) ? '<a class="vscode" href="'+vscode(m.file)+'">↗ '+escHtml(m.file)+'</a>' : '↗ '+escHtml(m.file)) : ''}</div>
+    <h2 class="display text-xl font-bold tracking-wide mb-3">${escHtml(m.name)}</h2>
+    <p class="text-[13.5px] leading-relaxed opacity-90 mb-5">${escHtml(m.summary)}</p>
+    <div class="mb-5">${ioChips(m)}</div>`;
+  if (m.l1_tradeoffs && m.l1_tradeoffs.length)
+    html += sec('L1 · 架构定位与第一性权衡', m.l1_tradeoffs.map(t => `
+      <div class="tradeoff"><h5>${escHtml(t.title)}</h5><dl>
+      <dt>客观约束</dt><dd>${linkify(t.constraint)}</dd>
+      <dt>常规方案缺陷</dt><dd>${linkify(t.rejected)}</dd>
+      <dt>架构权衡与收益</dt><dd>${linkify(t.decision)}</dd></dl></div>`).join(''));
+  if (m.l2_contracts && m.l2_contracts.length)
+    html += sec('L2 · 对外公共契约', `<div style="overflow-x:auto"><table class="rule-table">
+      <thead><tr><th>接口</th><th>类型签名</th><th>职责与返回值语义</th><th>副作用与异常</th><th></th></tr></thead>
+      <tbody>${m.l2_contracts.map(c=>`<tr><td class="font-mono font-semibold text-[12px] whitespace-nowrap">${escHtml(c.name)}</td>
+        <td class="font-mono text-[11.5px]">${escHtml(c.signature)}</td><td>${linkify(c.role)}</td>
+        <td>${linkify(c.sideEffects)}</td>
+        <td>${vscode(c.file, c.line) ? '<a class="vscode" href="'+vscode(c.file, c.line)+'">↗ '+c.line+'</a>' : '↗ '+c.line}</td></tr>`).join('')}</tbody></table></div>`);
+  if (m.l2_callTree)
+    html += sec('L2 · 内部控制流调用树', `<div class="calltree rounded-md border p-3" style="border-color:rgba(245,158,11,.18)">${linkify(m.l2_callTree)}</div>`);
+  if (m.l3_tables && m.l3_tables.length)
+    html += m.l3_tables.map(tableHtml).join('');
+  showDrawerLike(html);
+  markNav(m.id);
+};
+function markNav(id) {
+  document.querySelectorAll('.nav-item.on').forEach(el => el.classList.remove('on'));
+  document.querySelectorAll(`.nav-item[data-mid="${id}"]`).forEach(el => el.classList.add('on'));
+}
+window.openTask = function(id) {
+  const t = DATA.tasks.find(x=>x.id===id); if (!t) return;
+  let html = `<div class="text-xs opacity-50 mb-1">任务 · 动手前先读完这一张</div>
+    <h2 class="display text-xl font-bold mb-3">${escHtml(t.name)}</h2>
+    <p class="text-[13.5px] leading-relaxed opacity-90 mb-5">${escHtml(t.goal)}</p>`;
+  html += sec('STEPS · 按顺序做', `<ol class="text-sm leading-relaxed space-y-3 list-none">${t.steps.map((s,i)=>
+    `<li class="flex gap-2"><span class="font-mono text-xs opacity-40 pt-0.5">${String(i+1).padStart(2,'0')}</span>
+     <div><div>${escHtml(s.text)}</div>${s.refs&&s.refs.length?`<div class="mt-1.5 flex flex-wrap gap-1.5">${s.refs.map(r=>`<button class="chip" data-inspect="${r}">→ ${escHtml((MOD_BY_ID[r]||{}).name||r)}</button>`).join('')}</div>`:''}</div></li>`).join('')}</ol>`);
+  html += sec('DONE · 完成的定义', `<ul class="text-sm space-y-1.5">${t.done.map(d=>`<li class="flex gap-2"><span class="text-accent-500">✓</span><span class="opacity-85">${escHtml(d)}</span></li>`).join('')}</ul>`);
+  showDrawerLike(html);
+};
+window.openConcept = function(id) {
+  const c = DATA.concepts.find(x=>x.id===id); if (!c) return;
+  const where = c.where || [];
+  let html = `<div class="text-xs opacity-50 mb-1">概念 · 看懂其他卡片的默认前提</div>
+    <h2 class="display text-xl font-bold mb-3">${escHtml(c.name)}</h2>
+    <p class="text-[13.5px] leading-relaxed opacity-90 mb-5">${escHtml(c.say)}</p>`;
+  html += sec('DETAIL · 展开', `<p class="text-sm leading-relaxed opacity-80">${escHtml(c.detail)}</p>`);
+  html += sec('WHERE · 在哪体现', `<div class="flex flex-wrap gap-1.5 mb-2">${where.map(w=>w.ref?`<button class="chip" data-inspect="${w.ref}">→ ${escHtml((MOD_BY_ID[w.ref]||{}).name||w.ref)}</button>`:'').join('')}</div>
+    <ul class="text-sm opacity-80 space-y-1">${where.map(w=>`<li>· ${escHtml(w.text)}</li>`).join('')}</ul>`);
+  showDrawerLike(html);
+};
+function showStateInspector(st) {
+  const writers = (st.writers||[]).map(r=>`<button class="chip" data-inspect="${r}">${escHtml((MOD_BY_ID[r]||{}).name||r)}</button>`).join(' ');
+  const readers = (st.readers||[]).map(r=>`<button class="chip" data-inspect="${r}">${escHtml((MOD_BY_ID[r]||{}).name||r)}</button>`).join(' ');
+  let html = `<div class="text-xs opacity-50 mb-1">状态追踪 · ${escHtml(st.kind)}</div>
+    <h2 class="display text-xl font-bold mb-3">${escHtml(st.name)}</h2>
+    <p class="font-mono text-xs opacity-70 mb-3">${escHtml(st.shape)}</p>
+    <p class="text-[13.5px] leading-relaxed opacity-90 mb-5">${escHtml(st.desc)}</p>`;
+  html += sec('WRITERS · 写入方（拓扑图已高亮）', `<div>${writers || '<span class="opacity-50 text-sm">—</span>'}</div>`);
+  html += sec('READERS · 读取方（拓扑图已高亮）', `<div>${readers || '<span class="opacity-50 text-sm">—</span>'}</div>`);
+  html += `<button class="text-xs px-3 py-1.5 rounded-sm border opacity-80 hover:opacity-100" style="border-color:rgba(245,158,11,.4)" onclick="clearHighlight()">清除高亮</button>`;
+  showDrawerLike(html);
+}
+window.clearHighlight = clearHighlight;
+
+/* ---------- 检索 ---------- */
+const INDEX = [
+  ...DATA.modules.map(m => ({ kind:'m', id:m.id, layer:m.layer, name:m.name, role:m.summary,
+    hay:(m.name+' '+m.summary+' '+m.layer+' '+(m.tags||'')).toLowerCase() })),
+  ...DATA.states.map(s => ({ kind:'s', id:s.name, layer:'状态', name:s.name, role:s.say || s.desc,
+    hay:(s.name+' '+s.desc+' '+(s.say||'')).toLowerCase() })),
+  ...DATA.tasks.map(t => ({ kind:'t', id:t.id, layer:'任务', name:t.name, role:t.goal,
+    hay:(t.name+' '+t.goal+' '+t.steps.map(s=>s.text).join(' ')).toLowerCase() })),
+  ...DATA.concepts.map(c => ({ kind:'c', id:c.id, layer:'概念', name:c.name, role:c.say,
+    hay:(c.name+' '+c.say+' '+c.detail).toLowerCase() })),
+];
+let searchOpen = false;
+function openSearch() {
+  searchOpen = true;
+  $('#search-overlay').classList.remove('hidden');
+  $('#search-input').value=''; doSearch('');
+  setTimeout(()=>$('#search-input').focus(), 30);
+}
+function closeSearch() { searchOpen = false; $('#search-overlay').classList.add('hidden'); }
+function doSearch(q) {
+  const query = q.trim().toLowerCase();
+  const hits = query ? INDEX.filter(e => e.hay.includes(query)).slice(0,10) : [];
+  $('#search-results').innerHTML = hits.map(e => `
+    <button class="search-hit w-full text-left px-4 py-3 flex items-center gap-3" style="background:inherit" data-kind="${e.kind}" data-id="${e.id}">
+      <span class="text-[10px] px-2 py-0.5 rounded-full border opacity-60 whitespace-nowrap" style="border-color:rgba(245,158,11,.35)">${e.layer}</span>
+      <span class="text-sm font-semibold ${e.kind==='m'?'font-mono':''}">${escHtml(e.name)}</span>
+      <span class="text-xs opacity-60 truncate flex-1">${escHtml(e.role)}</span>
+    </button>`).join('') || (query ? '<div class="px-4 py-3 text-sm opacity-50">无匹配</div>' : '');
+  document.querySelectorAll('.search-hit').forEach(b => b.onclick = () => {
+    closeSearch();
+    const { kind, id } = b.dataset;
+    if (kind==='m') inspect(id);
+    else if (kind==='t') openTask(id);
+    else if (kind==='c') openConcept(id);
+    else { const s = DATA.states.find(x=>x.name===id); if (s) { highlightState(s); showStateInspector(s); } }
+  });
+}
+$('#btn-search').onclick = openSearch;
+$('#search-input').addEventListener('input', e => doSearch(e.target.value));
+$('#search-input').addEventListener('keydown', e => {
+  if (e.key==='Enter') { const f = document.querySelector('.search-hit'); if (f) f.click(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key==='/' && !searchOpen && !/input|textarea/i.test(document.activeElement.tagName)) { e.preventDefault(); openSearch(); }
+  if (e.key==='Escape' && searchOpen) closeSearch();
+});
+
+renderNav();
+</script>
+</body>
+</html>

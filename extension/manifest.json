@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "PWALL Cookie 助手",
+  "version": "1.2.0",
+  "description": "把微博 / X 的登录 Cookie 发送给 PWALL 并校验连接，失效后可重新发送更新。",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": ["https://*.weibo.com/*", "https://*.x.com/*", "https://*.twitter.com/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PWALL Cookie 助手"
+  }
+}

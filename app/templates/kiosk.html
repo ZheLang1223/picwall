@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PWALL 报刊亭</title>
+<meta name="color-scheme" content="dark">
+<style>
+/* 报刊亭专用样式：独立页，不依赖 style.css；深色固定主题与相册一致 */
+* { box-sizing: border-box; margin: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body{
+  background:linear-gradient(#17181c, #1e2026); color:#e9e3d5; min-height:100vh;
+  font-family:"Noto Serif SC","Source Han Serif SC","Songti SC","STSong",serif;
+}
+button{ font:inherit; }
+img{ display:block; }
+a{ color:inherit; }
+
+#kiosk{ max-width:1180px; margin:0 auto; padding:0 0 40px; }
+
+/* 雨棚与招牌 */
+.ks-awning-stripe{
+  height:34px; border-radius:0 0 12px 12px;
+  background:repeating-linear-gradient(90deg, #c8452c 0 46px, #f2e9d8 46px 92px);
+  box-shadow:0 6px 14px rgba(0,0,0,.35);
+  display:flex; align-items:flex-end; justify-content:center;
+}
+.ks-sign{
+  transform:translateY(14px);
+  background:#f6f1e5; color:#2a251c; border:1.5px solid rgba(0,0,0,.25); border-radius:8px;
+  padding:7px 26px 6px; text-align:center; box-shadow:0 8px 18px rgba(0,0,0,.45);
+  display:inline-flex; flex-direction:column; align-items:center; gap:1px;
+}
+.ks-sign b{ font-weight:900; font-size:19px; letter-spacing:.14em; }
+.ks-sign i{ font-family:Georgia,"Times New Roman",serif; font-style:italic; font-size:11px; letter-spacing:.22em; opacity:.7; }
+.ks-back{
+  position:absolute; top:10px; left:12px; z-index:3;
+  color:#f2e9d8; font-size:12px; letter-spacing:.12em; text-decoration:none;
+  background:rgba(0,0,0,.35); border-radius:6px; padding:6px 12px;
+}
+.ks-back:hover{ background:rgba(0,0,0,.55); }
+
+/* 到货跑马灯 */
+.ks-ticker{
+  margin-top:24px; background:rgba(0,0,0,.28);
+  border-top:1px solid rgba(0,0,0,.3); border-bottom:1px solid rgba(0,0,0,.3);
+  overflow:hidden; white-space:nowrap; font-size:12px; color:#a89f8d;
+}
+.ks-ticker-track{ display:inline-block; padding:5px 0; animation:ks-marquee 40s linear infinite; }
+.ks-ticker-track span{ margin:0 26px; }
+.ks-ticker-track em{ font-style:normal; color:#e07a5f; font-weight:700; }
+@keyframes ks-marquee{ from{ transform:translateX(0);} to{ transform:translateX(-50%);} }
+@media (prefers-reduced-motion: reduce){ .ks-ticker-track{ animation:none; } }
+
+/* 专栏内页（试阅台） */
+.ks-counter{ padding:34px 26px 10px; }
+.ks-counter-label{ font-size:11px; letter-spacing:.3em; color:#a89f8d; margin:0 4px 10px; }
+.ks-counter-empty{
+  border:1.5px dashed rgba(168,159,141,.55); border-radius:12px;
+  padding:26px; text-align:center; color:#a89f8d; font-size:12px;
+}
+.ks-spread{ display:grid; grid-template-columns:1fr 1fr; gap:0; max-width:860px; margin:0 auto;
+  filter:drop-shadow(0 18px 32px rgba(0,0,0,.5)); }
+.ks-page{ background:#f6f1e5; color:#2a251c; padding:22px 22px 18px; min-width:0; }
+.ks-page.left{ border-radius:10px 3px 3px 10px; box-shadow:inset -18px 0 22px -18px rgba(0,0,0,.35); }
+.ks-page.right{ border-radius:3px 10px 10px 3px; box-shadow:inset 18px 0 22px -18px rgba(0,0,0,.35); }
+.ks-rhead{ display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+  font-size:9px; letter-spacing:.2em; color:#7a7263;
+  border-bottom:1px solid rgba(0,0,0,.14); padding-bottom:6px; margin-bottom:13px; }
+.ks-hero{ display:flex; align-items:center; gap:14px; margin:2px 0 4px; }
+.ks-hero img{ width:64px; height:64px; border-radius:6px; object-fit:cover;
+  border:2px solid var(--acc,#8a5a44); box-shadow:3px 3px 0 rgba(0,0,0,.12); }
+.ks-hero h3{ margin:1px 0 2px; font-weight:900; font-size:20px; letter-spacing:.04em; color:var(--acc,#8a5a44); }
+.ks-heroline{ font-size:10.5px; color:#7a7263; letter-spacing:.08em; }
+.ks-bio{ margin-top:13px; }
+.ks-bio b{ display:block; font-size:10px; letter-spacing:.28em; color:#7a7263; margin-bottom:5px; font-weight:700; }
+.ks-bio p{ font-size:12.5px; line-height:1.9; overflow-wrap:anywhere; }
+.ks-bio p.empty{ font-style:italic; color:#7a7263; }
+.ks-sample-stamp{ display:inline-block; margin-top:7px; font-size:9px; letter-spacing:.1em;
+  color:#7a7263; border:1px dashed rgba(122,114,99,.7); border-radius:3px; padding:2px 7px; transform:rotate(-1.6deg); }
+.ks-meta{ width:100%; border-collapse:collapse; font-size:12px; margin-top:13px; }
+.ks-meta td{ padding:4.5px 2px; border-top:1px solid rgba(0,0,0,.1); }
+.ks-meta td:first-child{ color:#7a7263; width:88px; }
+.ks-meta td:last-child{ font-weight:700; }
+.ks-quote{ margin-top:13px; padding:10px 12px; font-size:12px; line-height:1.7;
+  background:rgba(0,0,0,.05); border-left:3px solid var(--acc,#8a5a44); border-radius:0 6px 6px 0;
+  overflow-wrap:anywhere; }
+.ks-quote b{ display:block; font-size:10px; letter-spacing:.28em; color:#7a7263; margin-bottom:4px; font-weight:700; }
+.ks-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:2px; }
+.ks-grid img, .ks-grid .ks-ph{ width:100%; aspect-ratio:1/1; object-fit:cover;
+  border-radius:4px; border:1px solid rgba(0,0,0,.12); }
+.ks-grid .ks-ph{ display:flex; align-items:center; justify-content:center;
+  background:#e8e1d2; color:#a89f8d; font-size:10px; letter-spacing:.2em; }
+.ks-pagefoot{ margin-top:12px; font-size:10px; color:#7a7263; letter-spacing:.14em;
+  display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+.ks-pageno{ margin-top:10px; font-size:9px; letter-spacing:.24em; color:#7a7263; text-align:right; }
+.ks-close{ margin-top:16px; text-align:center; }
+.ks-btn{ font-size:12px; letter-spacing:.1em; background:#2a251c; color:#f6f1e5;
+  border:none; border-radius:6px; padding:7px 18px; cursor:pointer; }
+.ks-btn:hover{ opacity:.85; }
+
+/* 杂志墙 */
+.ks-wallhead{ display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:20px 30px 4px; flex-wrap:wrap; }
+.ks-wallhead h2{ font-size:17px; font-weight:900; letter-spacing:.2em; }
+.ks-wallhead small{ font-size:11px; color:#a89f8d; letter-spacing:.14em; }
+.ks-wall{ display:grid; grid-template-columns:repeat(auto-fill,minmax(172px,1fr));
+  gap:30px 24px; padding:18px 30px 34px; }
+.ks-cover{
+  position:relative; border:none; padding:0; cursor:pointer; text-align:left;
+  background:#f6f1e5; color:#2a251c; border-radius:3px 8px 8px 3px;
+  box-shadow:0 10px 22px rgba(0,0,0,.45);
+  transform:perspective(900px) rotate(var(--rz,0deg));
+  transition:transform .25s ease, box-shadow .25s ease;
+  display:block; width:100%; transform-style:preserve-3d;
+}
+.ks-cover:hover{ box-shadow:0 22px 40px rgba(0,0,0,.6); z-index:2; }
+.ks-cover-inner{ display:flex; flex-direction:column; border:1px solid rgba(0,0,0,.14);
+  border-radius:inherit; overflow:hidden; }
+.ks-cover-top{ padding:9px 10px 6px; }
+.ks-mast{ display:block; font-weight:900; line-height:1.15; color:var(--acc); font-size:19px;
+  letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ks-mast[data-font="hand"]{ font-family:"Ma Shan Zheng","Xingkai SC","STXingkai","Kaiti SC",cursive; font-size:21px; }
+.ks-mast[data-font="latin"]{ font-family:Georgia,"Playfair Display","Times New Roman",serif; font-style:italic; letter-spacing:.06em; }
+.ks-mast[data-font="latin-cap"]{ font-family:Georgia,"Playfair Display","Times New Roman",serif; font-style:normal; letter-spacing:.08em; }
+.ks-mast-sub{ display:block; font-family:Georgia,serif; font-style:italic; font-size:8.5px;
+  letter-spacing:.24em; color:#7a7263; margin-top:2px; }
+.ks-photo{ position:relative; display:block; aspect-ratio:4/4.6; overflow:hidden; background:#111; }
+.ks-photo img{ width:100%; height:100%; object-fit:cover; }
+.ks-photo::after{ content:""; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(115deg, transparent 42%, rgba(255,255,255,var(--shine,0)) 50%, transparent 58%); }
+.ks-lines{ padding:8px 10px 6px; font-size:10.5px; line-height:1.5; min-height:44px;
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.ks-lines::before{ content:"「"; color:var(--acc); font-weight:900; }
+.ks-lines::after{ content:"」"; color:var(--acc); font-weight:900; }
+.ks-cover-foot{ display:flex; align-items:center; justify-content:space-between;
+  padding:7px 10px 9px; border-top:1px solid rgba(0,0,0,.1); }
+.ks-vol{ font-family:Georgia,serif; font-weight:700; font-size:11px; letter-spacing:.05em; color:var(--acc); }
+.ks-bar{ width:34px; height:14px; opacity:.85; background:
+  linear-gradient(90deg,#1c1a15 0 2px,transparent 2px 4px,#1c1a15 4px 7px,transparent 7px 9px,#1c1a15 9px 10px,transparent 10px 13px,#1c1a15 13px 16px,transparent 16px 18px,#1c1a15 18px 19px,transparent 19px 22px,#1c1a15 22px 25px,transparent 25px 27px,#1c1a15 27px 28px,transparent 28px 31px,#1c1a15 31px 34px); }
+.ks-stamp{ font-size:9px; letter-spacing:.18em; color:#7a7263;
+  border:1px solid rgba(122,114,99,.6); border-radius:3px; padding:2px 5px; }
+.ks-tag{ position:absolute; top:44px; left:-6px; z-index:1;
+  background:var(--acc); color:#fff; font-size:10px; font-weight:700; letter-spacing:.12em;
+  padding:3px 9px 3px 12px; border-radius:2px 6px 6px 2px; box-shadow:2px 3px 8px rgba(0,0,0,.35); }
+.ks-burst{ position:absolute; top:-10px; right:-8px; z-index:1;
+  background:#c8452c; color:#fff; font-size:10px; font-weight:900; line-height:1.3;
+  width:58px; height:58px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  text-align:center; transform:rotate(10deg); box-shadow:0 6px 14px rgba(0,0,0,.4); }
+
+.ks-footer{ padding:12px 30px 0; font-size:10.5px; color:#a89f8d; letter-spacing:.12em;
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+
+@media (max-width:640px){
+  .ks-spread{ grid-template-columns:1fr; }
+  .ks-page.left{ border-radius:10px 10px 3px 3px; box-shadow:none; }
+  .ks-page.right{ border-radius:3px 3px 10px 10px; box-shadow:none; }
+  .ks-wall{ padding:18px 18px 30px; gap:24px 14px; }
+  .ks-wallhead{ padding:16px 18px 4px; }
+}
+</style>
+</head>
+<body>
+<div id="kiosk">
+  <a class="ks-back" href="/">← 回相册</a>
+  <div class="ks-awning-stripe" role="presentation">
+    <div class="ks-sign">
+      <b>PWALL 报刊亭</b>
+      <i>THE BLOGGER KIOSK</i>
+    </div>
+  </div>
+
+  <div class="ks-ticker" aria-label="到货快讯">
+    <div class="ks-ticker-track" id="ks-ticker"></div>
+  </div>
+
+  <div class="ks-counter" id="ks-counter">
+    <p class="ks-counter-label">专栏内页 · AUTHOR SPREAD</p>
+    <div id="ks-counter-body">
+      <div class="ks-counter-empty">点击墙上任意一本杂志，翻开它的专栏内页</div>
+    </div>
+  </div>
+
+  <div class="ks-wallhead">
+    <h2>本期书架</h2>
+    <small id="ks-shelf-meta">按最近一期到货排序</small>
+  </div>
+  <div class="ks-wall" id="ks-wall" aria-live="polite"></div>
+
+  <div class="ks-footer">
+    <span>每位博主一本「杂志」——期数即发帖数，好评即保留数</span>
+    <span>签名来自平台简介缓存，点开内页自动补拉</span>
+  </div>
+</div>
+<script type="module" src="/static/kiosk.js?v={{ v }}"></script>
+</body>
+</html>

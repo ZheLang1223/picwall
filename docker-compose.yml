@@ -1,0 +1,32 @@
+# Picwall — 微博分组图片墙
+# 每天定时抓配置分组的带图微博，网页相册里「保留/删除」筛选
+# 启动: docker compose up -d   网页: http://localhost:8081   数据都在 ./data
+# 注意: 改 .env 后要 up -d 重建容器才生效（restart 不会重读 .env），即根目录 make picwall
+
+services:
+  picwall:
+    build: .
+    image: picwall:latest
+    container_name: picwall
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8082" # 本机直接进入，禁止通过局域网访问这个入口
+      - "8082:8080"           # 局域网设备配对后访问
+    environment:
+      TZ: Asia/Shanghai
+      WB_COOKIE: ${WB_COOKIE:-}   # 从同目录 .env 读取；网页「Cookie」按钮保存的优先
+      CRAWL_TIME: "09:30"         # 每日抓取时刻 HH:MM（东八区）
+      CRAWL_MAX_PAGES: "2"        # 日常每分组最多翻几页
+      CRAWL_BACKFILL_DAYS: "30"   # 新分组首次抓取自动回补多少天
+      CRAWL_BACKFILL_MAX_PAGES: "100"   # 回补翻页硬上限（每页约 20 条）
+      PURGE_DAYS: ${PURGE_DAYS:-3}   # 「已删除」多少天后硬删（默认 3；批注帖豁免）
+      X_CRAWL_INTERVAL_HOURS: ${X_CRAWL_INTERVAL_HOURS:-2}   # X 定时抓取间隔小时（默认 2，0=关闭）
+      PICWALL_LAN_IP: ${PICWALL_LAN_IP:-}   # 宿主局域网 IP，make 启动时探测注入（扫码地址用）
+      PICWALL_ALLOWED_HOSTS: ${PICWALL_ALLOWED_HOSTS:-}   # 额外允许的访问主机名；默认仅本机及当前 LAN IP
+      PWALL_PAIR_CODE: ${PWALL_PAIR_CODE:-}   # 固定设备配对码（.env 配置）：长期有效、可重复使用
+      PWALL_PAIR_ROLE: ${PWALL_PAIR_ROLE:-editor}   # 固定配对码换得的设备角色
+      X_PROXY_URL: ${X_PROXY_URL:-}   # X 抓取专用代理（x.com/twimg 被墙时配 http://host.docker.internal:7897）；微博不受影响
+      PICWALL_MAX_IMAGE_PIXELS: ${PICWALL_MAX_IMAGE_PIXELS:-}   # 单图像素上限（解码保护），默认 100000000
+      PICWALL_MAX_VIDEO_BYTES: ${PICWALL_MAX_VIDEO_BYTES:-}   # 单个视频体积上限，默认 536870912（512 MiB）
+    volumes:
+      - ./data:/app/data

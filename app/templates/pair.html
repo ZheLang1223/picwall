@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PWALL · 设备配对</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+</head>
+<body>
+  <main class="pair-page">
+    <h1>连接 PWALL</h1>
+    <p>电脑端获取配对码</p>
+    <form id="pair-form">
+      <label for="pair-name">设备名称</label>
+      <input id="pair-name" maxlength="60" autocomplete="off" placeholder="如：我的手机">
+      <label for="pair-code">配对码</label>
+      <input id="pair-code" required maxlength="64" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="粘贴即可，横线可省略">
+      <button class="tbtn primary" type="submit">连接</button>
+      <p id="pair-error" role="status" aria-live="polite"></p>
+    </form>
+  </main>
+  <script type="module" src="/static/pair.js?v={{ v }}"></script>
+</body>
+</html>
