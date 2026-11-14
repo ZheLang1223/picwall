@@ -5,6 +5,10 @@
 
 COMPOSE := docker compose
 PY := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python3; fi)
+# 宿主侧工具必须显式指定数据目录：默认会落 ~/Library/Application Support/picwall（config.py
+# _default_data_dir），打出一份与真实相册无关的空快照；同时 runtime.delegate 靠它与容器挂载
+# 对齐来判定「可委派进容器」。容器内不需要（compose 已挂 ./data:/app/data）。
+export PICWALL_DATA_DIR := $(CURDIR)/data
 
 .PHONY: picwall picwall-stop picwall-logs picwall-test picwall-preview picwall-benchmark \
         picwall-backup picwall-restore-test picwall-health picwall-repair picwall-cloud \
