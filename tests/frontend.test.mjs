@@ -1750,3 +1750,11 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('关闭详情焦点归还墙卡：closeDetail 关闭后把键盘焦点还给当前查看的卡片', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const body = appSrc.slice(appSrc.indexOf('function closeDetail()'), appSrc.indexOf('async function refreshDetail'));
+  assert.ok(body.includes('CSS.escape(sid)'), '墙卡选择器应对 sid 做 CSS.escape 转义');
+  assert.ok(body.includes('focus({preventScroll:true})'), '焦点应回到墙上对应卡片且不滚动页面');
+});

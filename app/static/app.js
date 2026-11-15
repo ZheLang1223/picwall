@@ -1301,11 +1301,18 @@ function closeDetail() {
   $('#triage-progress').hidden = true;
   document.body.classList.remove('has-detail');
   animatedHide($('#detail'));
+  const sid = detailSid;
+  const hadFocus = $('#detail').contains(document.activeElement) || document.activeElement === document.body;
   detailSid = null;
   detailNextSid = null;
   // 大图还开着（含正在 140ms 淡出）时不能解锁页面滚动，否则背景会跟着滚
   const lb = $('#lightbox');
   if (lb.hidden || lb.classList.contains('closing')) document.body.style.overflow = '';
+  // 键盘关闭详情后焦点会随 #detail 隐藏而丢失，把它还给墙上当前查看的卡片
+  if (hadFocus && sid) {
+    const card = document.querySelector('#feed .card[data-sid="' + CSS.escape(sid) + '"]');
+    if (card) card.focus({preventScroll:true});
+  }
 }
 
 async function refreshDetail() {
