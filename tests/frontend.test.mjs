@@ -1762,4 +1762,13 @@ test('顶栏与批注关闭按钮均为 type=button', async () => {
   assert.ok(html.includes('<button type="button" id="btn-settings"'), '#btn-settings 应为 type=button');
   assert.ok(html.includes('<button type="button" id="f-reset"'), '#f-reset 应为 type=button');
   assert.ok(html.includes('<button type="button" id="notes-close"'), '#notes-close 应为 type=button');
+test('编年 V 键：按住不连切、弹窗打开不背后切换、浮层双向拦截', async()=>{
+ const fs=await import('node:fs/promises');
+ const tl=await fs.readFile(new URL('../app/static/timeline.js',import.meta.url),'utf8');
+ const bindKeys=tl.match(/function bindKeys\(\)[\s\S]*?\n  \}/);
+ assert.ok(bindKeys, 'bindKeys 应存在');
+ const src=bindKeys[0];
+ assert.ok(src.includes('e.repeat'), 'V 键应忽略按键自动重复（按住不连切）');
+ assert.ok(src.includes(".modal:not([hidden])"), '弹窗打开时 V 不应在背后切换布局');
+ assert.ok(src.includes('canSwitch && !canSwitch()'), '浮层打开时 V 应双向拦截并提示先退出浮层');
 });
