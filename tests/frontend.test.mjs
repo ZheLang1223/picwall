@@ -334,6 +334,10 @@ test('悬浮胶囊交互：左囊 120ms hover-intent 无重排覆盖层、右上
  // 右上更多菜单 ⋯：aria-expanded 同步 + 点击/移出收起
  assert.ok(html.includes('aria-controls="tt-more-menu"') && html.includes('id="tt-more-menu"'), '右上更多钮应关联 #tt-more-menu');
  assert.ok(html.includes('aria-expanded="false"') && railSrc.includes('function closeMore()'), '更多菜单应具备受控开合状态机');
+ // 悬停指针点击「⋯」只展开不翻转关闭；Esc 焦点回归；Tab 移出自动收起
+ assert.ok(railSrc.includes('if (hoverable()) setMoreOpen(true)') && railSrc.includes('else setMoreOpen(!isMoreOpen())'), '悬停指针下点击「⋯」只展开不翻转关闭，触屏保留点按开合');
+ assert.ok(railSrc.includes('moreWrap.contains(document.activeElement)') && railSrc.includes('moreBtn.focus()'), 'Esc 关闭更多菜单后焦点应回到按钮');
+ assert.ok(railSrc.includes("moreWrap.addEventListener('focusout'") && railSrc.includes('!moreWrap.contains(e.relatedTarget)'), '键盘 Tab 移出更多菜单应自动收起');
  // 搜索：图标激活态 = 词在生效；tip 显当前词；点击直通聚光灯大搜索栏
  assert.ok(railSrc.includes("searchBtn.classList.toggle('on', !!q)"), '搜索词在生效应点亮右上搜索图标');
  assert.ok(railSrc.includes("const t = q ? `搜索：${q}` : '搜索'"), '搜索 tip 应显当前搜索词');
