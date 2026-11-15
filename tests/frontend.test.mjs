@@ -1782,4 +1782,10 @@ test('报刊亭合上杂志后焦点回到打开的那本封面', async () => {
   assert.ok(kiosk.includes("e.key === 'Escape' && S.open >= 0 && !e.defaultPrevented")
     && kiosk.includes('closeSpread({ refocus: true })'),
     'Escape 关闭应强制回焦到封面且不吞已阻止的默认行为');
+test('悬浮球菜单键盘可达性：菜单项 type=button、Esc 关闭焦点回球、Tab 移出自动收起', async () => {
+  const fs = await import('node:fs/promises');
+  const fabSrc = await fs.readFile(new URL('../app/static/fab.js', import.meta.url), 'utf8');
+  assert.ok(fabSrc.includes("b.type = 'button'"), '生成的菜单项按钮应显式 type=button');
+  assert.ok(fabSrc.includes('btn.focus()'), 'Esc 关闭后焦点应还给悬浮球按钮（不掉回 body）');
+  assert.ok(fabSrc.includes("addEventListener('focusout'"), '键盘 Tab 移出打开的菜单应自动收起');
 });

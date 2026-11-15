@@ -12,6 +12,7 @@ export function createFab({ $, items }) {
     menu.innerHTML = '';
     for (const item of items) {
       const b = document.createElement('button');
+      b.type = 'button';
       b.className = 'setrow';
       const label = typeof item.label === 'function' ? item.label() : item.label;
       b.innerHTML = item.icon || '';
@@ -112,7 +113,16 @@ export function createFab({ $, items }) {
     if (!menu.hidden && !e.target.closest('#fab')) close();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !menu.hidden) { e.stopPropagation(); close(); }
+    if (e.key === 'Escape' && !menu.hidden) {
+      e.stopPropagation();
+      const hadFocus = fab.contains(document.activeElement);
+      close();
+      if (hadFocus) btn.focus();   // 菜单藏了焦点会掉回 body：还给球按钮，键盘 Tab 不迷路
+    }
+  });
+  /* 键盘 Tab 移出即收：只认 relatedTarget 落在 #fab 之外；null（如点页面空白处失焦）不算移出，交给既有 document click */
+  fab.addEventListener('focusout', (e) => {
+    if (!menu.hidden && e.relatedTarget && !fab.contains(e.relatedTarget)) close();
   });
 
   return { setHidden: (v) => { fab.classList.toggle('fab-off', v); if (v) close(); } };
