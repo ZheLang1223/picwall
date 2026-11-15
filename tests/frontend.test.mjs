@@ -1750,3 +1750,16 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('报刊亭合上杂志后焦点回到打开的那本封面', async () => {
+  const fs = await import('node:fs/promises');
+  const kiosk = await fs.readFile(new URL('../app/static/kiosk.js', import.meta.url), 'utf8');
+  const start = kiosk.indexOf('function closeSpread');
+  assert.ok(start >= 0, 'closeSpread 应存在');
+  const fn = kiosk.slice(start, kiosk.indexOf('\n}', start));
+  assert.ok(fn.includes('.ks-cover[data-idx=') && fn.includes('.focus('),
+    'closeSpread 应在合上后把焦点移回对应 data-idx 的封面');
+  assert.ok(kiosk.includes("e.key === 'Escape' && S.open >= 0 && !e.defaultPrevented")
+    && kiosk.includes('closeSpread({ refocus: true })'),
+    'Escape 关闭应强制回焦到封面且不吞已阻止的默认行为');
+});

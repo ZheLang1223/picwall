@@ -526,16 +526,22 @@ function openSpread(i) {
   $('#ks-counter').scrollIntoView({ behavior: REDUCE ? 'auto' : 'smooth', block: 'nearest' });
 }
 
-function closeSpread() {
+function closeSpread(opts = {}) {
+  const prev = S.open;
+  const hadFocus = !!document.activeElement && $('#ks-counter-body')?.contains(document.activeElement);
   S.open = -1;
   S.confirmUnfollowKey = '';
   $('#ks-counter-body').innerHTML =
     '<div class="ks-counter-empty">点击墙上任意一本杂志，翻开它的专栏内页与管理</div>';
+  if (hadFocus || opts.refocus) {
+    const cover = document.querySelector('.ks-cover[data-idx="' + prev + '"]');
+    if (cover) cover.focus({ preventScroll: false });
+  }
 }
 
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && S.open >= 0) closeSpread();
+    if (e.key === 'Escape' && S.open >= 0 && !e.defaultPrevented) closeSpread({ refocus: true });
   });
 
   const searchInp = $('#ks-search');
