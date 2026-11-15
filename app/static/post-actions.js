@@ -41,12 +41,42 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
     } else ln?.remove();
   }
 
+  function removePostImages(sid) {
+    if (!Array.isArray(S.images) || !S.images.length) return;
+    const start = S.images.findIndex(x => x.p.sid === sid);
+    if (start < 0) return;
+    let end = start + 1;
+    while (end < S.images.length && S.images[end].p.sid === sid) end += 1;
+    S.images.splice(start, end - start);
+    if (S.images.some(x => x.p.sid === sid)) {
+      S.images = S.images.filter(x => x.p.sid !== sid);
+    }
+  }
+
+  function insertPostImages(p, postIdx) {
+    if (!Array.isArray(S.images)) S.images = [];
+    removePostImages(p.sid);
+    const pics = p.pics || [];
+    if (!pics.length) return;
+    let imgAt = -1;
+    const nextP = S.posts[postIdx + 1];
+    if (nextP) imgAt = S.images.findIndex(x => x.p.sid === nextP.sid);
+    if (imgAt < 0) {
+      imgAt = 0;
+      for (let k = 0; k < postIdx; k += 1) imgAt += (S.posts[k].pics || []).length;
+      imgAt = Math.min(imgAt, S.images.length);
+    }
+    const entries = pics.map(pc => ({ p, pc, url: `/media/${pc.file}` }));
+    S.images.splice(imgAt, 0, ...entries);
+  }
+
   function syncPost(p) {
     const i = S.posts.findIndex(x => x.sid === p.sid);
     const oldEl = feed.querySelector(`.card[data-sid="${CSS.escape(p.sid)}"]`);
     if (!matchesView(p, S)) {
       oldEl?.remove();
       if (i >= 0) { S.posts.splice(i, 1); S.total = Math.max(0, S.total - 1); }
+      removePostImages(p.sid);
     } else if (oldEl && i >= 0 && S.sort !== 'keep_count') {
       // 视图归属与排序位次都不变（时间序/随机序下的点赞 ±1 / 状态翻转）：就地修补，零重建
       patchCard(oldEl, p);
@@ -62,8 +92,9 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
       insertCard(p,
         feed.querySelector(`.card[data-sid="${CSS.escape(S.posts[at+1]?.sid || '')}"]`),
         feed.querySelector(`.card[data-sid="${CSS.escape(S.posts[at-1]?.sid || '')}"]`));
+      insertPostImages(p, at);
     }
-    rebuildImages(); updateMore();
+    updateMore();
   }
   function mark(sid, status, opts = {}) {
     if (readOnly()) return null;

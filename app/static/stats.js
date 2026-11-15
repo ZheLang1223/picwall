@@ -6,8 +6,12 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/* 头像路径映射：与相册 avatarSrc 同规则（avatars/ 相对路径走 /media/） */
-const avatarSrc = (url) => url && url.startsWith('avatars/') ? '/media/' + url : url;
+/* 头像路径映射：与相册 avatarSrc 同规则（avatars/ 相对路径走 /media/，外部仅放行 http(s)） */
+const avatarSrc = (url) => {
+  if (!url) return url;
+  if (url.startsWith('avatars/')) return '/media/' + url;
+  return /^https?:\/\//i.test(url) ? url : '';
+};
 
 function tile(n, label, cls = '') {
   return `<div class="st-tile ${cls}"><b>${esc(n)}</b><span>${esc(label)}</span></div>`;
@@ -59,12 +63,13 @@ function paintAuthors(rows) {
   const box = $('#st-authors');
   if (!rows.length) { box.innerHTML = '<div class="st-empty" style="grid-column:1/-1">还没有保留记录。</div>'; return; }
   box.innerHTML = rows.map((a, i) => {
-    const av = a.avatar && avatarSrc(a.avatar)
-      ? `<img src="${esc(avatarSrc(a.avatar))}" alt="" loading="lazy">`
+    const avUrl = avatarSrc(a.avatar);
+    const av = avUrl
+      ? `<img src="${esc(avUrl)}" alt="" loading="lazy" decoding="async">`
       : `<span class="av-ph">${esc((a.author || '微')[0])}</span>`;
     return `<div class="st-author"><span class="rank">${i + 1}</span>${av}` +
       `<span class="nm"><b>${esc(a.author)}</b>` +
-      `<span>保留 ${a.kept} · 收藏 ${a.favorites} · 共 ${a.n} 帖</span></span></div>`;
+      `<span>保留 ${esc(a.kept)} · 收藏 ${esc(a.favorites)} · 共 ${esc(a.n)} 帖</span></span></div>`;
   }).join('');
 }
 
@@ -72,7 +77,7 @@ function paintTop(rows) {
   const box = $('#st-top');
   if (!rows.length) { box.innerHTML = '<div class="st-empty" style="grid-column:1/-1">还没有点赞记录。</div>'; return; }
   box.innerHTML = rows.map((p) => {
-    const media = p.thumb ? `<img src="/media/${esc(p.thumb)}" alt="" loading="lazy">`
+    const media = p.thumb ? `<img src="/media/${esc(p.thumb)}" alt="" loading="lazy" decoding="async">`
       : `<div class="ph">无图</div>`;
     return `<div class="st-top">${media}<span class="kc">×${esc(p.keep_count || 1)}</span>` +
       `<span class="who">${esc(p.author)}</span></div>`;

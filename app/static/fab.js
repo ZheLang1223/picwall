@@ -14,7 +14,10 @@ export function createFab({ $, items }) {
       const b = document.createElement('button');
       b.className = 'setrow';
       const label = typeof item.label === 'function' ? item.label() : item.label;
-      b.innerHTML = `${item.icon}<span>${label}</span>`;
+      b.innerHTML = item.icon || '';
+      const span = document.createElement('span');
+      span.textContent = label ?? '';
+      b.appendChild(span);
       b.onclick = (e) => { e.stopPropagation(); close(); item.run(); };
       menu.appendChild(b);
     }
@@ -43,9 +46,9 @@ export function createFab({ $, items }) {
   /* 拖动：pointer 事件统一鼠标/触屏，位移 >6px 算拖动并吞掉尾随 click（点按开合不受影响）。
      位置记 localStorage（pw_fab_pos），窗口缩放时夹回屏内；球在上半屏时菜单向下展开。 */
   const POS_KEY = 'pw_fab_pos';
-  let drag = null, suppressClick = false;
-  const clamp = (x, y) => {
-    const maxX = window.innerWidth - fab.offsetWidth, maxY = window.innerHeight - fab.offsetHeight;
+  let drag = null, suppressClick = false, resizeRaf = 0;
+  const clamp = (x, y, fw = fab.offsetWidth, fh = fab.offsetHeight) => {
+    const maxX = window.innerWidth - fw, maxY = window.innerHeight - fh;
     return { x: Math.min(Math.max(x, 8), Math.max(8, maxX - 8)),
              y: Math.min(Math.max(y, 8), Math.max(8, maxY - 8)) };
   };
@@ -62,16 +65,20 @@ export function createFab({ $, items }) {
     if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) applyPos(clamp(p.x, p.y));
   } catch {}
   window.addEventListener('resize', () => {
-    if (!fab.style.left) return;
-    const fr = fab.getBoundingClientRect();
-    applyPos(clamp(fr.left, fr.top));
-    if (!menu.hidden) setMenuSide();
+    if (!fab.style.left || resizeRaf) return;
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
+      const fr = fab.getBoundingClientRect();
+      applyPos(clamp(fr.left, fr.top, fr.width || fab.offsetWidth, fr.height || fab.offsetHeight));
+      if (!menu.hidden) setMenuSide();
+    });
   });
   btn.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const fr = fab.getBoundingClientRect();
     drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY,
-             ox: e.clientX - fr.left, oy: e.clientY - fr.top, moved: false };
+             ox: e.clientX - fr.left, oy: e.clientY - fr.top,
+             fw: fab.offsetWidth, fh: fab.offsetHeight, moved: false };
     try { btn.setPointerCapture(e.pointerId); } catch {}   // 非活跃 pointer（如合成事件）无捕获也可拖
   });
   btn.addEventListener('pointermove', (e) => {
@@ -80,7 +87,7 @@ export function createFab({ $, items }) {
     drag.moved = true;
     close();   // 拖动即收菜单，悬浮重开计时也一并清掉
     e.preventDefault();
-    applyPos(clamp(e.clientX - drag.ox, e.clientY - drag.oy));
+    applyPos(clamp(e.clientX - drag.ox, e.clientY - drag.oy, drag.fw, drag.fh));
   });
   const endDrag = (e) => {
     if (!drag || e.pointerId !== drag.id) return;

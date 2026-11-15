@@ -94,9 +94,14 @@ const shell = document.querySelector('.settings-shell');
 function setHeadTitle(name) {   // 手机推入面板时标题栏显示分区名，其余场景恒为「设置」
   $('#settings-title').textContent = name || '设置';
 }
+const ADMIN_ONLY_PANES = new Set(['groups', 'conn', 'crawl', 'purge']);
+function isPaneVisible(id) {
+  const role = document.documentElement.dataset.deviceRole;
+  return !(role && role !== 'admin' && ADMIN_ONLY_PANES.has(id));
+}
 function firstVisiblePane() {
   for (const b of document.querySelectorAll('.snav-item[data-pane]'))
-    if (b.offsetParent !== null) return b.dataset.pane;   // 被设备权限 display:none 的项量不到位置
+    if (isPaneVisible(b.dataset.pane)) return b.dataset.pane;
   return 'appearance';
 }
 function goRoot() {   // 返回根菜单：面板收起、分区态清空（含分区级定时器）
@@ -111,7 +116,7 @@ function goRoot() {   // 返回根菜单：面板收起、分区态清空（含�
 }
 function activate(id) {
   const item = document.querySelector(`.snav-item[data-pane="${id}"]`);
-  if (!item || item.offsetParent === null) {   // 无此分区或被设备权限隐藏：落到首个可见分区
+  if (!item || !isPaneVisible(id)) {   // 无此分区或被设备权限隐藏：落到首个可见分区
     const fallback = firstVisiblePane();
     if (id !== fallback) return activate(fallback);
     return;
@@ -160,6 +165,66 @@ $('#snav').addEventListener('click', (e) => {
 
 /* 展开态记忆：本次会话内重渲不收起（组行内嵌成员管理区） */
 const openXGroups = new Set();
+let lastMembersByGroup = {};
+
+function membersRowHtml(gid, byGroup = lastMembersByGroup) {
+  const list = byGroup[gid] || [];
+  const chips = list.map((m) =>
+    `<span class="gm-chip">${esc(m.name)}<button data-gmrm="${esc(gid)}|${esc(m.member_id)}" aria-label="移出 ${esc(m.name)}">✕</button></span>`).join('');
+  return `<div class="gm-row" data-gmrow="${esc(gid)}">
+    <div class="gm-chips">${chips || '<span class="hint">还没有成员，输入 @handle 添加</span>'}</div>
+    <div class="gm-add"><input placeholder="添加成员：@handle" maxlength="16" autocomplete="off" spellcheck="false"
+      data-gmadd="${esc(gid)}"><button data-gmok="${esc(gid)}">加入</button></div>
+    <div class="hint gm-hint">成员须是上方已添加的 X 用户；加入即回填历史帖。</div>
+  </div>`;
+}
+
+function bindMembersRow(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('[data-gmrm]').forEach((b) => b.onclick = async () => {
+    const [gid, mid] = b.dataset.gmrm.split('|');
+    try {
+      const r = await api(`/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(mid)}`, 'DELETE');
+      toast(r.msg || '已移出');
+      renderMyGroups();
+    } catch (e) { toast(e.message); }
+  });
+  const addMember = async (gid) => {
+    const inp = scope.querySelector(`[data-gmadd="${CSS.escape(gid)}"]`);
+    const v = inp.value.trim().replace(/^@/, '');
+    if (!v) { inp.focus(); return; }
+    try {
+      const r = await api(`/api/groups/${encodeURIComponent(gid)}/members`, 'POST', { member: v });
+      toast(r.msg || '已加入');
+      renderMyGroups();
+    } catch (e) { toast(e.message); }
+  };
+  scope.querySelectorAll('[data-gmok]').forEach((b) => b.onclick = () => addMember(b.dataset.gmok));
+  scope.querySelectorAll('[data-gmadd]').forEach((inp) => {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addMember(inp.dataset.gmadd); }
+    });
+  });
+}
+
+function setXGroupOpen(box, id, open) {
+  const row = box.querySelector(`.grow[data-id="${CSS.escape(id)}"]`);
+  if (!row) return;
+  open ? openXGroups.add(id) : openXGroups.delete(id);
+  const toggleBtn = row.querySelector('[data-gmtoggle]');
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', String(open));
+    toggleBtn.textContent = open ? '收起' : '成员';
+  }
+  const next = row.nextElementSibling;
+  const hasRow = next && next.classList.contains('gm-row') && next.dataset.gmrow === id;
+  if (!open) {
+    if (hasRow) next.remove();
+  } else if (!hasRow) {
+    row.insertAdjacentHTML('afterend', membersRowHtml(id));
+    bindMembersRow(row.nextElementSibling);
+  }
+}
 
 async function renderMyGroups() {
   const [st, mm] = await Promise.all([
@@ -167,6 +232,7 @@ async function renderMyGroups() {
     api('/api/group-members').catch(() => ({ by_group: {}, members: [] })),
   ]);
   const byGroup = mm.by_group || {};
+  lastMembersByGroup = byGroup;
   const groupsOf = (memberId) => (mm.members || [])
     .filter((m) => m.member_id === memberId)
     .map((m) => m.list_id);
@@ -182,62 +248,27 @@ async function renderMyGroups() {
           return `<button class="gm-badge" data-goto="${esc(gid)}" title="分组：${esc(grp?.name || gid)}">${esc(grp?.name || gid)}</button>`;
         }).join('') : '';
     const membersRow = isXg && openXGroups.has(g.list_id)
-      ? (() => {
-          const list = byGroup[g.list_id] || [];
-          const chips = list.map((m) =>
-            `<span class="gm-chip">${esc(m.name)}<button data-gmrm="${esc(g.list_id)}|${esc(m.member_id)}" aria-label="移出 ${esc(m.name)}">✕</button></span>`).join('');
-          return `<div class="gm-row">
-            <div class="gm-chips">${chips || '<span class="hint">还没有成员，输入 @handle 添加</span>'}</div>
-            <div class="gm-add"><input placeholder="添加成员：@handle" maxlength="16" autocomplete="off" spellcheck="false"
-              data-gmadd="${esc(g.list_id)}"><button data-gmok="${esc(g.list_id)}">加入</button></div>
-            <div class="hint gm-hint">成员须是上方已添加的 X 用户；加入即回填历史帖。</div>
-          </div>`;
-        })() : '';
+      ? membersRowHtml(g.list_id, byGroup) : '';
     return `
-    <div class="grow${isXg ? ' is-xg' : ''}" data-id="${g.list_id}">
+    <div class="grow${isXg ? ' is-xg' : ''}" data-id="${esc(g.list_id)}">
       <span class="gname">${prefix}${esc(g.name)}${badges}</span>
       <span class="gstat">${g.active
         ? `待 ${g.pending || 0} · 留 ${g.kept || 0} · 删 ${g.discarded || 0}`
         : '已移除'}</span>
-      ${g.active ? `${isXg ? `<button data-gmtoggle="${g.list_id}" aria-expanded="${openXGroups.has(g.list_id)}">${openXGroups.has(g.list_id) ? '收起' : '成员'}</button>` : ''}<button data-bf="${g.list_id}" title="回补近期内容">回补</button><button data-rm="${g.list_id}">移除</button>` : ''}
+      ${g.active ? `${isXg ? `<button data-gmtoggle="${esc(g.list_id)}" aria-expanded="${openXGroups.has(g.list_id)}">${openXGroups.has(g.list_id) ? '收起' : '成员'}</button>` : ''}<button data-bf="${esc(g.list_id)}" title="回补近期内容">回补</button><button data-rm="${esc(g.list_id)}">移除</button>` : ''}
     </div>${membersRow}`;
   }).join('') ||
     '<div class="hint" style="padding:6px 2px">还没有分组，点下方「拉取分组」从微博账号导入。</div>';
   box.querySelectorAll('[data-gmtoggle]').forEach((b) => b.onclick = () => {
     const id = b.dataset.gmtoggle;
-    openXGroups.has(id) ? openXGroups.delete(id) : openXGroups.add(id);
-    renderMyGroups();
+    setXGroupOpen(box, id, !openXGroups.has(id));
   });
   box.querySelectorAll('[data-goto]').forEach((b) => b.onclick = () => {
-    const row = box.querySelector(`.grow[data-id="${CSS.escape(b.dataset.goto)}"]`);
-    openXGroups.add(b.dataset.goto);
-    renderMyGroups().then(() => box.querySelector(
-      `.grow[data-id="${CSS.escape(b.dataset.goto)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    const id = b.dataset.goto;
+    setXGroupOpen(box, id, true);
+    box.querySelector(`.grow[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
-  box.querySelectorAll('[data-gmrm]').forEach((b) => b.onclick = async () => {
-    const [gid, mid] = b.dataset.gmrm.split('|');
-    try {
-      const r = await api(`/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(mid)}`, 'DELETE');
-      toast(r.msg || '已移出');
-      renderMyGroups();
-    } catch (e) { toast(e.message); }
-  });
-  const addMember = async (gid) => {
-    const inp = box.querySelector(`[data-gmadd="${CSS.escape(gid)}"]`);
-    const v = inp.value.trim().replace(/^@/, '');
-    if (!v) { inp.focus(); return; }
-    try {
-      const r = await api(`/api/groups/${encodeURIComponent(gid)}/members`, 'POST', { member: v });
-      toast(r.msg || '已加入');
-      renderMyGroups();
-    } catch (e) { toast(e.message); }
-  };
-  box.querySelectorAll('[data-gmok]').forEach((b) => b.onclick = () => addMember(b.dataset.gmok));
-  box.querySelectorAll('[data-gmadd]').forEach((inp) => {
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); addMember(inp.dataset.gmadd); }
-    });
-  });
+  bindMembersRow(box);
   box.querySelectorAll('[data-bf]').forEach((b) => b.onclick = async () => {
     try {
       b.disabled = true;
@@ -249,7 +280,7 @@ async function renderMyGroups() {
   });
   box.querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
     try {
-      await api('/api/groups/' + b.dataset.rm, 'DELETE');
+      await api('/api/groups/' + encodeURIComponent(b.dataset.rm), 'DELETE');
       openXGroups.delete(b.dataset.rm);
       toast('已移除（已抓的图保留在库里）');
       renderMyGroups();

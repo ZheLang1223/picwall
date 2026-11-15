@@ -19,7 +19,7 @@ export function createNotes({ $, api, toast, esc, commentBodyHTML, fmtCommentTim
         const row = document.createElement('button');
         row.className = 'note-row';
         row.innerHTML = `
-          ${it.thumb ? `<img class="note-thumb" src="/media/${esc(it.thumb)}" alt="" loading="lazy">`
+          ${it.thumb ? `<img class="note-thumb" src="/media/${esc(it.thumb)}" alt="" loading="lazy" decoding="async">`
                      : '<span class="note-thumb"></span>'}
           <span class="note-main"><span class="note-body">${commentBodyHTML(it.body)}</span>
             <span class="note-meta">${esc(it.author)} · ${fmtCommentTime(it.created_at)}</span></span>`;

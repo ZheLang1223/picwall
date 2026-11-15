@@ -74,6 +74,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     render();
     cancelHide($('#detail'));
     $('#detail').hidden = false;
+    document.body.classList.add('has-detail');
     $('#detail').scrollTop = 0;
     document.body.style.overflow = 'hidden';
     $('#detail .detail-card.is-front').focus({ preventScroll: true });
@@ -93,6 +94,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     S.images = R.stashImages || [];
     delete $('#detail').dataset.mode;
     $('#review-progress').hidden = true;
+    document.body.classList.remove('has-detail');
     animatedHide($('#detail'));
     setDetailSid(null);
     const lb = $('#lightbox');

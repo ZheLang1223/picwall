@@ -1,13 +1,43 @@
+import { esc } from './view-state.js';
+
 /* 大图浏览：默认只看当前帖（锚定 sid/file，列表重排后也不会串到其他帖）；
    crossPosts() 为真（纯图模式）时按全局图流跨帖——本帖端走到头即接下一帖首图/上一帖末图。 */
 export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts}) {
+  const FILM_RADIUS = 20, FILM_EDGE = 5;
   let anchor = null, scopeSid = null, returnFocus = null, imageClickTimer = 0, lastTouchAt = 0;
+  let lbSeq = 0, preloadTimer = 0, activePreloads = [];
+  let filmKey = null, filmStart = 0, filmEnd = 0, activeThumb = null;
   const crossing = () => !!(crossPosts && crossPosts());
+  function cancelPreloads() {
+    ++lbSeq;
+    if (preloadTimer) { clearTimeout(preloadTimer); preloadTimer = 0; }
+    for (const im of activePreloads) {
+      im.onload = im.onerror = null;
+      if (!im.complete) im.src = '';
+    }
+    activePreloads = [];
+  }
   function getIndex() {
     return anchor ? S.images.findIndex(x => x.p.sid === anchor.sid && x.pc.file === anchor.file) : -1;
   }
+  function buildPool(currIndex, target) {
+    if (crossing()) return { pool: S.images, pos: currIndex, indices: null };
+    const pool = [], indices = [];
+    let pos = -1;
+    const curFile = target?.pc.file ?? S.images[currIndex]?.pc.file;
+    for (let idx = 0; idx < S.images.length; idx++) {
+      const item = S.images[idx];
+      if (item.p.sid === scopeSid) {
+        if (pos < 0 && item.pc.file === curFile && item.p.sid === anchor.sid) pos = pool.length;
+        pool.push(item);
+        indices.push(idx);
+      }
+    }
+    return { pool, pos, indices };
+  }
   function openLB(i,sid) {
     const image=S.images[i]; if (!image) return;
+    cancelPreloads();
     scopeSid=sid || image.p.sid;
     anchor={sid:image.p.sid,file:image.pc.file};
     returnFocus=document.activeElement;
@@ -18,15 +48,19 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
     target.setAttribute('tabindex','-1');target.focus();
   }
   function closeLB() {
+    cancelPreloads();
     clearTimeout(imageClickTimer); imageClickTimer = 0;
     animatedHide($('#lightbox'));
     document.body.style.overflow=$('#detail').hidden ? '' : 'hidden';
-    scopeSid=null;anchor=null;filmKey=null;
+    scopeSid=null;anchor=null;filmKey=null;filmStart=0;filmEnd=0;activeThumb=null;
     returnFocus?.focus();returnFocus=null;
   }
   function renderLB() {
     const i=getIndex(); if (i<0) {closeLB();return;}
-    const {p,pc}=S.images[i]; const img=$('#lb-img'),stage=$('.lb-stage');
+    cancelPreloads();
+    const seq = lbSeq;
+    const item = S.images[i];
+    const {p,pc}=item; const img=$('#lb-img'),stage=$('.lb-stage');
     const vid=$('#lb-video'), isVideo = pc.kind === 'video';
     resetZoom();img.style.transform='';img.style.transformOrigin='';img.style.opacity='';
     img.alt=`${p.author} 的图片`;
@@ -47,11 +81,10 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
         img.hidden = false;
       }
     }
+    const { pool, pos, indices } = buildPool(i, item);
     if (isVideo) {
-      const pool0 = crossing() ? S.images : S.images.filter(x=>x.p.sid===scopeSid);
-      const pos0 = crossing() ? i : pool0.findIndex(x=>x.pc.file===pc.file);
-      $('#lb-prev').disabled=pos0<=0;$('#lb-next').disabled=pos0>=pool0.length-1;
-      renderFilm(pool0,pos0);
+      $('#lb-prev').disabled=pos<=0;$('#lb-next').disabled=pos>=pool.length-1;
+      renderFilm(pool,pos,indices);
       return;
     }
     // 长图（h/w>2）按宽适配 + 舞台原生竖滚：contain 下长图只是一条细线，读不了。
@@ -62,49 +95,103 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
     const src='/media/'+pc.file;
     if (img.getAttribute('src')!==src) {
       stage.classList.add('loading');
-      img.onload = () => { stage.classList.remove('loading');
+      img.onload = () => { if (seq !== lbSeq) return;
+        stage.classList.remove('loading');
         stage.classList.toggle('lb-long',
           img.naturalHeight / Math.max(1, img.naturalWidth) > 2); };
-      img.onerror = () => stage.classList.remove('loading');
+      img.onerror = () => { if (seq === lbSeq) stage.classList.remove('loading'); };
       img.src = src;
     }
-    const pool = crossing() ? S.images : S.images.filter(x=>x.p.sid===scopeSid);
-    const pos = crossing() ? i : pool.findIndex(x=>x.pc.file===pc.file);
     $('#lb-prev').disabled=pos<=0;$('#lb-next').disabled=pos>=pool.length-1;
-    renderFilm(pool,pos);
+    renderFilm(pool,pos,indices);
+    const urls = [];
     for (const delta of [-1,1]) {
-      const n=pool[pos+delta];if (!n) continue;
-      const preload=new Image();
-      preload.src = n.pc.kind === 'video' ? '/media/' + (n.pc.thumb || n.pc.file) : n.url;
-      preload.decode?.().catch(()=>{});
+      const n=pool[pos+delta]; if (!n) continue;
+      urls.push(n.pc.kind === 'video' ? '/media/' + (n.pc.thumb || n.pc.file) : n.url);
+    }
+    if (urls.length && typeof Image === 'function') {
+      preloadTimer = setTimeout(() => {
+        preloadTimer = 0;
+        if (seq !== lbSeq) return;
+        for (const u of urls) {
+          const preload = new Image();
+          activePreloads.push(preload);
+          preload.onload = () => {
+            if (seq !== lbSeq) return;
+            preload.decode?.().catch(() => {});
+          };
+          preload.onerror = () => {};
+          preload.src = u;
+          if (preload.complete && seq === lbSeq) preload.decode?.().catch(() => {});
+        }
+      }, 40);
     }
   }
 
-  /* 底部胶片缩略图轨道：池变（开图/跨帖/切作用域）才重建，其余只更新高亮与滚动位 */
-  let filmKey = null;
-  function renderFilm(pool,pos) {
+  /* 底部胶片缩略图轨道：仅渲染 pos ± 20 窗口（最多 41 张），步进仅直改前后两颗高亮 */
+  function filmSignature(pool, start, end) {
+    let sig = (crossing() ? 'cross' : scopeSid) + '|' + pool.length + '|' + start + '|' + end + '|'
+      + (pool[0]?.pc.file || '') + '|' + (pool[pool.length - 1]?.pc.file || '');
+    for (let k = start; k < end; k++) sig += '|' + pool[k].pc.file;
+    return sig;
+  }
+  function getThumbAt(film, pos) {
+    return film.children?.[pos - filmStart] || film.querySelector?.(`.lb-thumb[data-pos="${pos}"]`) || null;
+  }
+  function renderFilm(pool,pos,indices) {
     const film=$('#lb-film');
-    const key=pool.length+'|'+pool.map(x=>x.pc.file).join('|');
-    if (key!==filmKey) {
-      filmKey=key;
-      film.hidden=pool.length<=1;
-      const gmap=new Map(S.images.map((x,gi)=>[x.pc.file,gi]));
-      film.innerHTML=pool.map((x,k)=>{
-        const src='/media/'+(x.pc.thumb||x.pc.file);
-        return `<button class="lb-thumb${k===pos?' on':''}" data-i="${gmap.get(x.pc.file)}"`
-          + ` role="tab" aria-label="第 ${k+1} 张"><img src="${src}" alt="" loading="lazy" decoding="async"></button>`;
-      }).join('');
+    if (pool.length <= 1 || pos < 0) {
+      film.hidden = true;
+      if (filmKey !== null) {
+        filmKey = null; filmStart = 0; filmEnd = 0; activeThumb = null;
+        film.innerHTML = '';
+      }
+      return;
     }
-    film.querySelectorAll('.lb-thumb').forEach((b,k)=>{
-      b.classList.toggle('on',k===pos);
-      b.setAttribute('aria-selected',k===pos?'true':'false');
-    });
-    film.querySelector('.lb-thumb.on')?.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});
+    film.hidden = false;
+    const nearLeft = filmStart > 0 && pos < filmStart + FILM_EDGE;
+    const nearRight = filmEnd < pool.length && pos >= filmEnd - FILM_EDGE;
+    const outOfWindow = pos < filmStart || pos >= filmEnd;
+    let nextStart = filmStart, nextEnd = filmEnd;
+    if (filmKey === null || outOfWindow || nearLeft || nearRight) {
+      nextStart = Math.max(0, pos - FILM_RADIUS);
+      nextEnd = Math.min(pool.length, pos + FILM_RADIUS + 1);
+    }
+    const sig = filmSignature(pool, nextStart, nextEnd);
+    if (sig !== filmKey) {
+      filmKey = sig;
+      filmStart = nextStart;
+      filmEnd = nextEnd;
+      let html = '';
+      for (let k = filmStart; k < filmEnd; k++) {
+        const x = pool[k];
+        const gi = indices ? indices[k] : k;
+        const src = '/media/' + (x.pc.thumb || x.pc.file);
+        const on = k === pos;
+        html += `<button class="lb-thumb${on ? ' on' : ''}" data-i="${esc(gi)}" data-pos="${k}"`
+          + ` role="tab" aria-selected="${on ? 'true' : 'false'}" aria-label="第 ${k + 1} 张">`
+          + `<img src="${esc(src)}" alt="" loading="lazy" decoding="async"></button>`;
+      }
+      film.innerHTML = html;
+      activeThumb = getThumbAt(film, pos);
+      activeThumb?.scrollIntoView?.({block:'nearest',inline:'center',behavior:'smooth'});
+      return;
+    }
+    const nextThumb = getThumbAt(film, pos);
+    if (activeThumb && activeThumb !== nextThumb) {
+      activeThumb.classList?.remove('on');
+      activeThumb.setAttribute?.('aria-selected', 'false');
+    }
+    if (nextThumb) {
+      nextThumb.classList?.add('on');
+      nextThumb.setAttribute?.('aria-selected', 'true');
+      nextThumb.scrollIntoView?.({block:'nearest',inline:'center',behavior:'smooth'});
+    }
+    activeThumb = nextThumb;
   }
   function lbNav(delta) {
     const i=getIndex();if (i<0) return;
-    const pool = crossing() ? S.images : S.images.filter(x=>x.p.sid===scopeSid);
-    const pos = crossing() ? i : pool.findIndex(x=>x.pc.file===S.images[i].pc.file);
+    const { pool, pos } = buildPool(i, S.images[i]);
     const next=pool[pos+delta]; if (!next) return;
     anchor={sid:next.p.sid,file:next.pc.file};
     if (crossing()) scopeSid=next.p.sid;   // 跨帖后作用域跟帖走，中途关掉跨帖开关也不串帖

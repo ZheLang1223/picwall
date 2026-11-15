@@ -3,7 +3,7 @@
    ←→ 移焦（细看态翻图）、空格大图、回车细看、M/L 收藏/原帖、Esc 分层退出。
    队列从 S.posts(pending) 派生不另立账本：mark() 摘除即出队，撤销回插即回场；
    卡面用原图档（每屏仅 4 张 + 预取，本机盘不构成压力），槽位节点常驻只换内容。 */
-import { keepBadge } from './view-state.js';
+import { keepBadge, avatarSrc } from './view-state.js';
 
 /* 纯簿记（可单测）：取下一帖——补位栈优先，其次按当前列表找未入槽的待处理帖 */
 export function pickNext(stash, posts, usedSids) {
@@ -78,25 +78,27 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
     const fit = fitInfo(first);
     const hint = (fit.tag || isVid) ? `<span class="pics-hint">${isVid ? '视频' : fit.tag}</span>` : '';
     const pics = first
-      ? `<img class="${fit.cls}" src="/media/${isVid ? (first.thumb || first.file) : first.file}" alt="${esc(p.author)} 的微博图" decoding="async" data-file="${esc(first.file)}">${hint}`
+      ? `<img class="${esc(fit.cls)}" src="/media/${esc(isVid ? (first.thumb || first.file) : first.file)}" alt="${esc(p.author)} 的微博图" decoding="async" data-file="${esc(first.file)}">${hint}`
       : '';
     const pill = n > 1 ? `<span class="pics-pill">1/${n} 图</span>` : '';
     const progress = n > 1 ? '<div class="q-progress-track"><div class="q-progress-bar"></div></div>' : '';
     const srcChip = p.source && p.source !== 'weibo'
       ? `<span class="src">${p.source === 'x' ? 'X' : esc(p.source)}</span>` : '';
     const kb = p.keep_count >= 2 ? keepBadge(p.keep_count) : null;
-    const keepn = kb ? `<span class="chip keepn t${kb.tier}" title="${kb.title}">${kb.text}</span>` : '';
-    const cmc = p.comment_count
-      ? `<span class="chip cmc" title="有 ${p.comment_count} 条评论">${icons.comment}${p.comment_count}</span>` : '';
+    const keepn = kb ? `<span class="chip keepn t${esc(kb.tier)}" title="${esc(kb.title)}">${esc(kb.text)}</span>` : '';
+    const cmCount = Number(p.comment_count) || 0;
+    const cmc = cmCount
+      ? `<span class="chip cmc" title="有 ${cmCount} 条评论">${icons.comment}${cmCount}</span>` : '';
     // 收藏不再摆 chip：琥珀描边由 .q-slot .card.fav 表达（与墙卡一致）
     const badges = [keepn, cmc,
       p.image_complete === false ? '<span class="kind">图片待补齐</span>' : '',
     ].filter(Boolean).join('');
+    const av = avatarSrc(p.avatar);
     return `
       <div class="pics">${pics}${pill}${progress}</div>
       <div class="meta">
-        ${p.avatar ? `<img class="avatar" src="${esc(p.avatar)}" alt="">`
-                   : `<span class="avatar">${esc(p.author[0] || '微')}</span>`}
+        ${av ? `<img class="avatar" src="${esc(av)}" alt="" decoding="async">`
+             : `<span class="avatar">${esc((p.author || '微')[0])}</span>`}
         <b>${esc(p.author)}</b>
         ${srcChip}
       </div>
@@ -327,9 +329,10 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
       cnt.textContent = pics.length > 1 ? `${Q.zoomIdx + 1} / ${pics.length}` : '';
     }
     const av = z.querySelector?.('.qz-avatar');
-    if (av) av.innerHTML = p.avatar
-      ? `<img class="avatar" src="${esc(p.avatar)}" alt="">`
-      : `<span class="avatar">${esc(p.author[0] || '微')}</span>`;
+    const avUrl = avatarSrc(p.avatar);
+    if (av) av.innerHTML = avUrl
+      ? `<img class="avatar" src="${esc(avUrl)}" alt="" decoding="async">`
+      : `<span class="avatar">${esc((p.author || '微')[0])}</span>`;
     const set = (sel, fn) => { const el = z.querySelector?.(sel); if (el) fn(el); };
     set('.qz-author', el => { el.textContent = p.author; });
     set('.qz-time', el => { el.innerHTML = `${fmtDate(p.created_at)}<span class="hm"> ${fmtHM(p.created_at)}</span>`; });

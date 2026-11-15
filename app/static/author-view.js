@@ -79,10 +79,11 @@ export function createAuthorView(deps) {
     feed.classList.toggle('author-strip', SKINS.includes(on));
   }
 
-  /* 吸顶偏移：自身贴顶栏下沿；编年态把日卷粘滞头与尺子的 --tl-top 顶到自己下方 */
+  /* 吸顶偏移：自身贴顶栏下沿；桌面隐藏顶栏时贴顶 (8px)；编年态把日卷粘滞头与尺子的 --tl-top 顶到自己下方 */
   function syncSticky() {
     const tb = document.querySelector('.topbar');
-    const base = (tb?.offsetHeight || 41) + 6;
+    const hasTopbar = tb && getComputedStyle(tb).display !== 'none';
+    const base = hasTopbar ? tb.offsetHeight + 6 : 8;
     el.style.top = `${base}px`;
     if (chronoActive?.()) {
       const h = el.hidden ? 0 : el.offsetHeight;
@@ -92,12 +93,17 @@ export function createAuthorView(deps) {
 
   function paint() {
     applySkin();
-    if (S.author === 'all') { el.hidden = true; syncSticky(); return; }
+    if (S.author === 'all') {
+      $('#feed')?.removeAttribute('data-skin-author');
+      el.hidden = true;
+      syncSticky();
+      return;
+    }
     const prof = cache.get(S.author);
     const hint = hints.get(S.author);
     const name = prof?.author || hint?.author
       || S.posts.find((q) => q.uid === S.author)?.author || S.author;
-    const avatar = prof?.avatar || hint?.avatar || '';
+    const avatar = avatarSrc(prof?.avatar || hint?.avatar || '');
     const ext = profileUrl(prof);
     const skin = skinNow();
     const stBtn = (v, label, title) =>
@@ -105,7 +111,7 @@ export function createAuthorView(deps) {
                 aria-pressed="${String(skin === v)}" title="${title}">${label}</button>`;
     $('#feed')?.setAttribute('data-skin-author', name);   // 皮肤墙头（片头/展头/图签）用
     el.innerHTML = `
-      ${avatar ? `<img class="avatar" src="${esc(avatarSrc(avatar))}" alt="">`
+      ${avatar ? `<img class="avatar" src="${esc(avatar)}" alt="" decoding="async">`
                : `<span class="avatar">${esc(name[0] || '微')}</span>`}
       <div class="av-id"><b>${esc(name)}</b>
         <span class="av-sub">${prof ? esc(statsLine(prof)) : ''}</span></div>
@@ -143,6 +149,7 @@ export function createAuthorView(deps) {
 
   /* 显隐跟 S.author；换人才重取档案，同人只重画（load(true) 每次筛选变更都会进来） */
   function sync() {
+    if (S.author === 'all') snapshot = null;
     if (S.author === currentKey) { paint(); return; }
     currentKey = S.author;
     paint();
@@ -155,9 +162,10 @@ export function createAuthorView(deps) {
     if (S.author === 'all')
       snapshot = { status: S.status, group: S.group, source: S.source,
                    range: S.range, hasCmts: S.hasCmts,
-                   searchText: S.searchText, sort: S.sort };
+                   searchText: S.searchText, sort: S.sort,
+                   searchScope: S.searchScope };
     if (hint) hints.set(uid, { author: hint.author, avatar: hint.avatar });
-    Object.assign(S, enterFilters(uid));
+    Object.assign(S, enterFilters(uid), { searchScope: 'all', appliedSearchScope: 'all', appliedSearchText: '' });
     $('#f-search').value = '';
     renderViewPanel?.();
     window.scrollTo(0, 0);
@@ -171,9 +179,11 @@ export function createAuthorView(deps) {
     snapshot = null;
     if (prev) {   // 回到进入时的那面墙（保留视图进来就回保留视图）
       Object.assign(S, prev, { author: 'all' });
+      S.appliedSearchText = S.searchText || '';
+      S.appliedSearchScope = S.searchScope || 'all';
       $('#f-search').value = S.searchText || '';
     } else {      // 直开 URL（?author=…）没有快照：回默认全部视图
-      Object.assign(S, enterFilters('all'));
+      Object.assign(S, enterFilters('all'), { searchScope: 'all', appliedSearchScope: 'all', appliedSearchText: '' });
       $('#f-search').value = '';
     }
     renderViewPanel?.();
@@ -192,7 +202,11 @@ export function createAuthorView(deps) {
       reflow?.();          // 列栈 ↔ 单列平铺的重排收口在 app.js
       paint();             // 重画按压态
     });
-    window.addEventListener('resize', syncSticky);   // 顶栏高度随宽度档变化
+    let stickyRaf = 0;
+    window.addEventListener('resize', () => {
+      if (stickyRaf) return;
+      stickyRaf = requestAnimationFrame(() => { stickyRaf = 0; syncSticky(); });
+    });   // 顶栏高度随宽度档变化
     sync();
   }
 
