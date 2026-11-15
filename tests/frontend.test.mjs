@@ -1750,3 +1750,12 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('顶栏与批注关闭按钮均为 type=button', async () => {
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../app/templates/index.html', import.meta.url), 'utf8');
+  assert.ok(html.includes('<button type="button" id="btn-view"'), '#btn-view 应为 type=button');
+  assert.ok(html.includes('<button type="button" id="btn-settings"'), '#btn-settings 应为 type=button');
+  assert.ok(html.includes('<button type="button" id="f-reset"'), '#f-reset 应为 type=button');
+  assert.ok(html.includes('<button type="button" id="notes-close"'), '#notes-close 应为 type=button');
+});

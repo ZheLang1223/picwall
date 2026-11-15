@@ -20,7 +20,7 @@
   <button id="btn-top" class="brand" type="button" aria-label="PWALL，回到顶部" title="回到顶部">PWALL</button>
   <div class="nav-tools">
     <div class="viewwrap">
-      <button id="btn-view" class="viewbtn" aria-expanded="false" aria-controls="view-panel">
+      <button type="button" id="btn-view" class="viewbtn" aria-expanded="false" aria-controls="view-panel">
         <span id="view-label">新增</span>
         <span id="view-filter" class="vfilter" hidden><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg><b id="view-fcount"></b></span>
         <svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
@@ -32,7 +32,7 @@
       <button id="f-search-clear" class="f-search-clear" type="button" aria-label="清空搜索" hidden>✕</button>
     </div>
   </div>
-  <button id="btn-settings" class="tbtn ic" title="设置" aria-label="设置"
+  <button type="button" id="btn-settings" class="tbtn ic" title="设置" aria-label="设置"
           aria-haspopup="dialog" aria-controls="modal-settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
@@ -46,7 +46,7 @@
   <div class="f-row"><span class="f-label">时间</span><div class="f-chips" id="f-range"></div></div>
   <div class="f-row"><span class="f-label">评论</span><div class="f-chips" id="f-has-cmts"></div></div>
   <div class="f-foot">
-    <button id="f-reset" class="f-reset" hidden>重置筛选</button>
+    <button type="button" id="f-reset" class="f-reset" hidden>重置筛选</button>
   </div>
 </div>
 
@@ -212,7 +212,7 @@
 
 <div id="notes-view" class="notes-view" role="dialog" aria-modal="true" aria-label="最近批注" hidden>
   <div class="notes-head"><b>最近批注</b>
-    <button id="notes-close" class="notes-close" aria-label="关闭批注流">✕</button></div>
+    <button type="button" id="notes-close" class="notes-close" aria-label="关闭批注流">✕</button></div>
   <div id="notes-list" class="notes-list"></div>
 </div>
 
