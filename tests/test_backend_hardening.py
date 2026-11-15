@@ -509,12 +509,13 @@ class BackendPerformanceWave2Test(ApiTestBase):
         self.assertEqual(captured.get("proxy"), "http://127.0.0.1:18888")
         self.assertIn(res["state"], ("ok", "saved", "expired", "error"))
 
-        config.save_x_auth("tok" * 10, "csrf")
-        connections.record("x", "tok" * 10, "ok", updated=True)
-        st = connections.status("x")
-        self.assertEqual(st["state"], "ok")
-        self.assertTrue(st["checked_at"])
-        self.assertTrue(st["updated_at"])
+        with patch.object(config, "X_AUTH_FILE", config.DATA_DIR / "x_auth.txt"):
+            config.save_x_auth("tok" * 10, "csrf")
+            connections.record("x", "tok" * 10, "ok", updated=True)
+            st = connections.status("x")
+            self.assertEqual(st["state"], "ok")
+            self.assertTrue(st["checked_at"])
+            self.assertTrue(st["updated_at"])
 
     async def test_session_cache_hits_and_invalidates_on_logout_revoke_and_purge(self):
         auth.invalidate_session_cache()
