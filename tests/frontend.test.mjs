@@ -1788,4 +1788,10 @@ test('悬浮球菜单键盘可达性：菜单项 type=button、Esc 关闭焦点�
   assert.ok(fabSrc.includes("b.type = 'button'"), '生成的菜单项按钮应显式 type=button');
   assert.ok(fabSrc.includes('btn.focus()'), 'Esc 关闭后焦点应还给悬浮球按钮（不掉回 body）');
   assert.ok(fabSrc.includes("addEventListener('focusout'"), '键盘 Tab 移出打开的菜单应自动收起');
+test('关闭详情焦点归还墙卡：closeDetail 关闭后把键盘焦点还给当前查看的卡片', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const body = appSrc.slice(appSrc.indexOf('function closeDetail()'), appSrc.indexOf('async function refreshDetail'));
+  assert.ok(body.includes('CSS.escape(sid)'), '墙卡选择器应对 sid 做 CSS.escape 转义');
+  assert.ok(body.includes('focus({preventScroll:true})'), '焦点应回到墙上对应卡片且不滚动页面');
 });
