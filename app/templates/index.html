@@ -193,13 +193,13 @@
   <span id="endnote"></span>
 </div>
 
-<div id="selbar" class="selbar" hidden>
-  <button id="sel-all" class="tbtn">全选本页</button>
-  <button id="sel-keep" class="tbtn sel-keep">✓ 保留</button>
-  <button id="sel-drop" class="tbtn sel-drop">✕ 不要</button>
-  <button id="sel-tags" class="tbtn">标签</button>
-  <button id="sel-download" class="tbtn primary">下载（<span id="sel-n">0</span>）</button>
-  <button id="sel-cancel" class="tbtn">退出</button>
+<div id="selbar" class="selbar" role="toolbar" aria-label="多选操作" hidden>
+  <button type="button" id="sel-all" class="tbtn">全选本页</button>
+  <button type="button" id="sel-keep" class="tbtn sel-keep">✓ 保留</button>
+  <button type="button" id="sel-drop" class="tbtn sel-drop">✕ 不要</button>
+  <button type="button" id="sel-tags" class="tbtn">标签</button>
+  <button type="button" id="sel-download" class="tbtn primary">下载（<span id="sel-n">0</span>）</button>
+  <button type="button" id="sel-cancel" class="tbtn">退出</button>
 </div>
 
 <div id="fab" class="fab">
@@ -219,8 +219,8 @@
 <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="大图浏览"
      aria-keyshortcuts="1 2 3 4 5 ArrowLeft ArrowRight M L Escape" hidden>
   <div class="lb-stage"><img id="lb-img" alt="" decoding="async"><video id="lb-video" controls playsinline preload="metadata" hidden></video></div>
-  <button id="lb-prev" class="lb-nav prev" aria-label="上一张">‹</button>
-  <button id="lb-next" class="lb-nav next" aria-label="下一张">›</button>
+  <button id="lb-prev" class="lb-nav prev" type="button" aria-label="上一张">‹</button>
+  <button id="lb-next" class="lb-nav next" type="button" aria-label="下一张">›</button>
   <div id="lb-film" class="lb-film" role="tablist" aria-label="胶片缩略图" hidden></div>
 </div>
 
@@ -230,36 +230,36 @@
   <div id="ss-progress" class="ss-progress-bar"></div>
   <div id="ss-notes" class="ss-notes" hidden></div>
   <div id="ss-caption" class="ss-caption"></div>
-  <div id="ss-state" class="ss-state" hidden>已暂停</div>
-  <button id="ss-prev" class="ss-nav prev" aria-label="上一张">‹</button>
-  <button id="ss-next" class="ss-nav next" aria-label="下一张">›</button>
+  <div id="ss-state" class="ss-state" role="status" aria-live="polite" hidden>已暂停</div>
+  <button id="ss-prev" class="ss-nav prev" type="button" aria-label="上一张">‹</button>
+  <button id="ss-next" class="ss-nav next" type="button" aria-label="下一张">›</button>
   <button id="ss-close" class="ss-close" aria-label="退出放映">✕</button>
 </div>
 
 <div id="modal-settings" class="modal" role="dialog" aria-modal="true" aria-label="设置" hidden>
   <div class="modal-card settings-shell">
     <div class="modal-head">
-      <button id="settings-back" class="settings-back" aria-label="返回设置菜单">‹</button>
+      <button type="button" id="settings-back" class="settings-back" aria-label="返回设置菜单">‹</button>
       <b id="settings-title">设置</b>
-      <button class="mclose" data-close="modal-settings" aria-label="关闭设置">✕</button></div>
+      <button type="button" class="mclose" data-close="modal-settings" aria-label="关闭设置">✕</button></div>
     <div class="sbody">
       <nav class="snav" id="snav" aria-label="设置分区">
         <div class="snav-title">来源与同步</div>
-        <button class="snav-item" data-pane="groups"><span>分组管理</span></button>
-        <button class="snav-item" data-pane="conn"><span>连接状态</span></button>
-        <button class="snav-item" data-pane="crawl"><span>自动抓取</span></button>
+        <button type="button" class="snav-item" data-pane="groups"><span>分组管理</span></button>
+        <button type="button" class="snav-item" data-pane="conn"><span>连接状态</span></button>
+        <button type="button" class="snav-item" data-pane="crawl"><span>自动抓取</span></button>
         <div class="snav-title">内容与库</div>
-        <button class="snav-item" data-pane="batch"><span>批量下载</span></button>
-        <button class="snav-item" data-pane="purge"><span>清理空间</span><em id="nav-purge-badge" hidden></em></button>
+        <button type="button" class="snav-item" data-pane="batch"><span>批量下载</span></button>
+        <button type="button" class="snav-item" data-pane="purge"><span>清理空间</span><em id="nav-purge-badge" hidden></em></button>
         <div class="snav-title">外观与偏好</div>
-        <button class="snav-item" data-pane="appearance"><span>主题显示</span></button>
-        <button class="snav-item" data-pane="cards"><span>卡片交互</span></button>
-        <button class="snav-item" data-pane="slideshow"><span>放映</span></button>
+        <button type="button" class="snav-item" data-pane="appearance"><span>主题显示</span></button>
+        <button type="button" class="snav-item" data-pane="cards"><span>卡片交互</span></button>
+        <button type="button" class="snav-item" data-pane="slideshow"><span>放映</span></button>
         <div class="snav-title">设备与帮助</div>
-        <button class="snav-item" data-pane="qr"><span>手机连接</span></button>
-        <button class="snav-item" data-pane="devices"><span>设备管理</span><em id="nav-devices-sub"></em></button>
-        <button class="snav-item" data-pane="shortcuts"><span>快捷键</span></button>
-        <button class="snav-item" data-pane="about"><span>关于</span></button>
+        <button type="button" class="snav-item" data-pane="qr"><span>手机连接</span></button>
+        <button type="button" class="snav-item" data-pane="devices"><span>设备管理</span><em id="nav-devices-sub"></em></button>
+        <button type="button" class="snav-item" data-pane="shortcuts"><span>快捷键</span></button>
+        <button type="button" class="snav-item" data-pane="about"><span>关于</span></button>
       </nav>
       <div class="spanes" id="spanes">
 
@@ -267,16 +267,16 @@
           <h3 class="spane-title">分组管理</h3>
           <div id="my-groups" class="my-groups"></div>
           <div class="wbuser-add">
-            <input id="wbuser-input" placeholder="微博博主 UID 或主页链接，如 1669879400" autocomplete="off" spellcheck="false">
-            <button id="btn-add-wbuser" class="pbtn">添加微博博主</button>
+            <input id="wbuser-input" aria-label="微博博主 UID 或主页链接" placeholder="微博博主 UID 或主页链接，如 1669879400" autocomplete="off" spellcheck="false">
+            <button id="btn-add-wbuser" class="pbtn" type="button">添加微博博主</button>
           </div>
           <div class="xuser-add">
-            <input id="xuser-input" placeholder="X 用户名，如 luoluokun_" autocomplete="off" spellcheck="false">
-            <button id="btn-add-xuser" class="pbtn">添加 X 用户</button>
+            <input id="xuser-input" aria-label="X 用户名" placeholder="X 用户名，如 luoluokun_" autocomplete="off" spellcheck="false">
+            <button id="btn-add-xuser" class="pbtn" type="button">添加 X 用户</button>
           </div>
           <div class="xgroup-add">
-            <input id="xgroup-input" placeholder="新建分组名，如 画师 / 摄影" autocomplete="off" maxlength="20">
-            <button id="btn-add-xgroup" class="pbtn">新建分组</button>
+            <input id="xgroup-input" aria-label="新建分组名" placeholder="新建分组名，如 画师 / 摄影" autocomplete="off" maxlength="20">
+            <button id="btn-add-xgroup" class="pbtn" type="button">新建分组</button>
           </div>
           <button id="btn-discover" class="pbtn wide">拉取分组</button>
         </section>
@@ -348,17 +348,17 @@
           <h3 class="spane-title">主题显示</h3>
           <div class="pref-group">
             <div class="pref-row"><span class="pref-label">皮肤</span>
-              <div class="seg" id="pref-skin"><button data-v="classic">默认</button><button data-v="swiss">瑞士排版</button><button data-v="brut">粗野主义</button><button data-v="photo">摄影优先</button></div></div>
+              <div class="seg" id="pref-skin" role="group" aria-label="皮肤"><button type="button" data-v="classic">默认</button><button type="button" data-v="swiss">瑞士排版</button><button type="button" data-v="brut">粗野主义</button><button type="button" data-v="photo">摄影优先</button></div></div>
             <div class="pref-row"><span class="pref-label">主题</span>
-              <div class="seg" id="pref-theme"><button data-v="light">浅色</button><button data-v="dark">深色</button><button data-v="system">跟随系统</button></div></div>
+              <div class="seg" id="pref-theme" role="group" aria-label="主题"><button type="button" data-v="light">浅色</button><button type="button" data-v="dark">深色</button><button type="button" data-v="system">跟随系统</button></div></div>
             <div class="pref-row" id="pref-accent-row"><span class="pref-label">强调色</span>
-              <div><div class="seg" id="pref-accent"><button data-v="indigo"><i class="adot" style="--dot:#0066cc" aria-hidden="true"></i>靛蓝</button><button data-v="green"><i class="adot" style="--dot:#1f8a4d" aria-hidden="true"></i>墨绿</button><button data-v="plum"><i class="adot" style="--dot:#7a4fb3" aria-hidden="true"></i>梅紫</button></div>
+              <div><div class="seg" id="pref-accent" role="group" aria-label="强调色"><button type="button" data-v="indigo"><i class="adot" style="--dot:#0066cc" aria-hidden="true"></i>靛蓝</button><button type="button" data-v="green"><i class="adot" style="--dot:#1f8a4d" aria-hidden="true"></i>墨绿</button><button type="button" data-v="plum"><i class="adot" style="--dot:#7a4fb3" aria-hidden="true"></i>梅紫</button></div>
               <div class="phint" id="pref-accent-hint" hidden>当前皮肤自带强调色</div></div></div>
             <div class="pref-row" id="pref-bg-row"><span class="pref-label">背景色调</span>
-              <div><div class="seg" id="pref-bg"><button data-v="cool">冷白</button><button data-v="paper">米白</button></div>
+              <div><div class="seg" id="pref-bg" role="group" aria-label="背景色调"><button type="button" data-v="cool">冷白</button><button type="button" data-v="paper">米白</button></div>
               <div class="phint" id="pref-bg-hint" hidden>仅浅色模式生效</div></div></div>
             <div class="pref-row"><span class="pref-label">全局字号</span>
-              <div class="seg" id="pref-font"><button data-v="sm">小</button><button data-v="std">标准</button><button data-v="lg">大</button></div></div>
+              <div class="seg" id="pref-font" role="group" aria-label="全局字号"><button type="button" data-v="sm">小</button><button type="button" data-v="std">标准</button><button type="button" data-v="lg">大</button></div></div>
           </div>
         </section>
 
@@ -366,7 +366,7 @@
           <h3 class="spane-title">卡片交互</h3>
           <div class="pref-group">
             <div class="pref-row"><span class="pref-label">X 卡片</span>
-              <div class="seg" id="pref-x-blur"><button data-v="on">模糊</button><button data-v="off">清晰</button></div></div>
+              <div class="seg" id="pref-x-blur" role="group" aria-label="X 卡片模糊"><button type="button" data-v="on">模糊</button><button type="button" data-v="off">清晰</button></div></div>
             <div class="pref-row"><span class="pref-label">双击图片收藏</span>
               <label class="switch"><input type="checkbox" id="pref-dblfav-sw" aria-label="双击图片收藏"><span class="knob" aria-hidden="true"></span></label></div>
             <div class="pref-row"><span class="pref-label">随机洗牌</span>
@@ -399,13 +399,13 @@
           <div class="pair-issue" id="pair-issue">
             <div class="pair-issue-row">
               <span class="pair-issue-label">新设备配对</span>
-              <div class="seg" id="pair-role" aria-label="新设备权限">
-                <button data-v="editor" class="on">日常</button><button data-v="viewer">只读</button><button data-v="admin">管理</button>
+              <div class="seg" id="pair-role" role="group" aria-label="新设备权限">
+                <button type="button" data-v="editor" class="on" aria-pressed="true">日常</button><button type="button" data-v="viewer" aria-pressed="false">只读</button><button type="button" data-v="admin" aria-pressed="false">管理</button>
               </div>
             </div>
             <div class="modal-row">
               <output id="pair-code" class="pair-code" aria-live="polite">···· ···· ····</output>
-              <button id="pair-code-gen" class="pbtn">生成配对码</button>
+              <button id="pair-code-gen" type="button" class="pbtn">生成配对码</button>
             </div>
             <p class="hint" id="pair-code-hint">生成后 10 分钟内有效、仅可使用一次；二维码会携带配对码，扫码自动填入。</p>
           </div>

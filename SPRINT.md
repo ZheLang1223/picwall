@@ -7,7 +7,6 @@
 
 | 要找什么 | 去哪里 |
 |---|---|
-| 最新风险排查与遗留项 | [docs/2026-10-13-风险分析.md](docs/2026-10-13-风险分析.md) |
 | 迭代日志（原「迭代记录」段） | [docs/CHANGELOG.md](docs/CHANGELOG.md)（正序追加） |
 | 使用与运维（入口） | [README.md](README.md) |
 | 日常功能的行为与键位 | [docs/user-guide.md](docs/user-guide.md) |

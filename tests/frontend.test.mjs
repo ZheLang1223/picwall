@@ -159,6 +159,8 @@ test('墙卡滑动决定退役：滑动标记与方向戳不再存在，分拣�
  // 快筛单入口：桌面分流四格会话（不再有双卡/四格偏好漂移）
  assert.ok(source.includes('quad.open(); return;'), '桌面快筛应直达四格会话');
  assert.ok(source.includes("label: '多选'"), '悬浮球应有多选显式入口（长按之外的发现路径）');
+ assert.ok(source.includes("['#sel-keep', '#sel-drop', '#sel-tags', '#sel-download'].forEach") && source.includes('$(q).disabled = n === 0'),
+   '选择模式未勾选时底栏动作钮应置灰');
 });
 
 test('详情键位：←→ 切图 + 同向双击翻帖 + PageUp/Down 翻帖，批注聚焦改 T', async()=>{
@@ -204,6 +206,13 @@ test('卡片模式一致性：回看←→对齐详情、四格有可见出口�
  // 编年 V 键被浮层阻塞时不再静默
  const tl=await fs.readFile(new URL('timeline.js',root),'utf8');
  assert.ok(tl.includes('先退出浮层，再切换布局'), 'V 键被浮层阻塞应提示而非静默');
+});
+
+test('编年跳转遇到加载失败应停止重试', async()=>{
+ const fs=await import('node:fs/promises');
+ const tl=await fs.readFile(new URL('../app/static/timeline.js',import.meta.url),'utf8');
+ assert.ok(tl.includes("if (S.loadError) { toast('装载失败，请稍后重试'); return; }"),
+   'gotoDay 翻页遇加载失败应立即停止并提示，不再重试 60 次刷屏');
 });
 
 test('交互五项：点卡开详情、纯图点图跨帖看图、悬浮球纯图入口与四格子浮窗、换视图清筛选', async()=>{
@@ -1709,4 +1718,35 @@ test('博主管理大厅（/kiosk）：拼音搜索、A–Z/# 索引、分组过
     && kJs.includes("await ksApi('/api/groups/' + encodeURIComponent(d.follow_id), 'DELETE')")
     && kJs.includes('safeMedia(') && kJs.includes('esc('),
     'kiosk.js 应完整实现筛选映射、admin 鉴权开关、2 步取消关注、xg: 成员增删与输出转义');
+});
+
+test('远端修复整合契约：失败重试、防死循环、防连点 busy 态与无障碍属性', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [indexHtml, appSrc, kioskSrc, statsSrc, notesSrc, reviewSrc, devicesSrc, settingsSrc] = await Promise.all([
+    read('../app/templates/index.html'),
+    read('../app/static/app.js'),
+    read('../app/static/kiosk.js'),
+    read('../app/static/stats.js'),
+    read('../app/static/notes.js'),
+    read('../app/static/review.js'),
+    read('../app/static/devices.js'),
+    read('../app/static/settings.js'),
+  ]);
+
+  assert.ok(appSrc.includes("loadStatus().catch((e) => toast('状态加载失败：' + e.message)).then(() => load(true))"),
+    'status 加载失败时仍应继续加载主墙');
+  assert.ok(appSrc.includes("more.setAttribute('aria-busy', 'true')") && appSrc.includes("more.removeAttribute('aria-busy')"),
+    '加载更多按钮请求期间应进入 aria-busy 禁用态');
+  assert.ok(kioskSrc.includes('async function loadShelf()') && kioskSrc.includes('ks-retry'),
+    'kiosk 书架加载失败应提供重试按钮');
+  assert.ok(statsSrc.includes('st-retry') && notesSrc.includes('note-retry'),
+    'stats 与 notes 加载失败应提供重试按钮');
+  assert.ok(reviewSrc.includes('if (added === null) return;'),
+    'review 加载失败不应误报已到列表末尾');
+  assert.ok(devicesSrc.includes('logout.disabled = true') && settingsSrc.includes('if (b.disabled) return; b.disabled = true;'),
+    '设备解绑与分组操作按钮请求期间应禁用防连点');
+  assert.ok(indexHtml.includes('id="ss-state" class="ss-state" role="status" aria-live="polite"')
+    && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
+    '放映状态与设置输入框应具备无障碍角色与标签');
 });

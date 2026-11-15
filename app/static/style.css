@@ -306,8 +306,8 @@ html:not([data-skin="brut"]) #feed:not(.author-film):not(.author-gallery):not(.a
 .fav-btn svg { width: 16px; height: 16px; }
 .fav-btn.on { color: var(--fav-gold); }
 @media (hover: hover) and (pointer: fine) {
-  .card .fav-btn { display: none; }
-  .card:hover .fav-btn, .card .fav-btn:focus-visible { display: inline-flex; }
+  .card .fav-btn { opacity: 0; transition: opacity .12s; }
+  .card:hover .fav-btn, .card:focus-within .fav-btn, .card .fav-btn:focus-visible { opacity: 1; }
 }
 .feed.selecting .card .fav-btn { display: none !important; }
 /* 待补齐角标：图面左上角，与 N 图胶囊同视觉语言（文本不完整提示归详情正文） */
@@ -847,6 +847,8 @@ button.avatar:hover, button.avatar:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+  .spin, .lb-stage.loading::after { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
+  .ss-progress-bar.run { animation-duration: var(--ss-dur, 5s) !important; }
 }
 
 /* ---------- 手机 ---------- */
@@ -900,12 +902,17 @@ button.avatar:hover, button.avatar:focus-visible {
   .dt-pics figcaption a { min-width: 44px; min-height: 44px; }   /* 触屏目标 44px */
   /* 底栏裁决主按钮同口径提到 44px：手机分拣只靠这三枚（键盘流是桌面专属） */
   .dt-comment-bar .dtb, .dt-comment-bar .dt-fav { width: 44px; height: 44px; min-width: 44px; }
+  /* 底栏贴底让出 home 指示条：与 .selbar/.fab 同一安全区口径，不压输入框与裁决按钮 */
+  .dt-comment-bar { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 
   /* 详情行1的时分手机端隐藏（墙卡已无时间，日期口径统一到详情） */
   .dt-line1 .hm { display: none; }
-  .selbar { gap: 8px; }
+  /* 六键一行放不下 375px 视口，「退出」会被挤出右缘：换行两行——下载主键独占首行全宽，
+     其余五键平分次行（收窄左右内距防「全选本页」这类四字钮溢出） */
+  .selbar { gap: 8px; flex-wrap: wrap; row-gap: 8px; }
   .selbar .tbtn { flex: none; min-height: 44px; padding: 10px 10px; white-space: nowrap; }
-  .selbar .tbtn.primary { flex: 1; }   /* 下载主键吃掉余量，次操作保持自然宽 */
+  .selbar .tbtn.primary { flex: 1 1 100%; order: -1; }   /* 下载主键整行铺满置顶 */
+  .selbar .tbtn:not(.primary) { flex: 1 1 0; min-width: 0; padding-left: 4px; padding-right: 4px; }
   /* 双列卡面收紧：约 180px 窄列里头像 20px、作者 12px（与桌面同层级：正文主、作者辅），
      作者名可多显两字；标题行内距同步内收 */
   .card { margin-bottom: 8px; }
@@ -2983,3 +2990,13 @@ html[data-skin="photo"] #tt-more .tt-menu {
 .dt-video { width: 100%; max-height: 100%; object-fit: contain; display: block;
   background: rgba(0, 0, 0, .04); }
 #lb-video { max-width: 100%; max-height: 100%; background: rgba(0, 0, 0, .3); }
+
+/* ---------- 手机触控目标兜底 40px：上方手机块（~857 行）会被其后的未定界规则反压
+   （.topbar .viewbtn 胶囊化 min-height:28px、.fchip/.like 自然高不足），文末统一补足 ---------- */
+@media (max-width: 640px) {
+  .topbar .viewbtn { min-height: 40px; }
+  .fchip { min-height: 40px; }
+  /* 点赞钮：40×40 触控区；纵向负距抵消增高，meta 行视觉高度不变（盒子只伸进行内距） */
+  .like { min-height: 40px; min-width: 40px; display: inline-flex; align-items: center;
+    justify-content: center; margin-top: -8px; margin-bottom: -8px; }
+}
