@@ -1771,4 +1771,15 @@ test('编年 V 键：按住不连切、弹窗打开不背后切换、浮层双�
  assert.ok(src.includes('e.repeat'), 'V 键应忽略按键自动重复（按住不连切）');
  assert.ok(src.includes(".modal:not([hidden])"), '弹窗打开时 V 不应在背后切换布局');
  assert.ok(src.includes('canSwitch && !canSwitch()'), '浮层打开时 V 应双向拦截并提示先退出浮层');
+test('报刊亭合上杂志后焦点回到打开的那本封面', async () => {
+  const fs = await import('node:fs/promises');
+  const kiosk = await fs.readFile(new URL('../app/static/kiosk.js', import.meta.url), 'utf8');
+  const start = kiosk.indexOf('function closeSpread');
+  assert.ok(start >= 0, 'closeSpread 应存在');
+  const fn = kiosk.slice(start, kiosk.indexOf('\n}', start));
+  assert.ok(fn.includes('.ks-cover[data-idx=') && fn.includes('.focus('),
+    'closeSpread 应在合上后把焦点移回对应 data-idx 的封面');
+  assert.ok(kiosk.includes("e.key === 'Escape' && S.open >= 0 && !e.defaultPrevented")
+    && kiosk.includes('closeSpread({ refocus: true })'),
+    'Escape 关闭应强制回焦到封面且不吞已阻止的默认行为');
 });

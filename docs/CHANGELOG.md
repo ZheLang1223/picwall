@@ -134,3 +134,4 @@ date: 2026-10-12
 - 2026-11-16 00:2x：顶栏按钮无障碍——#btn-view/#btn-settings/#f-reset/#notes-close 补 type=button（防表单内误提交，与其余按钮口径一致）。验证：见提交说明。
 - 2026-11-16 01:25：更多菜单——鼠标悬停已展开时点击「⋯」不再把菜单关掉；Esc 关闭后焦点回到按钮；Tab 移出菜单自动收起。验证：pytest 381 passed（另有 1 例既有环境性失败 test_connections_probe，与本次改动无关）+ frontend 68 pass。
 - 2026-11-16 03:22：编年 V 键——设置等弹窗打开时不再在背后切换布局；编年态下详情/大图/放映/四格/多选打开时按 V 也会提示先退出浮层（此前只拦进入编年）；按住 V 不再来回连切。验证：pytest 381 passed + frontend 69 pass（test_connections_probe 1 失败为已知环境项，与本改动无关）。
+- 2026-11-16 04:17：报刊亭合上杂志后焦点回到刚才那本封面——此前点「合上杂志」或按 Esc 后焦点掉回页面顶部，键盘用户要从头 Tab。验证：pytest 381 passed + frontend 69 pass（test_connections_probe_proxy_and_batched_record 为已知环境失败，与本改动无关）。
