@@ -95,7 +95,13 @@
     });
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setMoreOpen(!isMoreOpen());
+      // 鼠标指针下悬停可能刚把菜单展开，点击只负责展开，不再翻转关闭
+      if (hoverable()) setMoreOpen(true);
+      else setMoreOpen(!isMoreOpen());
+    });
+    // 键盘 Tab 移出菜单时自动收起（relatedTarget 为 null 的鼠标点击交给 document click 处理）
+    moreWrap.addEventListener('focusout', (e) => {
+      if (e.relatedTarget && !moreWrap.contains(e.relatedTarget)) closeMore();
     });
   }
 
@@ -105,7 +111,11 @@
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     if (document.querySelector(RAIL_OVERLAY_SEL) || S.selectMode) return;
-    if (isMoreOpen()) { closeMore(); return; }
+    if (isMoreOpen()) {
+      closeMore();
+      if (moreWrap.contains(document.activeElement)) moreBtn.focus();
+      return;
+    }
     if (panelOpen()) setPanelOpen(false);
   });
   document.addEventListener('click', (e) => {
