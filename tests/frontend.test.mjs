@@ -1750,3 +1750,11 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('悬浮球菜单键盘可达性：菜单项 type=button、Esc 关闭焦点回球、Tab 移出自动收起', async () => {
+  const fs = await import('node:fs/promises');
+  const fabSrc = await fs.readFile(new URL('../app/static/fab.js', import.meta.url), 'utf8');
+  assert.ok(fabSrc.includes("b.type = 'button'"), '生成的菜单项按钮应显式 type=button');
+  assert.ok(fabSrc.includes('btn.focus()'), 'Esc 关闭后焦点应还给悬浮球按钮（不掉回 body）');
+  assert.ok(fabSrc.includes("addEventListener('focusout'"), '键盘 Tab 移出打开的菜单应自动收起');
+});
