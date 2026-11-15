@@ -70,6 +70,38 @@ class KioskApiTest(ApiTestBase):
         # 按最近到货排序：昨天更的 X 作者排在两天前的微博作者之前
         self.assertLess(j["shelf"].index(xk), j["shelf"].index(wb))
 
+    async def test_kiosk_management_metadata_and_actions(self):
+        self._seed()
+        db.add_group("wbu:789", "张帕克")
+        db.add_group("xu:mochakuro", "摩卡黑狗")
+        db.add_group("123456", "摄影清单")
+        db.add_group("xg:fav1", "特选画师")
+        db.add_group_member("xg:fav1", "xu:mochakuro")
+        async with self.client() as c:
+            j = (await c.get("/api/authors/kiosk")).json()
+            self.assertEqual(j["role"], "admin")
+            group_ids = {g["list_id"] for g in j["groups"]}
+            # 管理大厅显示可用清单/本地分组，排除 demo 与单人关注目标 wbu:/xu:
+            self.assertTrue({"123456", "xg:fav1"}.issubset(group_ids))
+            self.assertFalse(any(lid.startswith(("wbu:", "xu:")) or lid == "demo" for lid in group_ids))
+            entries = {e["key"]: e for e in j["shelf"]}
+            wb, xk = entries["789"], entries["x:123"]
+            self.assertTrue(wb["pinyin"] and len(wb["initial"]) == 1)
+            self.assertEqual(wb["follow_id"], "wbu:789")
+            self.assertTrue(wb["followed"])
+            self.assertIn("123456", wb["groups"])
+            self.assertEqual(xk["follow_id"], "xu:mochakuro")
+            self.assertTrue(xk["followed"])
+            self.assertEqual(xk["xg_groups"], ["xg:fav1"])
+
+            # 在大厅取消单人关注：返回 ok，再次拉取书架 followed=False 但已抓帖保留
+            r_unfollow = await c.delete("/api/groups/xu:mochakuro")
+            self.assertEqual(r_unfollow.status_code, 200)
+            j2 = (await c.get("/api/authors/kiosk")).json()
+            xk2 = next(e for e in j2["shelf"] if e["key"] == "x:123")
+            self.assertFalse(xk2["followed"])
+            self.assertEqual(xk2["n"], 1)
+
 
 class KioskPageTest(ApiTestBase):
     """/kiosk 页面：已配对设备可达（本机即 admin），未配对 401。"""

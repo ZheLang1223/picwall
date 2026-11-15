@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesView, comparePosts, keepBadge, avatarSrc, shuffleSeed} from '../app/static/view-state.js';
+import {matchesView, comparePosts, keepBadge, avatarSrc, mediaSrc, esc, safeUrl, markTerm, shuffleSeed} from '../app/static/view-state.js';
+import {esc as kioskEsc, nl2br as kioskNl2br, safeMedia as kioskSafeMedia} from '../app/static/kiosk.js';
+import {filterWeiboCookies, isInsecureLanHttp, originPatternFor} from '../extension/cookies.js';
 import {ssPrefs, expandPosts} from '../app/static/slideshow.js';
 import {serialQueue} from '../app/static/requests.js';
 import {createPostActions} from '../app/static/post-actions.js';
@@ -8,6 +10,7 @@ import {createMaintenanceJobs, maintenanceResult} from '../app/static/maintenanc
 import {captureGroupText, captureTitle, emptyState} from '../app/static/content-state.js';
 import {createQuad, pickNext, nextFocus} from '../app/static/quad.js';
 import {createTimeline, dayOf, dayLabel, monthLabel, planRows} from '../app/static/timeline.js';
+import {createLightbox} from '../app/static/lightbox.js';
 import {enterFilters, statsLine, profileSpan, profileUrl, skinFromPrefs, SKINS} from '../app/static/author-view.js';
 const s={status:'all',group:'all',author:'all',range:'all',source:'all',hasCmts:'all',searchText:''};
 const p={sid:'a',uid:'u1',list_id:'g1',status:'kept',favorite:true,text:'hello',via:'',created_at:'2026-10-01T00:00:00+08:00'};
@@ -236,10 +239,9 @@ test('视图面板：屏幕居中、「链接」行退役、搜索只在回车�
  assert.ok(!css.includes('#f-copylink'), '样式不应再有链接行规则');
  assert.ok(!app.includes('searchTimer'), '搜索防抖应已退役（只在回车应用）');
  assert.ok(css.includes('translateX(-50%)'), '视图面板应顶栏下方水平居中');
- // 排序段是活控件：面板静态 segctl 必须有点击绑定（曾因行合并丢绑定沦为死控件）
- assert.ok(app.includes("$('#f-sort-ctl').addEventListener"), '排序段（最新/次数）应有点击绑定');
- assert.ok(css.includes('html[data-layout="chrono"] #f-sort-ctl'), '编年态应收起排序段');
- assert.ok(css.includes('#truler, #f-layout { display: none; }'), '手机端应收起布局切换段');
+ // 视图面板聚焦于辅助属性筛选（来源/标签/时间/评论），状态/排序/布局均已从面板退役收敛至双轨
+ assert.ok(!html.includes('id="f-sort-ctl"') && !html.includes('id="f-layout"'), '排序与布局已从面板退役并收敛至双轨');
+ assert.ok(html.includes('id="f-range"') && html.includes('id="f-has-cmts"'), '面板应包含时间范围与评论筛选');
  // 类型筛选已删除：面板无行、状态无字段、URL 不再读写
  assert.ok(!html.includes('f-type') && !app.includes('TYPE_CHIPS'), '类型筛选行应已删除');
  assert.ok(!app.includes("p.set('type'") && !app.includes('type:S.type'), '筛选请求不应再带 type 参数');
@@ -267,75 +269,71 @@ test('快筛只留四格：数字键 1-4、Shift+Q/W 进快筛、双卡与其设
  assert.ok(quadFinish.includes("switchStatusView('kept')"), '四格筛完应进保留视图');
 });
 
-test('待筛入口：右轨按钮有待筛才出现，左轨会话卡已退役', async()=>{
+test('待筛入口：并入左悬浮胶囊且保持常规单色导航条目样式（非实心主色按钮）', async()=>{
  const fs=await import('node:fs/promises');
  const root=new URL('../app/static/',import.meta.url);
  const html=await fs.readFile(new URL('../templates/index.html',root),'utf8');
  const railSrc=await fs.readFile(new URL('rail.js',root),'utf8');
  const css=await fs.readFile(new URL('style.css',root),'utf8');
- // 右轨待筛按钮：默认 hidden，rail.js 按 pending 数显隐 + 徽章，点击直达快筛
- assert.ok(html.includes('id="ir-triage"'), '右轨应有待筛入口按钮');
- assert.ok(html.includes('id="ir-triage-bdg"'), '待筛按钮应带计数角标');
- assert.ok(railSrc.includes('irTriage.hidden = !show'), '待筛按钮应由 syncSession 控制显隐');
+ // 左悬浮胶囊待筛按钮：默认 hidden，rail.js 按 pending 数显隐 + 计数，点击直达快筛
+ assert.ok(html.includes('id="rail-triage"'), '左悬浮胶囊应有待筛入口按钮');
+ assert.ok(html.includes('id="rail-triage-bdg"') && html.includes('id="rail-triage-cnt"'), '待筛按钮应同时支持收起态角标与展开态计数');
+ assert.ok(railSrc.includes('triageBtn.hidden = !showTriage'), '待筛按钮应由 syncSession 控制显隐');
  assert.ok(railSrc.includes('R.startQuickTriage()'), '待筛按钮点击应直达快筛');
- assert.ok(css.includes('#irail .bdg'), '待筛角标样式应存在');
- // 左轨会话卡与折叠轨快筛入口整族退役（待筛入口收敛到右轨一处）
- assert.ok(!html.includes('rail-session') && !html.includes('rail-triage'), '左轨会话卡与快筛入口应已删除');
+ assert.ok(css.includes('#rail .bdg'), '待筛角标样式应存在');
+ assert.ok(!css.includes('#rail-triage { background: var(--accent)'), '待筛入口不得做成高亮实心按钮');
+ // 旧右轨与旧会话卡整族退役
+ assert.ok(!html.includes('id="irail"') && !html.includes('id="ir-triage"'), '旧 100vh 右轨应已解散');
+ assert.ok(!html.includes('rail-session'), '左轨会话卡应已删除');
  assert.ok(!railSrc.includes('ss-go') && !railSrc.includes('pw_triage_skip'), '会话卡逻辑应已删除');
  assert.ok(!css.includes('.rail-panel .session'), '会话卡样式应已删除');
 });
-test('左轨看博主右轨管排序：博主行进博主页面，排序抽屉三档点选', async()=>{
+
+test('左囊直通博主大厅、排序与分组并入右上筛选面板', async()=>{
  const fs=await import('node:fs/promises');
  const root=new URL('../app/static/',import.meta.url);
  const html=await fs.readFile(new URL('../templates/index.html',root),'utf8');
  const railSrc=await fs.readFile(new URL('rail.js',root),'utf8');
  const appSrc=await fs.readFile(new URL('app.js',root),'utf8');
- const css=await fs.readFile(new URL('style.css',root),'utf8');
- // 左轨 = 查看所有博主：入口改名，面板博主行点击进博主页面（带 hint），不再是状态内过滤
- assert.ok(html.includes('所有博主'), '左轨入口与面板区头应叫「所有博主」');
- assert.ok(railSrc.includes('R.authorViewOpen('), '面板博主行点击应进博主页面');
- assert.ok(railSrc.includes('function cachedAuthor'), '博主行应以缓存行数据作即时身份 hint');
- assert.ok(railSrc.includes('closePanel();   // 穿透进新语境'), '进博主页面应收起导航面板');
- assert.ok(appSrc.includes('authorViewOpen:'), 'pwRail 应暴露 authorViewOpen 钩子');
- assert.ok(html.includes('点开博主页面'), '面板博主区头应标明行为（点开博主页面）');
- // 右轨 = 排序：左轨排序行退役，抽屉三档点选（最新/点赞/随机，与手机视图面板排序段同全集），off 态管闸
- assert.ok(!html.includes('id="rail-sort"'), '左轨排序按钮应已移除');
- assert.ok(html.includes('id="ir-sort"') && html.includes('data-sort-opt'), '排序应移入右轨抽屉');
- assert.ok(html.includes('data-sort-opt="shuffle"'), '桌面抽屉应有随机档（能力全集 三处单源，不得桌面缺档）');
- assert.ok(railSrc.includes("S.sort === 'shuffle' ? '排序：随机'"), 'tip 文案应覆盖随机档');
- assert.ok(railSrc.includes('function pickSort'), '排序档位应由 pickSort 设定');
- assert.ok(railSrc.includes("sortIsl.classList.toggle('off'"), '不可排序视图应给抽屉 off 态');
- assert.ok(css.includes('#irail .d-opt'), '排序选项行应有样式');
- assert.ok(css.includes('#irail .isl.off'), 'off 态应有样式');
+ // 左囊仅保留极简 4 区，博主入口直链 /kiosk 管理大厅，不再在主页左侧嵌长树/分组表
+ assert.ok(html.includes('所有博主') && html.includes('href="/kiosk"'), '左囊入口应直通 /kiosk 所有博主大厅');
+ assert.ok(!html.includes('id="rail-tree"') && !html.includes('id="rail-authors"')
+   && !html.includes('id="rail-groups"') && !html.includes('id="rail-sort"'),
+   '左囊不应再内嵌长分组树、博主列表或独立排序项');
+ // 排序三档与分组过滤合并进右上 #view-panel，由 #tt-filter 触发并汇总徽章
+ assert.ok(html.includes('id="tt-filter"') && html.includes('id="tt-filter-bdg"'), '右上工具条应提供筛选与排序合并入口');
+ assert.ok(html.includes('id="f-sort-row"') && html.includes('id="f-sort"'), '#view-panel 应内含排序段');
+ assert.ok(html.includes('id="f-group-row"') && html.includes('id="f-group"'), '#view-panel 应内含分组过滤段');
+ assert.ok(appSrc.includes('const SORT_CHIPS =') && appSrc.includes("v: 'shuffle', label: '随机'"), 'SORT_CHIPS 应含随机档（三档齐全）');
+ assert.ok(appSrc.includes('function renderSortRow()') && appSrc.includes('function renderGroupRow()'), 'app.js 应统一渲染面板排序与分组段');
+ assert.ok(railSrc.includes("const sortLabel = S.sort === 'keep_count' ? '点赞序' : S.sort === 'shuffle' ? '随机序' : '';"), '右上筛选按钮 tip 应同步当前排序档');
+ assert.ok(appSrc.includes('authorViewOpen:') && appSrc.includes('viewState'), 'pwRail 应暴露 authorViewOpen 与 viewState 钩子');
 });
 
-test('右轨抽屉点按开合：aria 同步、搜索激活态与清除路径、设置/回顶直连钩子', async()=>{
+test('悬浮胶囊交互：左囊 120ms hover-intent 无重排覆盖层、右上更多菜单开合、设置/搜索/回顶直连', async()=>{
  const fs=await import('node:fs/promises');
  const root=new URL('../app/static/',import.meta.url);
  const html=await fs.readFile(new URL('../templates/index.html',root),'utf8');
  const railSrc=await fs.readFile(new URL('rail.js',root),'utf8');
  const appSrc=await fs.readFile(new URL('app.js',root),'utf8');
  const css=await fs.readFile(new URL('style.css',root),'utf8');
- // 点按开合（触屏无 hover 的主通道）：.isl.open 开合 + aria-expanded/aria-controls 同步
- assert.ok(railSrc.includes("isl.classList.add('open')") && railSrc.includes('function closeDrawers'), '抽屉应有 JS 点按开合状态机');
- assert.ok(css.includes('#irail .isl.open .drawer'), '.open 态应让抽屉可见');
- assert.ok(html.includes('aria-controls="ir-sort-drawer"') && html.includes('id="ir-sort-drawer"'), '排序钮应声明 aria-controls');
- assert.ok(html.includes('aria-expanded="false"'), '抽屉触发钮初始应为 aria-expanded=false');
- assert.ok(railSrc.includes("btn.setAttribute('aria-expanded', 'true')"), '开抽屉应同步 aria-expanded');
- // 抽屉锚定在按钮下方：排序是右轨第一枚，居中锚定会把上半截顶出视口（标题被裁）
- assert.ok(css.includes('#irail .drawer {') && css.includes('top: calc(100% + 6px)'), '抽屉应下锚（修顶部裁切）');
- assert.ok(!css.includes('translateY(calc(-50% + 4px))'), '居中锚定的旧 transform 应已删除');
- // 搜索：图标激活态 = 词在生效；tip 显当前词；Esc 三段式（还原草稿/清除/失焦）
- assert.ok(html.includes('id="ir-search-tip"'), '搜索钮应带 tip 名条');
- assert.ok(railSrc.includes("searchBtn.classList.toggle('on', !!q)"), '搜索词在生效应点亮图标');
- assert.ok(railSrc.includes("if (searchTip) { const t = q ? `搜索：${q}`"), 'tip 应显当前搜索词');
- assert.ok(railSrc.includes("sInput.value = S.searchText || '';") && railSrc.includes("R.applySearch('')"), 'Esc 应先还原草稿再清除已生效词');
- assert.ok(css.includes('#irail .ibtn.on'), '激活态按钮应有样式');
+ // 左囊纯 Overlay + 120ms hover-intent，移除钉住/重排推挤逻辑
+ assert.ok(railSrc.includes('setPanelOpen(true), 120') && railSrc.includes('setPanelOpen(false), 120'), '左囊应具备 120ms hover-intent 防误触延时');
+ assert.ok(!railSrc.includes('pw_rail_open') && !railSrc.includes('pw_rail_pin')
+   && !html.includes('id="rail-toggle"') && !css.includes('body.rail-open'),
+   '左囊不应残留钉住持久化或 body.rail-open 重排推挤');
+ // 右上更多菜单 ⋯：aria-expanded 同步 + 点击/移出收起
+ assert.ok(html.includes('aria-controls="tt-more-menu"') && html.includes('id="tt-more-menu"'), '右上更多钮应关联 #tt-more-menu');
+ assert.ok(html.includes('aria-expanded="false"') && railSrc.includes('function closeMore()'), '更多菜单应具备受控开合状态机');
+ // 搜索：图标激活态 = 词在生效；tip 显当前词；点击直通聚光灯大搜索栏
+ assert.ok(railSrc.includes("searchBtn.classList.toggle('on', !!q)"), '搜索词在生效应点亮右上搜索图标');
+ assert.ok(railSrc.includes("const t = q ? `搜索：${q}` : '搜索'"), '搜索 tip 应显当前搜索词');
+ assert.ok(railSrc.includes("searchBtn.addEventListener('click'") && railSrc.includes('R.openSpotlightSearch?.()'), '右上搜索钮应唤起聚光灯搜索');
  // 设置/回顶部直连：不再遥控桌面隐藏的顶栏元素
  assert.ok(appSrc.includes('scrollTop: scrollFeedTop'), 'pwRail 回顶应直连动作本身');
  assert.ok(appSrc.includes('openSettings: () => settings.openSettings()'), 'pwRail 应暴露 openSettings 钩子');
- assert.ok(!railSrc.includes("getElementById('btn-settings')"), '右轨设置行不应遥控隐藏的 #btn-settings');
- assert.ok(!railSrc.includes("getElementById('btn-top')"), '右轨回顶不应遥控隐藏的 #btn-top');
+ assert.ok(!railSrc.includes("getElementById('btn-settings')"), '设置行不应遥控隐藏的 #btn-settings');
+ assert.ok(!railSrc.includes("getElementById('btn-top')"), '回顶不应遥控隐藏的 #btn-top');
 });
 
 test('悬浮球可拖动：位移阈值区分拖/点、位置持久化、近顶菜单向下', async()=>{
@@ -933,8 +931,8 @@ test('微博博主目标与管理分组契约：WB·前缀、博主入口与分�
   assert.ok(settings.includes('#btn-add-wbuser'), 'settings.js 应绑定添加微博博主事件');
   assert.ok(settings.includes("g.list_id.startsWith('wbu:') ? 'WB·' : ''"), '管理分组应给 wbu: 目标渲染 WB· 前缀');
 
-  // 3. 分组筛选行已随筛选中枢改造退役：博主目标不进面板，看博主走面板「博主」行/博主视图
-  assert.ok(!html.includes('id="f-group"'), '分组筛选行应已退役');
+  // 3. 分组筛选并入右上筛选面板（博主目标不进分组芯片，看博主走左囊「所有博主」/kiosk 或博主视图）
+  assert.ok(html.includes('id="f-group"') && app.includes("!/^(xu:|wbu:)/.test(g.list_id)"), '分组筛选应并入 #view-panel 且排除单人博主目标');
 });
 
 test('筛选中枢：博主条退役、博主筛选并入视图面板、Shift+F 呼出', async () => {
@@ -956,10 +954,9 @@ test('筛选中枢：博主条退役、博主筛选并入视图面板、Shift+F 
   assert.ok(!html.includes('pref-author') && !settings.includes('pref-author'), '博主展示偏好应已删除');
   assert.ok(!css.includes('data-author='), '仅头像 CSS 档位应已删除');
 
-  // 3. 视图面板成为单一筛选中枢：分组/时间/评论行删除，博主行进驻
-  assert.ok(!html.includes('id="f-group"') && !html.includes('id="f-range"')
-    && !html.includes('id="f-cmts"'), '分组/时间/评论行应已删除');
-  assert.ok(html.includes('id="f-author"'), '面板应有博主行');
+  // 3. 视图面板精简：博主与状态行退役收敛至侧栏，时间与评论筛选进驻面板
+  assert.ok(!html.includes('id="f-author"') && !html.includes('id="f-status"'), '博主与状态行已从面板退役收敛至侧栏');
+  assert.ok(html.includes('id="f-range"') && html.includes('id="f-has-cmts"'), '时间与评论筛选应进驻面板');
   assert.ok(app.includes('renderAuthorRow') && app.includes('fa-picker'), '博主行应有行内选择器');
   assert.ok(app.includes('sort=name_asc'), '博主列表默认按拼音顺序（联系人式）');
   assert.ok(app.includes('FA_ALPHABET') && app.includes('fa-index'), '博主选择器应有字母分组与索引轨');
@@ -984,4 +981,732 @@ test('筛选中枢：博主条退役、博主筛选并入视图面板、Shift+F 
   assert.ok(settings.includes("querySelectorAll('[data-gmtoggle]')") && settings.includes('data-gmtoggle='),
     '成员开合按钮应绑定 data-gmtoggle');
   assert.ok(!settings.includes('bmtoggle'), '不应残留 bmtoggle 拼写');
+});
+
+test('桌面右轨与侧栏修复：Esc冒泡阻断、抽屉焦点/点按收起、编年排序保护、放映直连、纯图多选入口与几何对齐', async () => {
+  const fs = await import('node:fs/promises');
+  const root = new URL('../app/static/', import.meta.url);
+  const html = await fs.readFile(new URL('../templates/index.html', root), 'utf8');
+  const railSrc = await fs.readFile(new URL('rail.js', root), 'utf8');
+  const appSrc = await fs.readFile(new URL('app.js', root), 'utf8');
+  const css = await fs.readFile(new URL('style.css', root), 'utf8');
+
+  // 1. Esc 冒泡阻断：关闭视图面板时必须 stopPropagation 与 stopImmediatePropagation，避免同级 document 监听器误关左侧栏
+  assert.ok(appSrc.includes("closeViewPanel(); e.stopPropagation();"), '关闭视图面板时应阻断 Esc 冒泡');
+  assert.ok(appSrc.includes('e.stopImmediatePropagation()'), '关闭视图面板与浮层时应调用 stopImmediatePropagation 阻断同级 document 监听器');
+
+  // 验证真实的事件派发：当 stopImmediatePropagation 被调用时，document 上的后续 keydown 监听器不应被触发
+  {
+    const target = new EventTarget();
+    let secondListenerFired = false;
+    target.addEventListener('keydown', (e) => {
+      // 模拟 app.js 行为
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+    });
+    target.addEventListener('keydown', (e) => {
+      // 模拟 rail.js 行为
+      secondListenerFired = true;
+    });
+    target.dispatchEvent(new Event('keydown'));
+    assert.equal(secondListenerFired, false, 'stopImmediatePropagation 应彻底阻断同级监听器执行');
+  }
+
+  // 2. 右上工具条与纯图模式联动、时间线右缘退让
+  assert.ok(html.includes('id="top-tools"') && html.includes('id="corner-tools"'),
+    '桌面应存在右上 #top-tools 与右下 #corner-tools 悬浮胶囊');
+  assert.ok(appSrc.includes("inp.addEventListener('search'") && appSrc.includes("inp.addEventListener('input'"),
+    '搜索输入框应监听 search 与 input 事件以支持 WebKit 原生清除与实时前缀');
+
+  // 3. 纯图模式下贴边布局与悬浮胶囊半隐恢复
+  assert.ok(css.includes('html[data-pureimg="1"] body { padding-left: 0; }'),
+    '纯图模式下桌面应释放左留白贴边铺满');
+  assert.ok(css.includes('html[data-pureimg="1"] #rail,')
+    && css.includes('html[data-pureimg="1"] #corner-tools { opacity: .22; }')
+    && css.includes('html[data-pureimg="1"] #top-tools.panel-open,')
+    && css.includes('html[data-pureimg="1"] #corner-tools:focus-within { opacity: 1; }'),
+    '纯图模式下悬浮胶囊应默认半隐并在悬停/聚焦/开窗时回显');
+  assert.ok(css.includes('#truler { right: 0; top: max(64px, var(--tl-top, 64px)); bottom: 64px;')
+    && css.includes('body.has-selbar #corner-tools { bottom: 68px; }'),
+    '编年密度尺应避让右上胶囊，多选底栏应抬起右下回顶胶囊');
+
+  // 4. 三套皮肤适配胶囊（Swiss 零玻璃 / Brut 硬阴影撞色 / Photo 扁平）
+  assert.ok(css.includes('html[data-skin="swiss"] #rail,')
+    && css.includes('html[data-skin="brut"] #rail,')
+    && css.includes('box-shadow: 4px 4px 0 var(--skin-edge);')
+    && css.includes('html[data-skin="photo"] #rail,'),
+    'Swiss / Brut / Photo 三套皮肤应各自覆盖悬浮胶囊样式');
+
+  // 5. 更多菜单直连动作与快捷入口
+  assert.ok(html.includes('id="tt-play"') && html.includes('幻灯片放映')
+    && html.includes('id="tt-random"') && html.includes('id="tt-notes"')
+    && html.includes('id="tt-top"'),
+    '右上更多菜单应包含放映/随机/批注，右下胶囊提供回顶');
+  assert.ok(railSrc.includes("document.getElementById('tt-play')?.addEventListener('click'")
+    && railSrc.includes('R.slideshowOpen()'),
+    '点击放映应直达 R.slideshowOpen()');
+
+  // 6. 桌面隐藏 FAB，右上工具条集成纯图与多选
+  assert.ok(css.includes('@media (min-width: 900px)') && css.includes('.fab { display: none; }'),
+    '桌面端 (>=900px) 应隐藏悬浮球 FAB');
+  assert.ok(html.includes('id="tt-pureimg"') && html.includes('id="tt-select"'),
+    '右上悬浮胶囊应提供纯图与多选入口');
+  assert.ok(railSrc.includes('pureimgBtn.addEventListener') && railSrc.includes('selectBtn.addEventListener'),
+    '纯图与多选按钮应绑定点击切换');
+  assert.ok(appSrc.includes('setSelectMode: (on) => setSelectMode(on)'),
+    'pwRail 应暴露 setSelectMode 钩子');
+  assert.ok(appSrc.includes('updateSelN();\n  railSync();'),
+    'setSelectMode 应即时触发 railSync 同步多选状态');
+
+  // 7. 左侧悬浮胶囊与布局修复（高亮条、分组过滤、换视图清筛选、title、authorView 贴顶、列数、边框对比度）
+  const authorSrc = await fs.readFile(new URL('author-view.js', root), 'utf8');
+
+  // 高亮指示条锚定在 left: 0
+  assert.ok(css.includes('#rail .rrow.on::before {'), '高亮指示条应置于 left: 0 渲染安全区');
+
+  // 面板分组过滤保留纯数字微博分组，排除博主单人目标与 demo
+  assert.ok(appSrc.includes("!/^(xu:|wbu:)/.test(g.list_id) && g.list_id !== 'demo'"),
+    '面板分组过滤应排除博主目标与 demo，保留纯数字微博分组');
+
+  // 换全部视图时若带筛选（含博主）不应早退死锁
+  assert.ok(appSrc.includes('const needsReload = S.status !== status || hadFilters'),
+    'switchStatusView 应将 hadFilters 纳入 needsReload 条件');
+
+  // 左囊所有条目均带原生 title 属性（收起态悬停可读）
+  assert.ok(html.includes('id="rail-brand"') && html.includes('title="PWALL · 回到顶部"')
+    && html.includes('id="rail-authors-entry"') && html.includes('title="所有博主"')
+    && html.includes('id="rail-triage"') && html.includes('title="待筛"')
+    && html.includes('id="rail-chrono"') && html.includes('title="编年视图"')
+    && html.includes('id="rail-stats-link"') && html.includes('title="回看统计"')
+    && html.includes('id="rail-settings"') && html.includes('title="设置"'),
+    '左悬浮胶囊所有条目均应具备原生 title 属性');
+
+  // 桌面端吸顶博主栏贴顶 8px 修复 + timeline 顶栏探测
+  assert.ok(authorSrc.includes("const hasTopbar = tb && getComputedStyle(tb).display !== 'none';")
+    && authorSrc.includes("const base = hasTopbar ? tb.offsetHeight + 6 : 8;"),
+    'authorView syncSticky 应正确识别桌面顶栏隐藏并贴顶 8px');
+
+  // 左囊胶囊收起(56px)/展开(216px) 平滑覆盖与文字隐藏
+  assert.ok(css.includes('width: 56px;') && css.includes('#rail.open {') && css.includes('width: 216px;')
+    && css.includes('#rail:not(.open) .lb { opacity: 0; max-width: 0; pointer-events: none;'),
+    '左悬浮胶囊应从 56px 覆盖展开至 216px，收起态文字滑隐不占位');
+
+  // 桌面（含纯图态）与平板 (640px~900px) 列数 occupied 计算及零递归自愈
+  assert.ok(appSrc.includes('const occupied = window.innerWidth >= 900 ? (isPure ? 32 : 116) : 32;')
+    && appSrc.includes('relayoutFeed: () => { colWidth = 0; ensureFeedCols(); }')
+    && !railSrc.includes("window.dispatchEvent(new Event('resize'))"),
+    'feedColCount 在桌面纯图态扣除 32px、常规态扣除 116px，列栈自愈应直接调用 relayoutFeed 而非同步派发 resize 事件');
+
+  // 胶囊描边对比度使用 border-subtle
+  assert.ok(css.includes('#rail {') && css.includes('#top-tools {') && css.includes('border: 1px solid var(--border-subtle);'),
+    '悬浮胶囊描边应使用 border-subtle 强化对比度');
+});
+
+test('多维搜索契约与筛选面板精简：搜索维度匹配、快捷前缀、胶囊同步与面板去重', async () => {
+  const fs = await import('node:fs/promises');
+  const root = new URL('../app/static/', import.meta.url);
+  const html = await fs.readFile(new URL('../app/templates/index.html', import.meta.url), 'utf8');
+  const railSrc = await fs.readFile(new URL('rail.js', root), 'utf8');
+  const appSrc = await fs.readFile(new URL('app.js', root), 'utf8');
+  const css = await fs.readFile(new URL('style.css', root), 'utf8');
+
+  // 1. matchesView 多维搜索口径契约
+  const basePost = { sid: 's1', status: 'kept', favorite: 0, text: '阳光下的海边', author: '摄影师阿张', tags: ['风景', '胶片'], comment_match: '' };
+  const baseState = { status: 'kept', group: 'all', author: 'all', source: 'all', range: 'all', hasCmts: 'all', tags: 'all', searchText: '', searchScope: 'all' };
+
+  // scope: 'all' 维度：任一命中（文本、作者、标签、批注）
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '海边', searchScope: 'all' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '阿张', searchScope: 'all' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '胶片', searchScope: 'all' }), true);
+  assert.equal(matchesView({ ...basePost, comment_match: '机位绝佳' }, { ...baseState, searchText: '机位', searchScope: 'all' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '不存在', searchScope: 'all' }), false);
+
+  // scope: 'text' 维度：仅正文
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '海边', searchScope: 'text' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '阿张', searchScope: 'text' }), false);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '胶片', searchScope: 'text' }), false);
+
+  // scope: 'author' 维度：仅博主
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '阿张', searchScope: 'author' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '海边', searchScope: 'author' }), false);
+
+  // scope: 'tag' 维度：仅标签
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '胶片', searchScope: 'tag' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '海边', searchScope: 'tag' }), false);
+
+  // scope: 'comment' 维度：仅评论/批注
+  assert.equal(matchesView({ ...basePost, comment_match: '机位绝佳' }, { ...baseState, searchText: '机位', searchScope: 'comment' }), true);
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '海边', searchScope: 'comment' }), false);
+
+  // 2. 居中聚光灯大搜索栏 UI 与胶囊 markup
+  assert.ok(html.includes('id="modal-spotlight-search"') && html.includes('id="spotlight-scopes"') && html.includes('class="search-scopes"'), '聚光灯搜索应包含模态弹窗与维度胶囊容器');
+  assert.ok(html.includes('data-scope="all"') && html.includes('data-scope="text"')
+    && html.includes('data-scope="comment"') && html.includes('data-scope="tag"')
+    && html.includes('data-scope="author"'), '搜索维度应包含全部/内容/评论/标签/博主');
+
+  // 3. 前缀快捷键识别 (@xxx, #xxx, //xxx, c:xxx)
+  assert.ok(appSrc.includes("val.startsWith('@')") && appSrc.includes("newScope = 'author'"), '前缀 @ 应自动切博主维度');
+  assert.ok(appSrc.includes("val.startsWith('#')") && appSrc.includes("newScope = 'tag'"), '前缀 # 应自动切标签维度');
+  assert.ok(appSrc.includes("val.startsWith('//')") && appSrc.includes("newScope = 'comment'"), '前缀 // 应自动切评论维度');
+  assert.ok(appSrc.includes('/^c:/i.test(val)') && appSrc.includes("newScope = 'comment'"), '前缀 c: 应自动切评论维度');
+
+  // 4. 聚光灯搜索交互与状态同步
+  assert.ok(appSrc.includes("scopesEl.addEventListener('click'") && appSrc.includes("setSpotlightScope"), '点击维度胶囊应即时切换维度');
+  assert.ok(appSrc.includes("scopesEl.querySelectorAll('.s-scope').forEach"), 'sync 应同步胶囊高亮态');
+  assert.ok(appSrc.includes("p.set('scope', S.searchScope)"), 'syncUrl 应持久化 scope');
+  assert.ok(appSrc.includes("q.set('q_scope', S.searchScope)"), 'load 应发送 q_scope');
+
+  // 5. 视图面板精简去重与右轨贴靠 popover 对齐
+  assert.ok(!html.includes('id="f-status"'), '#view-panel 应已移除状态行');
+  assert.ok(!html.includes('id="f-author"'), '#view-panel 应已移除博主行');
+  assert.ok(!html.includes('id="f-sort-ctl"'), '#view-panel 应已移除排序控制');
+  assert.ok(!html.includes('id="f-layout"'), '#view-panel 应已移除布局控制');
+  assert.ok(html.includes('id="f-source"') && html.includes('id="f-tags"')
+    && html.includes('id="f-range"') && html.includes('id="f-has-cmts"')
+    && html.includes('id="f-reset"'), '#view-panel 应保留辅助属性筛选');
+  assert.ok(css.includes('.view-panel') && css.includes('320px'), '桌面筛选面板应为 320px 贴靠浮窗');
+  assert.ok(css.includes('top: 64px;') && css.includes('right: 16px;'), '桌面筛选面板与通知栈应紧贴右上工具条下沿');
+
+  // 6. 样式规格契约
+  assert.ok(css.includes('.search-scopes') && css.includes('.s-scope'), '应定义维度胶囊样式');
+  assert.ok(css.includes('.spotlight-modal') && css.includes('backdrop-filter: blur(8px)'), '聚光灯弹窗应定义毛玻璃背景');
+  assert.ok(css.includes('.f-foot') && css.includes('.f-reset'), '筛选重置应有独立底部行样式');
+  assert.ok(css.includes('.f-foot:has(#f-reset[hidden])'), '筛选重置无按钮时应收起空底栏');
+
+  // 7. matchesView 边界情况：纯空格搜索词不产生错误过滤
+  assert.equal(matchesView(basePost, { ...baseState, searchText: '   ', searchScope: 'text' }), true);
+
+  // 8. 维度胶囊与 applySearch 联动：同词换维度必须触发重新加载（不能被误判为未变更而早退）
+  assert.ok(appSrc.includes('appliedSearchScope') && appSrc.includes('appliedSearchText'), 'app.js 应维护已应用的搜索词与维度，防止换维度早退');
+  assert.ok(appSrc.includes("applySearch(v, currentSpotlightScope)"), '聚光灯搜索应保证当前维度正确传入 applySearch');
+  assert.ok(appSrc.includes('pw_recent_searches'), '最近搜索应持久化至 localStorage');
+  assert.ok(html.includes('spotlight-syntax-hints') && html.includes('@昵称') && html.includes('//内容'), '聚光灯应包含快捷语法提示 (@昵称 搜博主, #标签 搜标签, //内容 搜评论)');
+  assert.ok(html.includes('spotlight-footer') && html.includes('检索') && html.includes('ESC'), '聚光灯应包含底部按键提示');
+
+  // 9. 健壮性与可访问性契约：全角斜杠支持、退格切回全部、最近搜索键盘可达与移动端回焦防死循环
+  assert.ok(appSrc.includes("val.startsWith('／／')"), '应支持全角斜杠前缀识别');
+  assert.ok(appSrc.includes("e.key === 'Backspace' && !inp.value && currentSpotlightScope !== 'all'"), '空输入框按 Backspace 应切回全部维度');
+  assert.ok(appSrc.includes('modalReturnFocus.id !== \'f-search\''), '关窗时不应死循环回焦移动端搜索输入框');
+  assert.ok(appSrc.includes('setSpotlightScope(\'all\')'), 'resetFilters 应同步重置聚光灯搜索维度');
+  assert.ok(appSrc.includes('role="button"') && appSrc.includes('tabindex="0"'), '最近搜索气泡应具备键盘访问语义');
+});
+
+test('实时检索与分类UI区分契约：聚光灯实时联想、四维视觉区分、键盘导航与页面活跃检索胶囊', async () => {
+  const fs = await import('node:fs/promises');
+  const root = new URL('../app/static/', import.meta.url);
+  const html = await fs.readFile(new URL('../app/templates/index.html', import.meta.url), 'utf8');
+  const css = await fs.readFile(new URL('style.css', root), 'utf8');
+  const appSrc = await fs.readFile(new URL('app.js', root), 'utf8');
+
+  // 1. 结构契约：聚光灯实时结果容器与图片墙活跃检索胶囊
+  assert.ok(html.includes('id="spotlight-live-results"'), '聚光灯模态中应包含实时检索结果容器 #spotlight-live-results');
+  assert.ok(html.includes('id="spotlight-default-body"'), '聚光灯模态中应包含默认空白态容器 #spotlight-default-body');
+  assert.ok(html.includes('id="feed-search-chip"'), '图片墙顶部应包含活跃检索胶囊容器 #feed-search-chip');
+  assert.ok(html.includes('id="f-search-clear"'), '顶栏搜索框应包含一键清除按钮 #f-search-clear');
+
+  // 2. 实时检索、防抖与竞态保护契约
+  assert.ok(appSrc.includes('/api/search/live?q='), 'app.js 应请求 /api/search/live 实时检索接口');
+  assert.ok(appSrc.includes('triggerLiveSearch'), 'app.js 应具备实时搜索触发器');
+  assert.ok(appSrc.includes('150'), '实时搜索应具备 ~150ms 的防抖机制');
+  assert.ok(appSrc.includes('AbortController'), '实时搜索防抖应使用 AbortController 取消前序未完成请求');
+  assert.ok(appSrc.includes('liveSearchSeq'), '实时搜索应使用序列号严格防止网络回包乱序覆盖');
+
+  // 3. 四维类别UI区分契约 (Author/Tag/Content/Comment)
+  assert.ok(css.includes('.cat-author') && css.includes('.cat-tag') && css.includes('.cat-content') && css.includes('.cat-comment'), 'CSS 应为博主/标签/内容/评论定义四维类别色阶样式');
+  assert.ok(appSrc.includes('data-type="author"') && appSrc.includes('cat-author'), '博主分类应具备专属徽章与类型标识');
+  assert.ok(appSrc.includes('data-type="tag"') && appSrc.includes('cat-tag'), '标签分类应具备专属徽章与类型标识');
+  assert.ok(appSrc.includes('data-type="content"') && appSrc.includes('cat-content'), '内容分类应具备专属徽章与类型标识');
+  assert.ok(appSrc.includes('data-type="comment"') && appSrc.includes('cat-comment'), '评论分类应具备专属徽章与类型标识');
+  assert.ok(appSrc.includes('openDetail(sid, true)'), '评论结果点击应直达详情卡片并定位评论区');
+
+  // 4. 关键词高亮、缩略图路径与日期展示
+  assert.ok(appSrc.includes('highlightSnippet') && appSrc.includes('<mark>'), '实时结果应使用 <mark> 高亮匹配关键词');
+  assert.ok(css.includes('.spotlight-res-snippet mark'), 'CSS 应定义高亮标签样式');
+  assert.ok(appSrc.includes('spotlight-res-avatar') && appSrc.includes('spotlight-res-thumb'), '实时结果应支持头像与正文缩略图渲染');
+  assert.ok(appSrc.includes('mediaSrc(c.thumb)'), '正文缩略图应通过 mediaSrc 映射正确媒体相对路径');
+  assert.ok(appSrc.includes('spotlight-res-date') && appSrc.includes('fmtDate(c.created_at)'), '正文与评论实时结果应显示发布日期');
+
+  // 5. 键盘导航契约 (↑/↓ 键位、中文输入法保护与 Enter 确认选择)
+  assert.ok(appSrc.includes("e.key === 'ArrowDown'") && appSrc.includes("e.key === 'ArrowUp'"), '聚光灯搜索应支持上下方向键导航');
+  assert.ok(appSrc.includes('updateSpotlightNav'), '应维护当前键盘高亮项');
+  assert.ok(css.includes('.spotlight-result-item.selected'), 'CSS 应定义键盘选中态样式');
+  assert.ok(appSrc.includes('selectSpotlightItem'), '按回车或点击应选择当前高亮结果');
+  assert.ok(appSrc.includes('isComposing') && appSrc.includes('compositionend'), '输入框应具备中文输入法（IME）合成事件保护');
+
+  // 6. 底部全部结果动作
+  assert.ok(appSrc.includes('在图片墙查看全部结果'), '实时检索底部应提供在图片墙查看全部结果的统一动作');
+  assert.ok(css.includes('.spotlight-action-all'), '全部结果动作应有明显分隔与样式');
+
+  // 7. 图片墙活跃检索胶囊 (Feed Active Search Chip) 契约
+  assert.ok(appSrc.includes('renderActiveSearchChip'), 'app.js 应维护 renderActiveSearchChip 渲染函数');
+  assert.ok(appSrc.includes('active-search-chip'), '活跃检索胶囊应使用 .active-search-chip 结构');
+  assert.ok(appSrc.includes('active-search-clear'), '活跃检索胶囊应支持一键清除');
+  assert.ok(css.includes('.feed-search-chip') && css.includes('.active-search-chip'), 'CSS 应定义图片墙顶部活跃检索胶囊样式');
+  assert.ok(css.includes('.active-search-badge.cat-author') && css.includes('.active-search-badge.cat-tag'), '活跃检索徽章应具备各分类专属背景与文本颜色');
+});
+
+test('Wave1 安全加固：settings 组 ID 转义、kiosk/view-state 转义与协议约束、markTerm 防实体破坏', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+
+  // 1. settings.js：g.list_id 全量 esc()，删除接口使用 encodeURIComponent
+  const settingsSrc = await read('../app/static/settings.js');
+  assert.ok(settingsSrc.includes('data-id="${esc(g.list_id)}"'));
+  assert.ok(settingsSrc.includes('data-gmtoggle="${esc(g.list_id)}"'));
+  assert.ok(settingsSrc.includes('data-bf="${esc(g.list_id)}"'));
+  assert.ok(settingsSrc.includes('data-rm="${esc(g.list_id)}"'));
+  assert.ok(settingsSrc.includes("api('/api/groups/' + encodeURIComponent(b.dataset.rm), 'DELETE')"));
+
+  // 2. kiosk.js：单引号转义、属性中换行不变成 <br>、仅 nl2br 换 <br>、safeMedia 协议白名单
+  assert.equal(kioskEsc(`a'b"c\n<d>&`), 'a&#39;b&quot;c\n&lt;d&gt;&amp;');
+  assert.equal(kioskNl2br('a<b\nc&d'), 'a&lt;b<br>c&amp;d');
+  assert.equal(kioskSafeMedia('avatars/u.jpg'), '/media/avatars/u.jpg');
+  assert.equal(kioskSafeMedia('/media/x/y.jpg'), '/media/x/y.jpg');
+  assert.equal(kioskSafeMedia('https://cdn.example.com/a.jpg'), 'https://cdn.example.com/a.jpg');
+  assert.equal(kioskSafeMedia('javascript:alert(1)'), '');
+  assert.equal(kioskSafeMedia('data:text/html,<script>1</script>'), '');
+  assert.equal(kioskSafeMedia('//evil.example/a.jpg'), '');
+
+  // 3. view-state.js：mediaSrc/avatarSrc/safeUrl 协议收紧，markTerm 不损坏 HTML 实体且按 scope 去前缀
+  assert.equal(avatarSrc('javascript:alert(1)'), '');
+  assert.equal(avatarSrc('data:image/svg+xml,<svg/>'), '');
+  assert.equal(avatarSrc('httpanything:foo'), '');
+  assert.equal(mediaSrc('/media/a.jpg'), '/media/a.jpg');
+  assert.equal(mediaSrc('https://pbs.twimg.com/a.jpg'), 'https://pbs.twimg.com/a.jpg');
+  assert.equal(mediaSrc('a/b.jpg'), '/media/a/b.jpg');
+  assert.equal(mediaSrc('data:text/html,xss'), '');
+  assert.equal(mediaSrc('javascript:alert(1)'), '');
+  assert.equal(mediaSrc('httpfoo:bar'), '');
+  assert.equal(safeUrl('javascript:alert(1)'), '#');
+  assert.equal(safeUrl('https://weibo.com/1/2'), 'https://weibo.com/1/2');
+  assert.equal(esc(`'<>\"&`), '&#39;&lt;&gt;&quot;&amp;');
+  assert.equal(markTerm('<script & alert>', 'lt'), '&lt;script &amp; alert&gt;');
+  assert.equal(markTerm('<script & alert>', 'amp'), '&lt;script &amp; alert&gt;');
+  assert.equal(markTerm('see <tag> now', '<tag>'), 'see <mark>&lt;tag&gt;</mark> now');
+  assert.equal(markTerm('note: hello', '//hello', 'all'), 'note: <mark>hello</mark>');
+  assert.equal(markTerm('literal //hello', '//hello', 'text'), 'literal <mark>//hello</mark>');
+
+  // 4. devices.js / pair.js / quad.js / lightbox.js / fab.js / style.css / app.js 契约
+  const [devicesSrc, pairSrc, quadSrc, lbSrc, fabSrc, cssSrc, appSrc] = await Promise.all([
+    read('../app/static/devices.js'),
+    read('../app/static/pair.js'),
+    read('../app/static/quad.js'),
+    read('../app/static/lightbox.js'),
+    read('../app/static/fab.js'),
+    read('../app/static/style.css'),
+    read('../app/static/app.js'),
+  ]);
+  assert.ok(devicesSrc.includes("encodeURIComponent(b.dataset.device)"));
+  assert.ok(pairSrc.includes('history.replaceState') && pairSrc.includes("searchParams.delete('code')"));
+  assert.ok(appSrc.includes("clean.searchParams.delete('code')") && appSrc.includes('S.readOnly || $(\'#detail\').hidden'));
+  assert.ok(quadSrc.includes('avatarSrc(p.avatar)') && quadSrc.includes('src="/media/${esc(isVid'));
+  assert.ok(lbSrc.includes('src="${esc(src)}"') && lbSrc.includes('data-i="${esc(gi)}"'));
+  assert.ok(!fabSrc.includes('<span>${label}</span>') && fabSrc.includes('span.textContent ='));
+  for (const sel of ['#sel-tags', '#rail-triage', '#tt-select', '#tt-play']) {
+    assert.ok(cssSrc.includes(`html[data-device-role="viewer"]`) && cssSrc.includes(sel), `viewer 应隐藏 ${sel}`);
+  }
+});
+
+test('Wave1 安全加固：模板 CSP 就绪（无内联脚本/样式与事件属性）、外链 noreferrer、扩展过滤与采集器边界', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+
+  // 1. 模板无内联 <script>/<style> 与 on*= 事件属性，外链带 noreferrer
+  for (const name of ['index.html', 'kiosk.html', 'pair.html', 'stats.html']) {
+    const html = await read(`../app/templates/${name}`);
+    assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), `${name} 不应含内联 <script>`);
+    assert.ok(!/<style[\s>]/i.test(html), `${name} 不应含内联 <style>`);
+    assert.ok(!/\son[a-z]+\s*=/i.test(html), `${name} 不应含内联 on* 事件属性`);
+  }
+  const indexHtml = await read('../app/templates/index.html');
+  assert.ok(indexHtml.includes('<script src="/static/boot.js?v={{ v }}"></script>'));
+  assert.ok(!indexHtml.includes('rel="noopener" '), '外部原博链接必须同时带 noreferrer');
+  assert.ok(indexHtml.includes('rel="noopener noreferrer"'));
+
+  // 2. 扩展 Cookie 白名单、非回环明文 HTTP 告警、#addr 变更先鉴权与旧权限清理
+  const { fields, cookieHeader } = filterWeiboCookies([
+    { name: 'SUB', value: 'rootSub', path: '/' },
+    { name: 'SUB', value: 'deepSub', path: '/ajax/' },
+    { name: 'XSRF-TOKEN', value: 'xsrf123', path: '/' },
+    { name: 'SCF', value: 'scf1', path: '/' },
+    { name: '_s_tentry', value: 'track', path: '/' },
+    { name: 'SESSION_OTHER', value: 'dropme', path: '/' },
+  ]);
+  assert.equal(fields.get('SUB'), 'deepSub');
+  assert.equal(fields.get('XSRF-TOKEN'), 'xsrf123');
+  assert.equal(fields.get('SCF'), 'scf1');
+  assert.equal(fields.has('_s_tentry'), false);
+  assert.equal(fields.has('SESSION_OTHER'), false);
+  assert.ok(!cookieHeader.includes('dropme') && !cookieHeader.includes('_s_tentry'));
+
+  assert.equal(isInsecureLanHttp('http://192.168.1.20:8081'), true);
+  assert.equal(isInsecureLanHttp('http://10.0.0.5:8081'), true);
+  assert.equal(isInsecureLanHttp('http://localhost:8081'), false);
+  assert.equal(isInsecureLanHttp('http://127.0.0.1:8081'), false);
+  assert.equal(isInsecureLanHttp('http://[::1]:8081'), false);
+  assert.equal(isInsecureLanHttp('https://192.168.1.20:8443'), false);
+  assert.equal(originPatternFor('http://192.168.1.20:8081'), 'http://192.168.1.20/*');
+
+  const [popupHtml, popupJs, collectorJs] = await Promise.all([
+    read('../extension/popup.html'),
+    read('../extension/popup.js'),
+    read('../tools/x-collector.js'),
+  ]);
+  assert.ok(popupHtml.includes('id="lan-warn"'));
+  assert.ok(popupJs.includes('filterWeiboCookies') && popupJs.includes('revokeUnusedOrigins'));
+  assert.match(popupJs, /#addr"\)\.addEventListener\("change"[\s\S]*await allowDestination\(\)[\s\S]*refresh\(\)/);
+
+  // 3. tools/x-collector.js：GraphQL 匹配前置、seen 有界、出错暂停自动重试、stop 卸载钩子
+  assert.ok(collectorJs.includes('TIMELINE_RE.test(u)') && collectorJs.includes('MAX_SEEN = 5000'));
+  assert.ok(collectorJs.includes('autoFlushBlocked') && collectorJs.includes('window.fetch = _fetch'));
+});
+
+test('Wave2 性能优化 F-P1：Lightbox 胶片窗口化渲染（最多 41 张）、原地切换高亮与取消过期预解码', async () => {
+  const prevDoc = globalThis.document;
+  const prevImg = globalThis.Image;
+  const makeCls = (initial = '') => {
+    const set = new Set(initial.split(/\s+/).filter(Boolean));
+    return {
+      add: (...xs) => xs.forEach((x) => set.add(x)),
+      remove: (...xs) => xs.forEach((x) => set.delete(x)),
+      contains: (x) => set.has(x),
+      toggle: (x, f) => { if (f === undefined ? !set.has(x) : f) set.add(x); else set.delete(x); },
+    };
+  };
+  let filmHtmlWrites = 0;
+  let filmChildren = [];
+  const makeEl = (tag = 'div') => {
+    const attrs = new Map();
+    const listeners = new Map();
+    return {
+      tagName: tag.toUpperCase(),
+      hidden: true,
+      disabled: false,
+      style: {},
+      classList: makeCls(),
+      children: [],
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      getAttribute: (k) => attrs.get(k) ?? null,
+      addEventListener: (t, fn) => listeners.set(t, fn),
+      focus: () => {},
+      scrollIntoView: () => {},
+      scrollTop: 0,
+    };
+  };
+  const film = makeEl('div');
+  Object.defineProperty(film, 'innerHTML', {
+    get() { return ''; },
+    set(v) {
+      filmHtmlWrites += 1;
+      filmChildren = [];
+      if (!v) { film.children = filmChildren; return; }
+      for (const m of v.matchAll(/<button class="([^"]*)" data-i="([^"]*)" data-pos="([^"]*)" role="tab" aria-selected="([^"]*)"/g)) {
+        const btn = makeEl('button');
+        btn.classList = makeCls(m[1]);
+        btn.setAttribute('data-i', m[2]);
+        btn.setAttribute('data-pos', m[3]);
+        btn.setAttribute('aria-selected', m[4]);
+        btn.dataset = { i: m[2], pos: m[3] };
+        filmChildren.push(btn);
+      }
+      film.children = filmChildren;
+    },
+  });
+  const els = {
+    '#lightbox': makeEl('div'),
+    '#detail': makeEl('div'),
+    '#lb-film': film,
+    '#lb-img': makeEl('img'),
+    '.lb-stage': makeEl('div'),
+    '#lb-video': null,
+    '#lb-prev': makeEl('button'),
+    '#lb-next': makeEl('button'),
+  };
+  const createdPreloads = [];
+  let decodeCalls = 0;
+  globalThis.document = { activeElement: null, body: { style: {} } };
+  globalThis.Image = class FakeImage {
+    constructor() { this.complete = false; this._src = ''; this.onload = null; this.onerror = null; createdPreloads.push(this); }
+    set src(v) { this._src = v; }
+    get src() { return this._src; }
+    decode() { decodeCalls += 1; return Promise.resolve(); }
+  };
+  let lb;
+  try {
+    const images = Array.from({ length: 100 }, (_, i) => ({
+      p: { sid: `s${i}`, author: `a${i}` },
+      pc: { file: `f${i}.jpg`, kind: 'img', w: 100, h: 100 },
+      url: `/media/f${i}.jpg`,
+    }));
+    lb = createLightbox({
+      S: { images },
+      $: (sel) => els[sel] ?? null,
+      animatedHide: (el) => { el.hidden = true; },
+      cancelHide: () => {},
+      resetZoom: () => {},
+      crossPosts: () => true,
+    });
+    lb.openLB(50);
+    assert.equal(filmHtmlWrites, 1);
+    assert.equal(filmChildren.length, 41, '窗口化胶片只挂载 pos ± 20（41 个节点）');
+    assert.equal(filmChildren[0].dataset.pos, '30');
+    assert.equal(filmChildren[40].dataset.pos, '70');
+    assert.equal(filmChildren[20].classList.contains('on'), true);
+    assert.equal(filmChildren[20].getAttribute('aria-selected'), 'true');
+
+    // 在 40ms 预载窗口前快速切走：旧 40ms timer 应被取消且不会解码
+    lb.lbNav(1);
+    assert.equal(filmHtmlWrites, 1, '窗口内步进不得重建 #lb-film DOM');
+    assert.equal(filmChildren[20].classList.contains('on'), false);
+    assert.equal(filmChildren[20].getAttribute('aria-selected'), 'false');
+    assert.equal(filmChildren[21].classList.contains('on'), true);
+    assert.equal(filmChildren[21].getAttribute('aria-selected'), 'true');
+
+    await new Promise((r) => setTimeout(r, 65));
+    assert.equal(createdPreloads.length, 2, '仅最新 pos 的左右邻图发起预载');
+    const staleImg = createdPreloads[0];
+    // 滑出左缓冲边界（pos=34 < 30+5）触发窗口滑动：[14, 54]（41 张），随后停在 pos=23 仍在窗口内
+    for (let k = 0; k < 28; k += 1) lb.lbNav(-1);
+    assert.equal(filmHtmlWrites, 2, '触达边缘缓冲应滑动重渲染新窗口');
+    assert.equal(filmChildren[0].dataset.pos, '14');
+    assert.equal(filmChildren[40].dataset.pos, '54');
+    assert.equal(staleImg.src, '', '切图/关闭时未完成预载应清空 src 中止');
+    staleImg.onload?.();
+    assert.equal(decodeCalls, 0, '过期 seq 的预载回调不得触发 decode()');
+    lb.closeLB();
+  } finally {
+    lb?.closeLB?.();
+    globalThis.document = prevDoc;
+    globalThis.Image = prevImg;
+  }
+});
+
+test('Wave2 性能优化 F-P3：mark 与 keep_count 重排增量维护 S.images，不触发整墙 rebuildImages', async () => {
+  const prevCss = globalThis.CSS;
+  const prevDoc = globalThis.document;
+  globalThis.CSS = { escape: (s) => String(s) };
+  globalThis.document = { querySelectorAll: () => [] };
+  try {
+    let rebuildCalls = 0;
+    const cards = new Map();
+    const makeCard = (sid) => ({
+      dataset: { sid },
+      classes: new Set(),
+      classList: {
+        toggle(c, f) { if (f === undefined ? !this.has(c) : f) cards.get(sid).classes.add(c); else cards.get(sid).classes.delete(c); },
+        contains(c) { return cards.get(sid).classes.has(c); },
+      },
+      querySelector: () => null,
+      remove() { cards.delete(sid); },
+    });
+    const p1 = { sid: 'p1', status: 'pending', author: 'a1', uid: 'u1', list_id: 'g1', created_at: '2026-10-02T00:00:00+08:00', keep_count: 1, pics: [{ file: 'p1a.jpg' }] };
+    const p2 = { sid: 'p2', status: 'pending', author: 'a2', uid: 'u2', list_id: 'g1', created_at: '2026-10-01T00:00:00+08:00', keep_count: 1, pics: [{ file: 'p2a.jpg' }, { file: 'p2b.jpg' }] };
+    cards.set('p1', makeCard('p1'));
+    cards.set('p2', makeCard('p2'));
+    const S = {
+      status: 'pending', group: 'all', author: 'all', range: 'all', source: 'all', hasCmts: 'all', tags: 'all',
+      searchText: '', searchScope: 'all', sort: '', readOnly: false, total: 2,
+      posts: [p1, p2],
+      images: [
+        { p: p1, pc: p1.pics[0], url: '/media/p1a.jpg' },
+        { p: p2, pc: p2.pics[0], url: '/media/p2a.jpg' },
+        { p: p2, pc: p2.pics[1], url: '/media/p2b.jpg' },
+      ],
+      decisions: new Map(),
+    };
+    const feed = {
+      querySelector: (sel) => {
+        const m = sel.match(/data-sid="([^"]*)"/);
+        return m ? cards.get(m[1]) || null : null;
+      },
+    };
+    const acts = createPostActions({
+      S, feed,
+      $: () => ({ hidden: true }),
+      api: async (url, _m, body) => {
+        if (url.endsWith('/status')) return { decision: { status: body.status } };
+        if (url.endsWith('/reaffirm')) return { ok: true, keep_count: 3, last_confirm_at: '2026-10-03T00:00:00+08:00' };
+        return { ok: true };
+      },
+      toast: () => {},
+      insertCard: (p) => { cards.set(p.sid, makeCard(p.sid)); },
+      rebuildImages: () => { rebuildCalls += 1; },
+      updateMore: () => {},
+      queueStatusRefresh: () => {},
+      renderLB: () => {},
+      getLBIndex: () => -1,
+      refreshDetail: () => {},
+      getDetailSid: () => null,
+      startMaintenance: () => {},
+      likedTodayOf: () => false,
+    });
+    const res = acts.mark('p2', 'discarded');
+    await res.settled;
+    assert.equal(rebuildCalls, 0, 'mark 摘卡不得触发全墙 rebuildImages');
+    assert.deepEqual(S.images.map((x) => x.pc.file), ['p1a.jpg']);
+
+    // 切到 keep_count 排序并赞 p2 使之超过 p1：应增量重插 S.images 且不调用 rebuildImages
+    S.status = 'kept';
+    S.sort = 'keep_count';
+    p1.status = 'kept'; p1.keep_count = 2; p1.kept_at = '2026-10-01T00:00:00+08:00';
+    p2.status = 'kept'; p2.keep_count = 1; p2.kept_at = '2026-10-02T00:00:00+08:00';
+    S.posts = [p1, p2];
+    S.images = [
+      { p: p1, pc: p1.pics[0], url: '/media/p1a.jpg' },
+      { p: p2, pc: p2.pics[0], url: '/media/p2a.jpg' },
+      { p: p2, pc: p2.pics[1], url: '/media/p2b.jpg' },
+    ];
+    cards.set('p2', makeCard('p2'));
+    await acts.reaffirm('p2', 1);
+    assert.equal(rebuildCalls, 0, 'keep_count 重排不得触发全墙 rebuildImages');
+    assert.deepEqual(S.posts.map((x) => x.sid), ['p2', 'p1']);
+    assert.deepEqual(S.images.map((x) => x.pc.file), ['p2a.jpg', 'p2b.jpg', 'p1a.jpg']);
+  } finally {
+    globalThis.CSS = prevCss;
+    globalThis.document = prevDoc;
+  }
+});
+
+test('Wave2 性能优化 F-P5：Timeline 仅在编年态激活 MutationObserver，退出立即 disconnect', () => {
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevMO = globalThis.MutationObserver;
+  const prevMM = globalThis.matchMedia;
+  let observeCalls = 0, disconnectCalls = 0;
+  const makeEl = () => {
+    const el = {
+      hidden: false, dataset: {}, style: {}, innerHTML: '', scrollTop: 0,
+      classList: { set: new Set(), toggle(c, f) { const on = f === undefined ? !this.set.has(c) : f; if (on) this.set.add(c); else this.set.delete(c); return on; }, contains(c) { return this.set.has(c); } },
+      addEventListener: () => {},
+      querySelector: () => makeEl(),
+      querySelectorAll: () => [],
+      appendChild: () => {},
+      getBoundingClientRect: () => ({ top: 0, left: 0, width: 20, height: 400 }),
+      setPointerCapture: () => {},
+    };
+    return el;
+  };
+  const feedEl = makeEl();
+  const rulerEl = makeEl();
+  const els = new Map([['#feed', feedEl]]);
+  let createdRuler = null;
+  globalThis.MutationObserver = class FakeMO {
+    observe() { observeCalls += 1; }
+    disconnect() { disconnectCalls += 1; }
+  };
+  globalThis.matchMedia = () => ({ matches: false });
+  globalThis.window = {
+    pwGetPrefs: () => ({ layout: '' }),
+    pwSetPref: () => {},
+    addEventListener: () => {},
+    scrollY: 0,
+    innerHeight: 800,
+  };
+  globalThis.document = {
+    documentElement: { dataset: {}, style: { setProperty: () => {} } },
+    body: { appendChild: (el) => { createdRuler = el; } },
+    getElementById: () => null,
+    querySelector: (s) => (s === '.topbar' ? { offsetHeight: 40 } : rulerEl),
+    querySelectorAll: () => [],
+    createElement: () => makeEl(),
+    addEventListener: () => {},
+  };
+  try {
+    const tl = createTimeline({
+      S: { sort: '', loading: false, status: 'all', group: 'all', author: 'all', range: 'all', searchText: '', hasCmts: 'all', source: 'all' },
+      $: (s) => els.get(s) || null,
+      api: async () => ({ days: [] }),
+      toast: () => {},
+      load: () => {},
+    });
+    tl.init();
+    assert.ok(createdRuler, '密度尺应挂载');
+    assert.equal(observeCalls, 0, '非编年态初始化不得挂载 MutationObserver');
+    tl.setLayout(true);
+    assert.equal(observeCalls, 1, '切入编年态后应挂载 MutationObserver');
+    tl.setLayout(false);
+    assert.equal(disconnectCalls, 1, '退出编年态必须 disconnect() 并释放观察者');
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.MutationObserver = prevMO;
+    globalThis.matchMedia = prevMM;
+  }
+});
+
+test('Wave2 性能优化契约 F-P2/F-P4/F-P6/F-P7/F-P8：热路径、事件委托、异步解码与 CSS 选择器边界', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [appSrc, reviewSrc, railSrc, settingsSrc, kioskSrc, fabSrc, notesSrc, statsSrc, authorSrc, cssSrc] = await Promise.all([
+    read('../app/static/app.js'),
+    read('../app/static/review.js'),
+    read('../app/static/rail.js'),
+    read('../app/static/settings.js'),
+    read('../app/static/kiosk.js'),
+    read('../app/static/fab.js'),
+    read('../app/static/notes.js'),
+    read('../app/static/stats.js'),
+    read('../app/static/author-view.js'),
+    read('../app/static/style.css'),
+  ]);
+
+  // F-P2: 无每卡 scrollHeight 重排，使用 DocumentFragment 批插 + 防抖/RAF resize + 非卡结构变更不清空 colHeights
+  assert.ok(appSrc.includes('function estCardHeight') && appSrc.includes('function appendCardsBatch') && appSrc.includes('createDocumentFragment'));
+  assert.ok(appSrc.includes("window.addEventListener('resize'") && appSrc.includes('requestAnimationFrame') && appSrc.includes('colWidth = 0'));
+  assert.ok(!appSrc.includes('col.scrollHeight'));
+
+  // F-P3: load() 增量追加 S.images；sel-all 单次遍历；currentCard 二分查找
+  assert.ok(!appSrc.includes('realignDataI') && appSrc.includes('for (const pc of p.pics) S.images.push'));
+  assert.ok(!appSrc.includes("querySelectorAll('.card').forEach((c) => { c.style.transform = '';"));
+  assert.ok(appSrc.includes('const scanList = (els) =>'));
+
+  // F-P4: 删除 load(true) 无效 refreshAuthors()；spotlight 去重 + stopPropagation；detailAdvance 智能复用；rail 不可见与窄屏不轮询；settings 成员抽屉原位展开
+  assert.ok(!appSrc.includes('if (reset) refreshAuthors();'));
+  assert.ok(appSrc.includes('function detailMatchesPost') && appSrc.includes("!modal.hidden && !modal.classList.contains('closing')"));
+  assert.ok(appSrc.includes("$('#f-search')?.addEventListener('click', (e) => {\n    e.preventDefault();\n    e.stopPropagation();"));
+  assert.ok(railSrc.includes('document.hidden') && railSrc.includes("matchMedia('(min-width: 900px)')"));
+  assert.ok(settingsSrc.includes('function setXGroupOpen') && settingsSrc.includes('function bindMembersRow'));
+
+  // F-P6: kiosk 委托事件与预计算极值；author-view / fab / selectionchange 节流与零热路径测量
+  assert.ok(kioskSrc.includes('wall.addEventListener(\'pointermove\'') && kioskSrc.includes('maxCover'));
+  assert.ok(authorSrc.includes('stickyRaf = requestAnimationFrame(() => { stickyRaf = 0; syncSticky(); })'));
+  assert.ok(fabSrc.includes('fw: fab.offsetWidth, fh: fab.offsetHeight') && fabSrc.includes('requestAnimationFrame'));
+  assert.ok(appSrc.includes('quoteSelRaf'));
+
+  // F-P7 & F-P8: CSS 优化 + class 替代 body:has + 去 offsetParent + decoding="async"
+  assert.ok(cssSrc.includes('html:not([data-skin="brut"]) #feed:not(.author-film):not(.author-gallery):not(.author-blueprint) .card'));
+  assert.ok(!cssSrc.includes('* { border-radius: 0 !important; }'));
+  assert.ok(!cssSrc.includes('blur(18px)'));
+  assert.ok(!cssSrc.includes('body:has(#selbar') && cssSrc.includes('body.has-selbar #toast') && cssSrc.includes('body.has-detail #toast'));
+  assert.ok(appSrc.includes("classList.toggle('has-detail'") || appSrc.includes("classList.add('has-detail')"));
+  assert.ok(appSrc.includes("classList.toggle('has-selbar'") && reviewSrc.includes("classList.add('has-detail')"));
+  assert.ok(!settingsSrc.includes('offsetParent') && settingsSrc.includes('ADMIN_ONLY_PANES'));
+  assert.ok(!railSrc.includes('<img'), 'rail.js 左悬浮胶囊已精简为纯图标/文字导航，不再渲染博主头像 <img>');
+  for (const [name, src] of [['kiosk', kioskSrc], ['notes', notesSrc], ['stats', statsSrc], ['author-view', authorSrc]]) {
+    assert.ok(src.includes('decoding="async"'), `${name}.js 图片应带 decoding="async"`);
+  }
+});
+
+test('博主管理大厅（/kiosk）：拼音搜索、A–Z/# 索引、分组过滤、2 步取消关注与 xg: 调整契约', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [kHtml, kCss, kJs] = await Promise.all([
+    read('../app/templates/kiosk.html'),
+    read('../app/static/kiosk.css'),
+    read('../app/static/kiosk.js'),
+  ]);
+
+  assert.ok(kHtml.includes('id="ks-search"') && kHtml.includes('id="ks-sort"')
+    && kHtml.includes('id="ks-groups"') && kHtml.includes('id="ks-alpha"')
+    && kHtml.includes('id="ks-newgrp-form"') && kHtml.includes('id="ks-toast"'),
+    '/kiosk 模板应包含检索、排序、分组、首字母索引与新建分组表单');
+  assert.ok(kCss.includes('.ks-controls') && kCss.includes('.ks-spread-actions')
+    && kCss.includes('.ks-gchip') && kCss.includes('.ks-toast'),
+    'kiosk.css 应定义控制条、详情操作与分组芯片样式');
+  assert.ok(kJs.includes("d.pinyin") && kJs.includes("b.dataset.idx = String(i)")
+    && kJs.includes('confirmUnfollowKey') && kJs.includes('再次点击确认取消关注')
+    && kJs.includes("S.role === 'admin'") && kJs.includes("list_id: 'xg:'")
+    && kJs.includes("await ksApi('/api/groups/' + encodeURIComponent(d.follow_id), 'DELETE')")
+    && kJs.includes('safeMedia(') && kJs.includes('esc('),
+    'kiosk.js 应完整实现筛选映射、admin 鉴权开关、2 步取消关注、xg: 成员增删与输出转义');
 });

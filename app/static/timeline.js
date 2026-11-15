@@ -58,11 +58,14 @@ export function createTimeline(deps) {
   const sections = new Map();      // day → <section.tday>（插入序 = 内容流序，新→旧）
   let outline = new Map();         // day → {total,kept,discarded,fav,cmts}
   let geo = [];                    // 尺子行几何 [{top,h,day}]
+  let geoMap = new Map();          // day → geo 条目 O(1) 索引
   let totalH = 0;
   let outlineSeq = 0;
   let needOutline = false;
   let syncTimer = 0;
   let ruler = null;
+  let feedObs = null;
+  let lastCurTop = -1, lastCurH = -1;
 
   const active = () => feed.classList.contains('chrono');
   const motionOk = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -127,13 +130,16 @@ export function createTimeline(deps) {
 
   /* 撤销恢复的再插入口：日内按 S.posts 全序（created_at 降序）归位 */
   function insertCard(card, ref) {
-    const idx = S.posts.findIndex((q) => q.sid === card.dataset.sid);
-    if (idx < 0) return;
-    const cols = sectionFor(S.posts[idx]).querySelector('.tday-cols');
+    const posts = S.posts || [];
+    const idxMap = new Map();
+    for (let i = 0; i < posts.length; i += 1) idxMap.set(posts[i].sid, i);
+    const idx = idxMap.get(card.dataset.sid);
+    if (idx === undefined) return;
+    const cols = sectionFor(posts[idx]).querySelector('.tday-cols');
     for (const el of cols.children) {
       if (el === card) continue;
-      const other = S.posts.findIndex((q) => q.sid === el.dataset.sid);
-      if (other > idx) { cols.insertBefore(card, el); return; }
+      const other = idxMap.get(el.dataset.sid);
+      if (other !== undefined && other > idx) { cols.insertBefore(card, el); return; }
     }
     cols.appendChild(card);
   }
@@ -149,9 +155,9 @@ export function createTimeline(deps) {
     document.body.appendChild(ruler);
     const track = ruler.querySelector('.tl-track');
 
-    let scrubbing = false, scrubMoved = false, pointerId = null;
-    const dayAt = (clientY) => {
-      const r = track.getBoundingClientRect();
+    let scrubbing = false, pointerId = null;
+    const dayAt = (clientY, rect) => {
+      const r = rect || track.getBoundingClientRect();
       const y = clientY - r.top + track.scrollTop;
       if (!geo.length) return null;
       for (const g of geo)
@@ -159,7 +165,8 @@ export function createTimeline(deps) {
       return y < geo[0].top ? geo[0].day : geo[geo.length - 1].day;
     };
     const showBubble = (e) => {
-      const day = dayAt(e.clientY);
+      const tr = track.getBoundingClientRect();
+      const day = dayAt(e.clientY, tr);
       const bubble = ruler.querySelector('.tl-bubble');
       if (!day) { bubble.hidden = true; return; }
       const o = outline.get(day) || {};
@@ -167,21 +174,19 @@ export function createTimeline(deps) {
       if (o.kept) bits.push(`留 ${o.kept}`);
       if (o.cmts) bits.push(`注 ${o.cmts}`);
       bubble.textContent = `${dayLabel(day)} · ${bits.join(' · ')}`;
-      const tr = track.getBoundingClientRect();
       bubble.style.top = `${Math.min(Math.max(e.clientY, 48), window.innerHeight - 24)}px`;
       bubble.style.right = `${window.innerWidth - tr.left + 10}px`;
       bubble.hidden = false;
     };
     track.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      scrubbing = true; scrubMoved = false; pointerId = e.pointerId;
+      scrubbing = true; pointerId = e.pointerId;
       track.setPointerCapture(e.pointerId);
       showBubble(e);
       e.preventDefault();
     });
     track.addEventListener('pointermove', (e) => {
       if (!scrubbing || e.pointerId !== pointerId) return;
-      scrubMoved = true;
       showBubble(e);
     });
     const endScrub = (e) => {
@@ -202,15 +207,18 @@ export function createTimeline(deps) {
     const inner = ruler.querySelector('.tl-inner');
     const track = ruler.querySelector('.tl-track');
     const keepScroll = track.scrollTop;
+    const trackH = track.clientHeight;
     inner.querySelectorAll('.tl-row').forEach((el) => el.remove());
-    geo = []; totalH = 0;
+    geo = []; geoMap = new Map(); totalH = 0; lastCurTop = -1; lastCurH = -1;
+    const frag = document.createDocumentFragment();
     for (const row of planRows([...outline.values()])) {
       const el = document.createElement('div');
       el.className = `tl-row ${row.kind === 'month' ? 'tl-month' : 'tl-day'}`;
       el.dataset.day = row.day;
+      let entry;
       if (row.kind === 'month') {
         el.textContent = row.label;
-        geo.push({ top: totalH, h: MONTH_H, day: row.day });
+        entry = { top: totalH, h: MONTH_H, day: row.day };
         totalH += MONTH_H;
       } else {
         el.style.height = `${row.h}px`;
@@ -220,46 +228,63 @@ export function createTimeline(deps) {
         bar.style.width = `${row.w}%`;
         bar.style.setProperty('--kept', `${row.keptW}%`);
         el.appendChild(bar);
-        geo.push({ top: totalH, h: row.h, day: row.day });
+        entry = { top: totalH, h: row.h, day: row.day };
         totalH += row.h;
       }
-      inner.appendChild(el);
+      geo.push(entry);
+      if (!geoMap.has(row.day)) geoMap.set(row.day, entry);
+      frag.appendChild(el);
     }
-    track.scrollTop = Math.min(keepScroll, Math.max(0, totalH - track.clientHeight));
+    inner.appendChild(frag);
+    track.scrollTop = Math.min(keepScroll, Math.max(0, totalH - trackH));
   }
 
-  const geoByDay = (day) => geo.find((g) => g.day === day) || geo[geo.length - 1];
+  const geoByDay = (day) => geoMap.get(day) || geo[geo.length - 1];
 
   function updateCursor() {
-    if (!ruler) return;
+    if (!ruler || !active()) return;
     const cur = ruler.querySelector('.tl-cursor');
-    if (!geo.length) { cur.style.height = '0px'; return; }
-    const topEdge = 48; const botEdge = window.innerHeight;
+    if (!geo.length) {
+      if (lastCurH !== 0) { cur.style.height = '0px'; lastCurH = 0; }
+      return;
+    }
+    // 读写分离：先一次性读取视口、轨道和日卷矩形，后统一写入样式与滚动位
+    const track = ruler.querySelector('.tl-track');
+    const trTop = track.scrollTop;
+    const trH = track.clientHeight;
+    const vh = window.innerHeight;
+    const scrollY = window.scrollY;
+    const topEdge = 48;
     let first = null, last = null;
+    const measured = [];
     for (const [day, sec] of sections) {
       const r = sec.getBoundingClientRect();
-      if (r.bottom < topEdge || r.top > botEdge) continue;
+      measured.push({ day, top: r.top, bottom: r.bottom });
+      if (r.bottom < topEdge || r.top > vh) continue;
       if (first == null) first = day;
       last = day;
     }
-    if (first == null) {   // 视口落在区块间隙/末尾：贴到几何上最近的段
-      const mid = window.scrollY + window.innerHeight / 2;
+    if (first == null) {   // 视口落在区块间隙/末尾：复用刚才量过的 top，不二次读布局
+      const mid = scrollY + vh / 2;
       let best = null, bestDist = Infinity;
-      for (const sec of sections.values()) {
-        const dist = Math.abs(sec.getBoundingClientRect().top + window.scrollY - mid);
-        if (dist < bestDist) { bestDist = dist; best = sec.dataset.day; }
+      for (const m of measured) {
+        const dist = Math.abs(m.top + scrollY - mid);
+        if (dist < bestDist) { bestDist = dist; best = m.day; }
       }
       first = last = best;
     }
-    if (first == null) { cur.style.height = '0px'; return; }
+    if (first == null) {
+      if (lastCurH !== 0) { cur.style.height = '0px'; lastCurH = 0; }
+      return;
+    }
     const g1 = geoByDay(first); const g2 = geoByDay(last);
-    const top = g1.top; const bottom = Math.max(g1.top + 4, g2.top + g2.h);
-    cur.style.top = `${top}px`;
-    cur.style.height = `${bottom - top}px`;
-    const track = ruler.querySelector('.tl-track');
-    if (top < track.scrollTop + 4) track.scrollTop = Math.max(0, top - 12);
-    else if (bottom > track.scrollTop + track.clientHeight - 4)
-      track.scrollTop = Math.min(Math.max(0, totalH - track.clientHeight), bottom - track.clientHeight + 12);
+    const top = g1.top; const height = Math.max(4, g2.top + g2.h - g1.top);
+    const bottom = top + height;
+    if (top !== lastCurTop) { cur.style.top = `${top}px`; lastCurTop = top; }
+    if (height !== lastCurH) { cur.style.height = `${height}px`; lastCurH = height; }
+    if (top < trTop + 4) track.scrollTop = Math.max(0, top - 12);
+    else if (bottom > trTop + trH - 4)
+      track.scrollTop = Math.min(Math.max(0, totalH - trH), bottom - trH + 12);
   }
 
   async function gotoDay(day) {
@@ -292,6 +317,8 @@ export function createTimeline(deps) {
     const q = new URLSearchParams({ status: S.status, group: S.group, author: S.author,
       range: S.range, q: S.searchText,
       has_cmts: S.hasCmts === '1' ? '1' : 'all', source: S.source });
+    if (S.tags && S.tags !== 'all') q.set('tags', S.tags);
+    if (S.searchScope && S.searchScope !== 'all') q.set('q_scope', S.searchScope);
     try {
       const data = await api('/api/timeline/outline?' + q);
       if (seq !== outlineSeq || !active()) return;
@@ -306,29 +333,43 @@ export function createTimeline(deps) {
   }
 
   /* feed 的任何结构变化（翻页追加、标记摘卡、筛选重载）统一在这里收口：
-     摘卡/重载后清干净空日卷、刷新 outline；滚动括号随后重算。 */
-  function bindObserver() {
-    new MutationObserver((records) => {
-      for (const r of records)
-        for (const n of r.removedNodes)
-          if (n.nodeType === 1 && (n.classList.contains('card') || n.classList.contains('tday')))
-            needOutline = true;
-      clearTimeout(syncTimer);
-      syncTimer = setTimeout(() => {
-        for (const [day, sec] of [...sections]) {
-          if (!sec.isConnected) { sections.delete(day); continue; }
-          if (!sec.querySelector('.card')) { sec.remove(); sections.delete(day); needOutline = true; }
-        }
-        if (needOutline) { needOutline = false; refreshOutline(); }
-        updateCursor();
-      }, 120);
-    }).observe(feed, { childList: true, subtree: true });
+     仅在编年态激活时挂载观察者，退出编年态立即 disconnect，避免普通瀑布流空转。 */
+  function connectObserver() {
+    if (!feedObs && typeof MutationObserver === 'function') {
+      feedObs = new MutationObserver((records) => {
+        if (!active()) return;
+        for (const r of records)
+          for (const n of r.removedNodes)
+            if (n.nodeType === 1 && (n.classList.contains('card') || n.classList.contains('tday')))
+              needOutline = true;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => {
+          syncTimer = 0;
+          if (!active()) return;
+          for (const [day, sec] of [...sections]) {
+            if (!sec.isConnected) { sections.delete(day); continue; }
+            if (!sec.querySelector('.card')) { sec.remove(); sections.delete(day); needOutline = true; }
+          }
+          if (needOutline) { needOutline = false; refreshOutline(); }
+          updateCursor();
+        }, 120);
+      });
+    }
+    if (feedObs && feed) {
+      try { feedObs.observe(feed, { childList: true, subtree: true }); } catch (e) {}
+    }
+  }
+  function disconnectObserver() {
+    feedObs?.disconnect();
+    clearTimeout(syncTimer);
+    syncTimer = 0;
+    needOutline = false;
   }
 
   let scrollRaf = 0;
   function bindScroll() {
     const onScroll = () => {
-      if (scrollRaf) return;
+      if (!active() || scrollRaf) return;
       scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; if (active()) updateCursor(); });
     };
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -342,9 +383,10 @@ export function createTimeline(deps) {
     else delete document.documentElement.dataset.layout;
     feed.classList.toggle('chrono', on);
     if (ruler) ruler.hidden = !on;
-    if (on) {   // 日卷粘滞头与尺子的吸附位=顶栏实高，量出来写进令牌
+    if (on) {   // 日卷粘滞头吸附位：移动端=顶栏实高，桌面端顶栏隐藏贴顶 8px（#truler 由 CSS max(64px, --tl-top) 避让右上胶囊）
       const tb = document.querySelector('.topbar');
-      if (tb) document.documentElement.style.setProperty('--tl-top', `${tb.offsetHeight + 6}px`);
+      const hasTopbar = tb && (typeof getComputedStyle !== 'function' || getComputedStyle(tb).display !== 'none');
+      document.documentElement.style.setProperty('--tl-top', hasTopbar ? `${tb.offsetHeight + 6}px` : '8px');
     }
   }
 
@@ -367,7 +409,15 @@ export function createTimeline(deps) {
     railSync?.();   // 左轨编年行高亮即时跟（V 键路径不经 renderViewPanel）
     closeOverlays?.();
     sections.clear();
-    if (on) refreshOutline();
+    if (on) {
+      connectObserver();
+      refreshOutline();
+    } else {
+      disconnectObserver();
+      ++outlineSeq;
+      geo = []; geoMap = new Map(); outline = new Map(); totalH = 0;
+      lastCurTop = -1; lastCurH = -1;
+    }
     load(true);
     syncToggle();
   }
@@ -395,7 +445,6 @@ export function createTimeline(deps) {
   function init() {
     mountToggle();
     mountRuler();
-    bindObserver();
     bindScroll();
     bindKeys();
     const saved = (() => {
@@ -404,6 +453,7 @@ export function createTimeline(deps) {
     if (saved) {   // 静默应用：不触发 load，启动首屏的 load(true) 自然走编年收卡口
       if (S.sort) S.sort = '';   // 点赞序不打时间序：URL 带 ?sort=keep_count 也不带进编年态
       applyLayoutDom(true);
+      connectObserver();
       refreshOutline();
     }
     syncToggle();

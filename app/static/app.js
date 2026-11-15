@@ -1,7 +1,7 @@
 /* Picwall 前端：单页相册。无框架无构建， vanilla JS。 */
 import { api } from './requests.js';
 import { toast } from './notifications.js';
-import { matchesView, keepBadge, avatarSrc, shuffleSeed } from './view-state.js';
+import { matchesView, keepBadge, avatarSrc, mediaSrc, esc, safeUrl, markTerm, shuffleSeed } from './view-state.js';
 import { createPostActions } from './post-actions.js';
 import { createFab } from './fab.js';
 import { createReview } from './review.js';
@@ -42,6 +42,9 @@ const S = {
   selectMode: false,
   selected: new Set(),   // 选择模式勾选的 sid
   searchText: '',        // 正文搜索词（视图面板，随 URL 同步）
+  searchScope: 'all',    // 搜索维度：all/text/comment/tag/author（随 URL 同步）
+  appliedSearchText: '',
+  appliedSearchScope: 'all',
   sort: '',              // '' 时间序 / 'keep_count' 点赞序 / 'shuffle' 随机序（随 URL 同步）
 };
 
@@ -181,38 +184,99 @@ let feedCols = [];
    ensureFeedCols 各重建分支 / load(reset) / insertCardAt / insertCard 的贴前驱插 /
    下方 MutationObserver（卡片被标记摘除后从列栈移除）。失效漏一处列就会漂移。 */
 let colHeights = null;
+let colWidth = 0;
+let colHeightsDirty = false;
 /* 博主沉浸皮肤（胶片/展厅/蓝图）共用的单列标记：author-view.applySkin 挂/摘，
    这里只认标记不认具体皮肤——新皮肤加入 SKINS 后此处零改动 */
 function authorStrip() { return feed.classList.contains('author-strip'); }
 function feedColCount() {
-  // 桌面左右轨各占 56px（body padding）+ 墙自身 22px 边距；墙铺满两轨之间，
-  // 列数按 310px 节奏算、封顶 5 列（2560 宽屏也最多 5 列，长浏览不横扫）；
-  // <900px 无轨，按原宽度算（≤640 固定双列）
-  return window.innerWidth <= 640 ? 2
-    : Math.min(5, Math.max(1, Math.floor((window.innerWidth - 156) / 310)));
+  // 桌面保留左轨收起态安全边距（纯图模式铺满全幅），右侧 56px 彻底归还瀑布流；
+  // 桌面列数保持稳定，左轨悬停浮盖展开零重排；平板（640px~900px）仅扣 32px，≤640 固定双列。
+  if (window.innerWidth <= 640) return 2;
+  const isPure = document.documentElement.dataset.pureimg === '1';
+  const occupied = window.innerWidth >= 900 ? (isPure ? 32 : 116) : 32;
+  return Math.min(5, Math.max(1, Math.floor((window.innerWidth - occupied) / 310)));
+}
+/* 收集当前墙上卡片并按时间线（S.posts）真实原始顺序排列：
+   DOM 中的卡片因分布在各列栈内，querySelectorAll 拿到的是列优先序（第0列全集、第1列全集…），
+   若直接重排会导致卡片时序被打乱窜位。按 S.posts 时序映射重新收集，保证重排时卡片绝不乱序。 */
+function gatherFeedCards() {
+  const map = new Map();
+  const leftover = [];
+  for (const card of feed.querySelectorAll('.card')) {
+    const sid = card.dataset.sid;
+    if (sid) map.set(sid, card);
+    else leftover.push(card);
+  }
+  const cards = [];
+  if (Array.isArray(S.posts)) {
+    for (const p of S.posts) {
+      const card = map.get(p.sid);
+      if (card) {
+        cards.push(card);
+        map.delete(p.sid);
+      }
+    }
+  }
+  for (const card of map.values()) cards.push(card);
+  for (const card of leftover) cards.push(card);
+  return cards;
+}
+function estCardHeight(card, w) {
+  const r = card._estRatio || 1;
+  return Math.round(w / r) + (card._hasTitle ? 42 : 0) + 54;
+}
+function prepareColMetrics(emptyCols = false) {
+  if (!colWidth && feedCols[0]) colWidth = feedCols[0].clientWidth || 300;
+  if (!colHeights || colHeights.length !== feedCols.length || colHeightsDirty) {
+    colHeights = emptyCols || feedCols.every((c) => c.childElementCount === 0)
+      ? new Array(feedCols.length).fill(0)
+      : feedCols.map((c) => c.scrollHeight);
+    colHeightsDirty = false;
+  }
+  return colWidth || 300;
+}
+function appendCardsBatch(cards, emptyCols = false) {
+  if (!cards.length) return;
+  const w = prepareColMetrics(emptyCols);
+  const frags = feedCols.map(() => document.createDocumentFragment());
+  for (const card of cards) {
+    let best = 0;
+    for (let i = 1; i < colHeights.length; i++)
+      if (colHeights[i] < colHeights[best]) best = i;
+    frags[best].appendChild(card);
+    colHeights[best] += estCardHeight(card, w);
+  }
+  for (let i = 0; i < feedCols.length; i++)
+    if (frags[i].hasChildNodes()) feedCols[i].appendChild(frags[i]);
+  colHeightsDirty = true;   // 下次跨页追加前仅在读写分离时重校 1 次列实高，当前批零回流
 }
 function ensureFeedCols() {
   if (timeline.active()) return;   // 编年态是日卷分块，列栈整体让位
   if (authorStrip()) {             // 沉浸皮肤单列条（胶片/展厅/蓝图），列栈退场
     if (!feedCols.length) return;
-    const cards = [...feed.querySelectorAll('.card')];
+    const cards = gatherFeedCards();
     feed.innerHTML = ''; feedCols = [];
-    colHeights = null;             // 列栈换血：账本作废（契约见 feedCols 声明旁）
-    for (const c of cards) feed.appendChild(c);   // 平铺回墙：与既有列重排同口径（DOM 序）
+    colHeights = null; colWidth = 0; colHeightsDirty = false;
+    const frag = document.createDocumentFragment();
+    for (const c of cards) frag.appendChild(c);   // 平铺回墙：按时间线真实原始顺序
+    feed.appendChild(frag);
     return;
   }
   const n = feedColCount();
   if (feedCols.length === n) return;
-  const cards = [...feed.querySelectorAll('.card')];
+  const cards = gatherFeedCards();
   feed.innerHTML = '';
-  colHeights = null;               // 列数变化重排：账本作废，重排后由 appendToShortestCol 重建
+  colHeights = null; colWidth = 0; colHeightsDirty = false;
+  const colFrag = document.createDocumentFragment();
   feedCols = Array.from({ length: n }, () => {
     const col = document.createElement('div');
     col.className = 'feed-col';
-    feed.appendChild(col);
+    colFrag.appendChild(col);
     return col;
   });
-  for (const card of cards) appendToShortestCol(card);
+  feed.appendChild(colFrag);
+  appendCardsBatch(cards, true);
 }
 function appendToShortestCol(card, p) {
   if (timeline.active()) return timeline.appendCard(card, p);   // 编年态按日归桶
@@ -222,15 +286,12 @@ function appendToShortestCol(card, p) {
     return;
   }
   ensureFeedCols();
-  // 账本为空（首次或刚失效）先一次性批量读现值填账，之后选最短列只查账本
-  if (!colHeights || colHeights.length !== feedCols.length)
-    colHeights = feedCols.map((c) => c.scrollHeight);
+  const w = prepareColMetrics();
   let best = 0;
   for (let i = 1; i < colHeights.length; i++)
     if (colHeights[i] < colHeights[best]) best = i;
   feedCols[best].appendChild(card);
-  // 追加后只读被写入那一列回写账本（每卡 1 次读，取代每卡 N 列读）
-  colHeights[best] = feedCols[best].scrollHeight;
+  colHeights[best] += estCardHeight(card, w);
 }
 function insertCardAt(card, ref) {   // 撤销恢复等再插入：跟随参照卡所在列，保持阅读顺序
   if (timeline.active()) return timeline.insertCard(card, ref);   // 编年态按日内时序归位
@@ -248,7 +309,21 @@ function insertCardAt(card, ref) {   // 撤销恢复等再插入：跟随参照�
   }
   else appendToShortestCol(card);
 }
-window.addEventListener('resize', () => ensureFeedCols());
+let resizeRaf = 0, resizeTimer = 0;
+window.addEventListener('resize', () => {
+  if (!resizeRaf) {
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
+      if (!$('#view-panel').hidden) alignViewPanel();
+    });
+  }
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = 0;
+    colWidth = 0;
+    ensureFeedCols();
+  }, 80);
+});
 
 let loadController = null;
 async function load(reset) {
@@ -261,14 +336,17 @@ async function load(reset) {
   renderViewButton();
   if (reset) {
     syncUrl(); S.cursor = null; S.hasMore = true; S.offset = 0;
-    S.posts = []; feed.innerHTML = ''; feedCols = []; colHeights = null;   // 换血连账本一起作废
+    S.posts = []; S.images = []; feed.innerHTML = ''; feedCols = [];
+    colHeights = null; colWidth = 0; colHeightsDirty = false;
     authorView.sync();   // 博主视图头的显隐跟 S.author；筛选链路的每次换血都从这里过
+    renderActiveSearchChip();
   }
   try {
     const q = new URLSearchParams({status:S.status, group:S.group, author:S.author,
       range:S.range, q:S.searchText,
       has_cmts:S.hasCmts === '1' ? '1' : 'all', source:S.source, limit:50});
     if (S.tags !== 'all') q.set('tags', S.tags);
+    if (S.searchScope && S.searchScope !== 'all') q.set('q_scope', S.searchScope);
     if (S.sort === 'shuffle') q.set('shuffle', shuffleSeed(window.pwGetPrefs?.()));
     else if (S.sort) q.set('sort', S.sort);
     if (S.cursor) q.set('cursor', S.cursor);
@@ -277,17 +355,34 @@ async function load(reset) {
     S.total = data.total;
     S.cursor = data.next_cursor; S.hasMore = data.has_more;
     const known = new Set(S.posts.map(p => p.sid));
+    const added = [];
     for (const row of data.posts) {
       const local = S.decisions.get(row.sid);
       if (local?._settledAt && local._settledAt < started) S.decisions.delete(row.sid);
       const p = S.decisions.get(row.sid) || row;
       if (known.has(p.sid) || !matchesView(p,S)) continue;
-      known.add(p.sid); S.posts.push(p); appendToShortestCol(renderCard(p), p);
+      known.add(p.sid); S.posts.push(p);
+      const card = renderCard(p);
+      added.push({ p, card });
+      for (const pc of p.pics) S.images.push({ p, pc, url: `/media/${pc.file}` });
+    }
+    if (added.length) {
+      if (timeline.active()) {
+        for (const { card, p } of added) timeline.appendCard(card, p);
+      } else if (authorStrip()) {
+        ensureFeedCols();
+        const frag = document.createDocumentFragment();
+        for (const { card } of added) frag.appendChild(card);
+        feed.appendChild(frag);
+      } else {
+        const emptyBefore = !feedCols.length;
+        ensureFeedCols();
+        appendCardsBatch(added.map((x) => x.card), emptyBefore);
+      }
     }
     S.offset = S.posts.length;
     S.loadError = false;
-    rebuildImages(); updateMore();
-    if (reset) refreshAuthors();
+    updateMore();
   } catch (e) {
     if (e.name !== 'AbortError' && version === S.requestVersion) {
       S.loadError = true; toast(e.message); updateMore();
@@ -329,11 +424,6 @@ function updateMore() {
   }
 }
 
-function esc(s) {
-  return (s || '').replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 /* 卡片动作图标（feather 风格描边 SVG，与主题按钮同款语法）；文字说明走 title/aria-label */
 const svg = (inner) =>
   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -372,10 +462,12 @@ const IMG_FALLBACK = 'data:image/svg+xml,' + encodeURIComponent(
 
 /* 头像 = 进博主视图的按钮（墙卡与详情共用）：视觉维持原样，title 说明去处。
    多选模式下点击走勾选分支；样式重置见 style.css 的 button.avatar */
-const avatarButton = (p) =>
-  `<button class="avatar av-link" data-uid="${esc(p.uid)}" title="查看 ${esc(p.author)} 的全部帖子"`
-  + ` aria-label="查看 ${esc(p.author)} 的全部帖子">${p.avatar
-    ? `<img src="${esc(avatarSrc(p.avatar))}" alt="">` : esc(p.author[0] || '微')}</button>`;
+const avatarButton = (p) => {
+  const av = avatarSrc(p.avatar);
+  return `<button class="avatar av-link" data-uid="${esc(p.uid)}" title="查看 ${esc(p.author)} 的全部帖子"`
+    + ` aria-label="查看 ${esc(p.author)} 的全部帖子">${av
+      ? `<img src="${esc(av)}" alt="" decoding="async">` : esc(p.author[0] || '微')}</button>`;
+};
 
 /* 帖子的「今日已赞」态：last_confirm_at（建账/+1 时间戳）落在东八区今天即为真 */
 function likedTodayOf(p) {
@@ -396,7 +488,7 @@ function renderCard(p) {
   const ratio = first && first.w && first.h
     ? Math.min(Math.max(first.w / first.h, 0.75), 2.33) : 1;
   const pics = first
-    ? `<img src="/media/${first.thumb}" alt="${esc(p.author)} 的微博图" loading="lazy" decoding="async"
+    ? `<img src="/media/${esc(first.thumb)}" alt="${esc(p.author)} 的微博图" loading="lazy" decoding="async"
          style="aspect-ratio:${ratio.toFixed(4)}" data-file="${esc(first.file)}">` : '';
   // 视频卡：海报静帧上叠 ▶ 徽标 + 时长（判定与点击行为不变，海报即所见）
   const vid = first?.kind === 'video'
@@ -415,7 +507,7 @@ function renderCard(p) {
   const term = (S.searchText || '').trim();
   let titleRow = '';
   if (term && p.comment_match) {
-    titleRow = `<p class="title is-match" title="批注命中">${ICONS.comment}<span class="ttext">${markTerm(esc(p.comment_match), term)}</span></p>`;
+    titleRow = `<p class="title is-match" title="批注命中">${ICONS.comment}<span class="ttext">${markTerm(p.comment_match, term, S.searchScope)}</span></p>`;
   } else if (p.text) {
     titleRow = `<p class="title" title="${esc(p.text)}">${esc(p.text)}</p>`;
   }
@@ -426,8 +518,10 @@ function renderCard(p) {
     : liked ? '今天已经赞过了' : '赞一下（点赞 +1）';
   const like = S.readOnly ? '' :
     `<button class="like${p.status === 'kept' ? (liked ? ' done' : ' on') : ''}"
-       title="${likeTitle}" aria-label="${likeTitle}"
+       title="${esc(likeTitle)}" aria-label="${esc(likeTitle)}"
        aria-pressed="${String(p.status === 'kept' && liked)}">${cnt ? `<span class="ln">${cnt}</span>` : ''}${ICONS.heart}</button>`;
+  el._estRatio = ratio;
+  el._hasTitle = Boolean(titleRow);
   el.innerHTML = `
     <div class="pics${p.source === 'x' ? ' x-nsfw' : ''}">${pics}${vid}${pill}${warn}${favBtn}<span class="pick-dot" aria-hidden="true">✓</span></div>
     ${titleRow}
@@ -439,30 +533,11 @@ function renderCard(p) {
   return el;
 }
 
-function realignDataI() {
-  let k = 0;
-  // 还在淡出的卡已从 S.posts 摘除，不参与编号，否则下标整体漂移会开错图
-  feed.querySelectorAll('.pics img').forEach((img) => {
-    if (img.closest('.card').classList.contains('fading')) return;
-    img.dataset.i = k++;
-  });
-}
-
 function rebuildImages() {
   S.images = [];
   for (const p of S.posts)
     for (const pc of p.pics)
       S.images.push({ p, pc, url: `/media/${pc.file}` });
-  realignDataI();
-  // 兜底扫尾：error 是一次性事件，监听器挂上之前就已失败的缓存 404（complete 且
-  // naturalWidth=0）不会再触发，这里补换 IMG_FALLBACK 占位（同 onImgError 判据）
-  for (const img of feed.querySelectorAll('.pics img')) {
-    if (img.complete && img.naturalWidth === 0 && !img.dataset.fb
-        && (img.getAttribute('src') || '').startsWith('/media/')) {
-      img.dataset.fb = '1';
-      img.src = IMG_FALLBACK;
-    }
-  }
 }
 
 /* ---------- 博主筛选（视图面板「博主」行） ---------- */
@@ -500,9 +575,12 @@ async function refreshTags() {
 }
 
 const CARET_SVG = '<svg class="caret" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
-const faAvatar = (a, size = 22) => a.avatar
-  ? `<img class="avatar" src="${esc(avatarSrc(a.avatar))}" alt="" width="${size}" height="${size}">`
-  : `<span class="avatar">${esc((a.author || '微')[0])}</span>`;
+const faAvatar = (a, size = 22) => {
+  const av = avatarSrc(a.avatar);
+  return av
+    ? `<img class="avatar" src="${esc(av)}" alt="" width="${size}" height="${size}" decoding="async">`
+    : `<span class="avatar">${esc((a.author || '微')[0])}</span>`;
+};
 
 /* 行首胶囊：未筛选 =「全部博主 ▾」；已筛选 = 头像+名字+✕（✕ 单独成钮清筛选）。
    两种形态都带 data-author-toggle——选中态也要能再点开换人。 */
@@ -580,7 +658,7 @@ function renderAuthorRow() {
 }
 
 /* 索引轨交互：按下即跳，按住纵向扫动连续跳（capture 后按指下位置找字母） */
-$('#f-author').addEventListener('pointerdown', (e) => {
+$('#f-author')?.addEventListener('pointerdown', (e) => {
   const rail = e.target.closest('.fa-index');
   if (!rail) return;
   e.preventDefault();
@@ -594,7 +672,7 @@ $('#f-author').addEventListener('pointerdown', (e) => {
   rail.onpointerup = rail.onpointercancel = () => { rail.onpointermove = null; };
 });
 
-$('#f-author').addEventListener('click', (e) => {
+$('#f-author')?.addEventListener('click', (e) => {
   // 选择/清除会重建 innerHTML 孤儿化 target，冒泡到外层面板关闭器会被误判为点外——
   // 在行内消化掉（与旧排序菜单同款守卫），面板保持打开
   e.stopPropagation();
@@ -619,14 +697,14 @@ $('#f-author').addEventListener('click', (e) => {
     renderAuthorRow();
   }
 });
-$('#f-author').addEventListener('input', (e) => {
+$('#f-author')?.addEventListener('input', (e) => {
   if (!e.target.classList.contains('fa-search')) return;
   authorQuery = e.target.value;
   renderFaList();
 });
 // 搜索框里的按键不进全局快捷键；Esc 只收选择器，不惊动面板。
 // 选中态胶囊是 span[role=button]：Enter/空格手动补开合（浏览器只替 button 免费做这事）
-$('#f-author').addEventListener('keydown', (e) => {
+$('#f-author')?.addEventListener('keydown', (e) => {
   if (e.target.classList.contains('fa-search')) {
     e.stopPropagation();
     if (e.key === 'Escape' && authorPickerOpen) {
@@ -728,12 +806,15 @@ function onImgError(e) {
 for (const root of [feed, document.getElementById('detail'), document.getElementById('quad')])
   root.addEventListener('error', onImgError, true);
 
-/* 列高账本的兜底失效：卡片被标记摘除后从列栈移除会改变列高，childList 移除里
-   一出现元素节点就作废账本（契约见 feedCols 声明旁）。模块初始化处挂一次。 */
+/* 列高账本的兜底失效：卡片被标记摘除后从列栈移除会改变列高，仅在卡片/列节点移除时
+   作废账本（忽略 patchCard 改 .ln 等卡内局部增删）。模块初始化处挂一次。 */
 new MutationObserver((muts) => {
   for (const m of muts)
     for (const n of m.removedNodes)
-      if (n.nodeType === Node.ELEMENT_NODE) { colHeights = null; return; }
+      if (n.nodeType === Node.ELEMENT_NODE
+          && (n.classList?.contains('card') || n.classList?.contains('feed-col'))) {
+        colHeights = null; return;
+      }
 }).observe(feed, { childList: true, subtree: true });
 
 feed.addEventListener('click', (e) => {
@@ -915,15 +996,54 @@ function trapTab(e, root) {
 function currentCard() {
   const vh = window.innerHeight;
   let best = null, bestArea = 0;
-  for (const el of feed.querySelectorAll('.card:not(.fading)')) {
-    const r = el.getBoundingClientRect();
-    const area = Math.min(r.bottom, vh) - Math.max(r.top, 0);
-    if (r.width > 0 && area > bestArea) { bestArea = area; best = el; }
+  const scanList = (els) => {
+    if (!els || !els.length) return;
+    let lo = 0, hi = els.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (els[mid].getBoundingClientRect().bottom <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < els.length; i += 1) {
+      const el = els[i];
+      const r = el.getBoundingClientRect();
+      if (r.top >= vh) break;
+      if (!el.classList.contains('card') || el.classList.contains('fading')) continue;
+      const area = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+      if (r.width > 0 && area > bestArea) { bestArea = area; best = el; }
+    }
+  };
+  if (timeline.active()) {
+    for (const sec of feed.querySelectorAll('.tday')) {
+      const sr = sec.getBoundingClientRect();
+      if (sr.bottom <= 0) continue;
+      if (sr.top >= vh) break;
+      for (const el of sec.querySelectorAll('.card:not(.fading)')) {
+        const r = el.getBoundingClientRect();
+        if (r.bottom <= 0 || r.top >= vh) continue;
+        const area = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+        if (r.width > 0 && area > bestArea) { bestArea = area; best = el; }
+      }
+    }
+  } else if (authorStrip()) {
+    scanList(feed.children);
+  } else if (feedCols.length) {
+    for (const col of feedCols) scanList(col.children);
+  } else {
+    scanList(feed.querySelectorAll('.card:not(.fading)'));
   }
   return best;
 }
 
 document.addEventListener('keydown', (e) => {
+  // Cmd+K / Ctrl+K 唤起或切换聚光灯搜索
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    const spModal = $('#modal-spotlight-search');
+    if (spModal && !spModal.hidden) closeSpotlightSearch();
+    else openSpotlightSearch();
+    return;
+  }
   // Ctrl/Cmd/Alt 组合键交给浏览器和系统；数字视图键使用未修饰的单键。
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const modal = document.querySelector('.modal:not([hidden])');
@@ -934,6 +1054,8 @@ document.addEventListener('keydown', (e) => {
     }
     if (e.key === 'Escape' || (modal.id === 'modal-settings' && (e.key === '?' || (e.shiftKey && e.key === '/')))) {
       e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
       closeModal(modal.id);
     }
     else if (e.key === 'Tab') trapTab(e, modal);
@@ -950,6 +1072,7 @@ document.addEventListener('keydown', (e) => {
   if (e.repeat && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight'
       && e.key !== 'PageUp' && e.key !== 'PageDown' && !lbArrowRepeat) return;
   if (e.key === 'Escape') {
+    let handled = true;
     if (!$('#lightbox').hidden) closeLB();
     else if (!$('#detail').hidden) {
       // 评论输入/行内编辑聚焦时第一下 Esc 只退出编辑，第二下才关浮层
@@ -961,7 +1084,12 @@ document.addEventListener('keydown', (e) => {
     else if (!$('#notes-view').hidden && notes.active()) notes.close();
     else if (!$('#quad').hidden && quad.active()) quad.key(e);   // 四格：Esc 先退细看再退会话
     else if (S.selectMode) setSelectMode(false);
-    else if (!$('#view-panel').hidden) closeViewPanel();   // 视图面板同入逐层退链（此前只认点外收起）
+    else if (!$('#view-panel').hidden) { closeViewPanel(); e.stopPropagation(); }   // 视图面板同入逐层退链（此前只认点外收起）
+    else handled = false;
+    if (handled) {
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    }
     return;
   }
   if (editing) return;
@@ -970,6 +1098,14 @@ document.addEventListener('keydown', (e) => {
     if (!$('#modal-settings').hidden) closeModal('modal-settings');
     else settings.openSettings('shortcuts');
     return;
+  }
+  // '/' 呼出聚光灯大搜索栏（非输入态、无修饰键、大图/放映/四格让位）
+  if (!e.repeat && e.key === '/' && !e.shiftKey) {
+    if ($('#lightbox').hidden && ($('#slideshow').hidden || !slideshow.active()) && ($('#quad').hidden || !quad.active())) {
+      e.preventDefault();
+      openSpotlightSearch();
+      return;
+    }
   }
   // Shift+Q / Shift+W 进入快筛（桌面=四格会话）：组合键避开浏览器与既有单键体系；输入态已被上面拦下
   if (e.shiftKey && !e.repeat && (e.key === 'Q' || e.key === 'q' || e.key === 'W' || e.key === 'w')) {
@@ -1108,11 +1244,6 @@ function openLinkForSid(sid) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-function safeUrl(u) {
-  // 远端来的链接只放行 http(s)，防 javascript: 之类伪协议进 href
-  return /^https?:\/\//i.test(u || '') ? u : '#';
-}
-
 let detailRequestVersion = 0;
 /* 保留帖的状态依赖键位（F=+1、D=−1、长按「−」删除）只在 title 里——首次见到
    保留帖时 toast 说一次，长按删除不再纯靠偶然发现 */
@@ -1134,6 +1265,7 @@ async function openDetail(sid, focusComments = false) {
     resetDetailCard();
     cancelHide($('#detail'));
     $('#detail').hidden = false;
+    document.body.classList.add('has-detail');
     $('#detail').scrollTop = 0;
     document.body.style.overflow = 'hidden';
     $('#detail .detail-card.is-front .dt-scroll').scrollTop = 0;
@@ -1151,6 +1283,7 @@ function closeDetail() {
   ++detailRequestVersion;
   hideQuoteChip();
   $('#triage-progress').hidden = true;
+  document.body.classList.remove('has-detail');
   animatedHide($('#detail'));
   detailSid = null;
   detailNextSid = null;
@@ -1215,10 +1348,10 @@ function renderDetailInto(card, p, eager) {
     const media = pc.kind === 'video'
       ? `<video class="dt-video" controls playsinline preload="metadata"
            poster="/media/${esc(pc.thumb || '')}" src="/media/${esc(pc.file)}"></video>`
-      : `<img src="/media/${pc.thumb}" alt="${esc(p.author)} 的微博图" loading="${eager ? 'eager' : 'lazy'}" decoding="async" data-file="${esc(pc.file)}">`;
+      : `<img src="/media/${esc(pc.thumb)}" alt="${esc(p.author)} 的微博图" loading="${eager ? 'eager' : 'lazy'}" decoding="async" data-file="${esc(pc.file)}">`;
     return `<figure${i ? ' hidden' : ''} data-i="${i}">
       ${media}
-      <figcaption><a href="/media/${pc.file}?dl=1" download title="${downloadLabel(pc).title}" aria-label="${downloadLabel(pc).title}">${ICONS.download}</a></figcaption>
+      <figcaption><a href="/media/${esc(pc.file)}?dl=1" download title="${esc(downloadLabel(pc).title)}" aria-label="${esc(downloadLabel(pc).title)}">${ICONS.download}</a></figcaption>
     </figure>`;
   }).join('');
   dp.querySelectorAll('img').forEach((img) => img.onclick = () => {
@@ -1331,19 +1464,14 @@ function commentEra(iso) {
 }
 
 // "> 引用行\n正文" 的纯文本协议 → 引用块渲染；编辑时原样可见；搜索态下命中词高亮
-function markTerm(escaped, term) {
-  if (!term) return escaped;
-  const t = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return escaped.replace(new RegExp(t, 'gi'), (m) => `<mark>${m}</mark>`);
-}
 function commentBodyHTML(body, term = '') {
   const lines = String(body).split('\n');
   let i = 0;
   const quote = [];
   while (i < lines.length && lines[i].startsWith('> ')) { quote.push(lines[i].slice(2)); i += 1; }
   const rest = lines.slice(i).join('\n');
-  const q = quote.length ? `<span class="c-quote">${markTerm(esc(quote.join('\n')), term)}</span>` : '';
-  return q + (rest ? `<span class="c-text">${markTerm(esc(rest), term)}</span>` : '');
+  const q = quote.length ? `<span class="c-quote">${markTerm(quote.join('\n'), term, S.searchScope)}</span>` : '';
+  return q + (rest ? `<span class="c-text">${markTerm(rest, term, S.searchScope)}</span>` : '');
 }
 
 function commentRowHTML(c, term = '') {
@@ -1361,9 +1489,9 @@ function renderDetailComments(card, comments, term = (S.searchText || '').trim()
   let era = '';
   list.innerHTML = comments.map((c) => {
     const e = commentEra(c.created_at);
-    const h = eras.length > 1 && e !== era ? `<div class="dt-era">${e}</div>` : '';
+    const h = eras.length > 1 && e !== era ? `<div class="dt-era">${esc(e)}</div>` : '';
     era = e;
-    return `${h}<div class="dt-comment" data-cid="${c.id}">${commentRowHTML(c, term)}</div>`;
+    return `${h}<div class="dt-comment" data-cid="${esc(c.id)}">${commentRowHTML(c, term)}</div>`;
   }).join('');
   list.querySelector('.dt-comment:last-child')?.classList.add('now');   // 时间轴的「你在这里」
   head.textContent = `${comments.length} 条评论`;
@@ -1474,14 +1602,15 @@ function showStageImage(card, i) {
 }
 
 /* ---------- 引用批注：选中正文一段 → 浮出「引用批注」→ 输入框带出 > 引用块 ---------- */
-let quoteChip = null, quoteText = '';
+let quoteChip = null, quoteText = '', quoteSelRaf = 0;
 function hideQuoteChip() {
   quoteChip?.remove();
   quoteChip = null;
   quoteText = '';
 }
-document.addEventListener('selectionchange', () => {
-  if ($('#detail').hidden) { hideQuoteChip(); return; }
+function syncQuoteChip() {
+  quoteSelRaf = 0;
+  if (S.readOnly || $('#detail').hidden) { hideQuoteChip(); return; }
   const sel = document.getSelection();
   const textEl = $('#detail .detail-card.is-front .dt-text');
   const text = sel && !sel.isCollapsed && sel.rangeCount && textEl?.contains(sel.anchorNode)
@@ -1507,6 +1636,13 @@ document.addEventListener('selectionchange', () => {
     hideQuoteChip();
   });
   document.body.appendChild(quoteChip);
+}
+document.addEventListener('selectionchange', () => {
+  if (S.readOnly || $('#detail').hidden) { hideQuoteChip(); return; }
+  if (quoteSelRaf) return;
+  quoteSelRaf = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame(syncQuoteChip)
+    : setTimeout(syncQuoteChip, 16);
 });
 
 // 两个卡节点常驻（角色互换复用），事件只绑一次；后卡 inert 不可达，绑定无害
@@ -1653,6 +1789,25 @@ async function detailMarkAdvance(status) {
   return detailAdvance(status);
 }
 
+function detailMatchesPost(a, b) {
+  if (!a || !b) return false;
+  if (a.text !== b.text || a.text_complete !== b.text_complete || a.via !== b.via
+      || a.status !== b.status || (a.keep_count || 1) !== (b.keep_count || 1)
+      || Boolean(a.favorite) !== Boolean(b.favorite) || a.author !== b.author
+      || a.avatar !== b.avatar) return false;
+  const ap = a.pics || [], bp = b.pics || [];
+  if (ap.length !== bp.length) return false;
+  for (let i = 0; i < ap.length; i += 1)
+    if (ap[i].file !== bp[i].file || ap[i].thumb !== bp[i].thumb) return false;
+  const at = a.tags || [], bt = b.tags || [];
+  if (at.length !== bt.length || at.some((t, i) => t !== bt[i])) return false;
+  const ac = a.comments || [], bc = b.comments || [];
+  if (ac.length !== bc.length) return false;
+  for (let i = 0; i < ac.length; i += 1)
+    if (ac[i].id !== bc[i].id || ac[i].body !== bc[i].body) return false;
+  return true;
+}
+
 async function detailAdvance(status) {
   dtArrow = {key: null, t: 0};   // 标记即换帖：←→ 双击判定作废
   const i = S.posts.findIndex((x) => x.sid === detailSid);
@@ -1700,7 +1855,12 @@ async function detailAdvance(status) {
     try {
       const r = await api(`/api/posts/${detailSid}`);
       const { front: f2 } = detailCards();
-      if (detailSid === upNext.sid && f2 === back) renderDetailInto(f2, r.post, true);
+      if (detailSid === upNext.sid && f2 === back && r?.post && !detailMatchesPost(upNext, r.post)) {
+        const prevImg = +f2.dataset.img || 0;
+        Object.assign(upNext, r.post);
+        renderDetailInto(f2, upNext, true);
+        if (prevImg > 0) showStageImage(f2, prevImg);
+      }
     } catch (e) { /* 缓存版已在，静默 */ }
     return;
   }
@@ -1797,9 +1957,10 @@ function setSelectMode(on) {
   S.selected.clear();
   feed.classList.toggle('selecting', on);
   $('#selbar').hidden = !on;
+  document.body.classList.toggle('has-selbar', Boolean(on));
   feed.querySelectorAll('.card.picked').forEach((c) => c.classList.remove('picked'));
-  feed.querySelectorAll('.card').forEach((c) => { c.style.transform = ''; });
   updateSelN();
+  railSync();
 }
 
 function togglePick(sid) {
@@ -1813,9 +1974,9 @@ function updateSelN() { $('#sel-n').textContent = S.selected.size; }
 
 $('#sel-cancel').onclick = () => setSelectMode(false);
 $('#sel-all').onclick = () => {
-  S.posts.forEach((p) => {
-    S.selected.add(p.sid);
-    feed.querySelector(`.card[data-sid="${CSS.escape(p.sid)}"]`)?.classList.add('picked');
+  for (const p of S.posts) S.selected.add(p.sid);
+  feed.querySelectorAll('.card').forEach((c) => {
+    if (!c.classList.contains('fading') && S.selected.has(c.dataset.sid)) c.classList.add('picked');
   });
   updateSelN();
 };
@@ -2026,6 +2187,7 @@ function animatedHide(el) {
     el.hidden = true;
     el.classList.remove('closing');
     el._hideTimer = null;
+    if (el.id === 'modal-spotlight-search' && typeof railSync === 'function') railSync();
   }, 140);
 }
 function cancelHide(el) {
@@ -2039,13 +2201,27 @@ function openModal(id) {
   const m = $('#' + id);
   cancelHide(m);
   m.hidden = false;
+  document.body.style.overflow = 'hidden';
   const f = m.querySelector('input, textarea') || m.querySelector('button');
   f && f.focus();
 }
 function closeModal(id) {
   animatedHide($('#' + id));
   if (id === 'modal-settings') settings.closePane?.();   // 停分区级定时器(如抓取轮询)
-  if (modalReturnFocus) { modalReturnFocus.focus(); modalReturnFocus = null; }
+  if (id === 'modal-spotlight-search' && typeof railSync === 'function') railSync();
+  const anyModalOpen = Array.from(document.querySelectorAll('.modal')).some((m) => !m.hidden && !m.classList.contains('closing') && m.id !== id);
+  const lbOpen = !$('#lightbox')?.hidden && !$('#lightbox')?.classList.contains('closing');
+  const dtOpen = !$('#detail')?.hidden && !$('#detail')?.classList.contains('closing');
+  if (!anyModalOpen && !lbOpen && !dtOpen) {
+    document.body.style.overflow = '';
+  }
+  if (modalReturnFocus) {
+    // 防止移动端点击 #f-search 唤起后，关窗 refocus 导致死循环反复打开聚光灯
+    if (modalReturnFocus.id !== 'f-search' && !modalReturnFocus.closest?.('#f-search, .searchwrap')) {
+      modalReturnFocus.focus();
+    }
+    modalReturnFocus = null;
+  }
 }
 document.querySelectorAll('.mclose, [data-close]').forEach((b) =>
   b.onclick = () => closeModal(b.dataset.close));
@@ -2080,21 +2256,22 @@ const STATUS_VIEW_KEYS = { kept: '1', discarded: '2', favorites: '3', all: '4' }
 
 function switchStatusView(status) {
   closeViewPanel();
-  const needsReload = S.status !== status || !$('#detail').hidden || !$('#lightbox').hidden
+  const hadFilters = S.group !== 'all' || S.author !== 'all' || S.source !== 'all'
+    || S.range !== 'all' || S.hasCmts !== 'all' || S.tags !== 'all' || !!S.searchText
+    || (S.searchScope && S.searchScope !== 'all');
+  const needsReload = S.status !== status || hadFilters || !$('#detail').hidden || !$('#lightbox').hidden
     || !$('#quad').hidden || S.selectMode;
   if (!needsReload) return;
   // 换视图=换一摞新墙：伴随筛选全部归位（分组/博主/时间/评论/搜索）。
   // 筛选在生效时先快照：切换后 toast 说明并给「撤销切换」——撤销=整墙还原
   // （视图+筛选一起回切换前，不制造视图与旧筛选错配的中间态）
-  const hadFilters = S.group !== 'all' || S.author !== 'all' || S.source !== 'all'
-    || S.range !== 'all' || S.hasCmts !== 'all' || S.tags !== 'all' || !!S.searchText;
   const snap = hadFilters ? {status: S.status, group: S.group, author: S.author,
     source: S.source, range: S.range, hasCmts: S.hasCmts, tags: S.tags,
-    searchText: S.searchText} : null;
+    searchText: S.searchText, searchScope: S.searchScope} : null;
   S.status = status;
   // URL 与顶栏由 load(true) 里的 syncUrl/renderViewButton 重写
   S.group = 'all'; S.author = 'all'; S.range = 'all';
-  S.hasCmts = 'all'; S.tags = 'all'; S.searchText = ''; S.source = 'all';
+  S.hasCmts = 'all'; S.tags = 'all'; S.searchText = ''; S.searchScope = 'all'; S.source = 'all';
   if (status === 'pending' || status === 'discarded') S.sort = '';
   // 排序段只在 保留/收藏/全部 可见（showSort 同口径）：不可见的视图落回时间序，
   // 新增队列（快筛/四格）尤其不打乱
@@ -2134,7 +2311,23 @@ async function startQuickTriage() {
   else toast('没有待处理的新增');
 }
 
+const SORT_CHIPS = [
+  { v: '', label: '最新' },
+  { v: 'keep_count', label: '点赞' },
+  { v: 'shuffle', label: '随机' },
+];
 const SOURCE_CHIPS = [{ v: 'all', label: '全部' }, { v: 'weibo', label: '微博' }, { v: 'x', label: 'X' }];
+const RANGE_CHIPS = [
+  { v: 'all', label: '全部' },
+  { v: 'today', label: '今天' },
+  { v: 'yesterday', label: '昨天' },
+  { v: '7d', label: '7天' },
+  { v: '30d', label: '30天' },
+];
+const CMT_CHIPS = [
+  { v: 'all', label: '全部' },
+  { v: '1', label: '只看有评论' },
+];
 
 /* 标签筛选行：多选 chip（OR 语义，任一命中即看）；首枚「全部」清空选择。
    tagList 为空给一行引导文案（没有标签时这一行不是噪音，是入口提示） */
@@ -2167,90 +2360,233 @@ function renderTagRow() {
   });
 }
 
-function renderViewPanel() {
-  const c = S.st?.counts || {};
-  const totalAll = (c.pending || 0) + (c.kept || 0) + (c.discarded || 0);
-  // 首枚恒为「全部」：三行筛选（状态/来源/博主）的第一枚对齐同一条垂直动线
-  const statusChips = [
-    { v: 'all', label: '全部', n: totalAll },
-    { v: 'kept', label: '保留', n: c.kept || 0 },
-    { v: 'favorites', label: '收藏', n: c.favorites || 0 },
-    { v: 'discarded', label: '已删除', n: c.discarded || 0 },
-  ];
-  $('#f-status').innerHTML = statusChips.map((x) =>
-    `<button class="fchip ${S.status === x.v ? 'on' : ''}" data-v="${x.v}" aria-keyshortcuts="${STATUS_VIEW_KEYS[x.v]}">${x.label}<span class="fcount">${x.n}</span></button>`).join('');
-  $('#f-status').querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
-    switchStatusView(b.dataset.v);
-  });
-
-  $('#f-source').innerHTML = SOURCE_CHIPS.map((x) =>
-    `<button class="fchip ${S.source === x.v ? 'on' : ''}" data-v="${x.v}">${x.label}</button>`).join('');
-  $('#f-source').querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
-    S.source = b.dataset.v;
-    S.author = 'all';   // 换来源清作者筛选：上一来源的博主在新来源里不存在
+function renderSortRow() {
+  const row = $('#f-sort-row');
+  const box = $('#f-sort');
+  if (!row || !box) return;
+  const showSort = ['kept', 'favorites', 'all'].includes(S.status) && !timeline.active();
+  row.hidden = !showSort;
+  if (!showSort) return;
+  box.innerHTML = SORT_CHIPS.map((x) =>
+    `<button class="fchip ${S.sort === x.v ? 'on' : ''}" data-v="${x.v}">${x.label}</button>`).join('');
+  box.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
+    const v = b.dataset.v;
+    if (S.sort === v) return;
+    S.sort = v;
     closeLBIfOpen(); closeDetailIfOpen();
     renderViewPanel();
     load(true);
   });
+}
 
-  // 博主行：胶囊 + 行内选择器（搜索/最近活跃排序），数据来自 refreshAuthors
-  renderAuthorRow();
+function renderGroupRow() {
+  const row = $('#f-group-row');
+  const box = $('#f-group');
+  if (!row || !box) return;
+  const groups = ((S.st && S.st.groups) || []).filter((g) =>
+    g.active && !/^(xu:|wbu:)/.test(g.list_id) && g.list_id !== 'demo');
+  if (S.group !== 'all' && !groups.some((g) => g.list_id === S.group)) {
+    groups.push({ list_id: S.group, name: S.group, total: 0 });
+  }
+  row.hidden = !groups.length;
+  if (!groups.length) return;
+  const chips = [`<button class="fchip ${S.group === 'all' ? 'on' : ''}" data-group="all">全部</button>`]
+    .concat(groups.map((g) =>
+      `<button class="fchip ${S.group === g.list_id ? 'on' : ''}" data-group="${esc(g.list_id)}"
+         title="${esc(g.name)} · ${g.total || 0} 帖">${esc(g.name)}${g.total ? `<span class="fcount">${g.total}</span>` : ''}</button>`));
+  box.innerHTML = chips.join('');
+  box.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
+    const lid = b.dataset.group;
+    S.group = S.group === lid && lid !== 'all' ? 'all' : lid;
+    if (S.group !== 'all' && S.author !== 'all') S.author = 'all';
+    closeLBIfOpen(); closeDetailIfOpen();
+    renderViewPanel();
+    load(true);
+  });
+}
+
+function renderViewPanel() {
+  renderSortRow();
+  renderGroupRow();
+
+  const srcBox = $('#f-source');
+  if (srcBox) {
+    srcBox.innerHTML = SOURCE_CHIPS.map((x) =>
+      `<button class="fchip ${S.source === x.v ? 'on' : ''}" data-v="${x.v}">${x.label}</button>`).join('');
+    srcBox.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
+      S.source = b.dataset.v;
+      S.author = 'all';   // 换来源清作者筛选：上一来源的博主在新来源里不存在
+      closeLBIfOpen(); closeDetailIfOpen();
+      renderViewPanel();
+      load(true);
+    });
+  }
 
   // 标签行：多选 chip，数据来自 refreshTags
-  renderTagRow();;
+  renderTagRow();
 
-  // 排序段只在有点赞次数语义的视图出现（pending 无计数）；点赞序 = 点赞降序 → 时间降序
-  const showSort = ['kept', 'favorites', 'all'].includes(S.status);
-  $('#f-sort-ctl').hidden = !showSort;
-  if (showSort) {
-    $('#f-sort-ctl').querySelectorAll('button').forEach((b) =>
-      b.classList.toggle('on', (S.sort || '') === b.dataset.v));
+  // 时间范围行：全部 / 今天 / 昨天 / 7天 / 30天
+  const rangeBox = $('#f-range');
+  if (rangeBox) {
+    rangeBox.innerHTML = RANGE_CHIPS.map((x) =>
+      `<button class="fchip ${S.range === x.v ? 'on' : ''}" data-v="${x.v}">${x.label}</button>`).join('');
+    rangeBox.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
+      S.range = b.dataset.v;
+      closeLBIfOpen(); closeDetailIfOpen();
+      renderViewPanel();
+      load(true);
+    });
   }
+
+  // 评论行：全部 / 只看有评论
+  const cmtBox = $('#f-has-cmts');
+  if (cmtBox) {
+    cmtBox.innerHTML = CMT_CHIPS.map((x) =>
+      `<button class="fchip ${S.hasCmts === x.v ? 'on' : ''}" data-v="${x.v}">${x.label}</button>`).join('');
+    cmtBox.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
+      const v = b.dataset.v;
+      S.hasCmts = (v === '1' && S.hasCmts === '1') ? 'all' : v;
+      closeLBIfOpen(); closeDetailIfOpen();
+      renderViewPanel();
+      load(true);
+    });
+  }
+
   // 重置筛选：任一伴随筛选偏离默认时出现（状态本身不算筛选）
   const hasFilters = S.group !== 'all' || S.author !== 'all' || S.source !== 'all'
-    || S.range !== 'all' || S.hasCmts !== 'all' || S.tags !== 'all' || !!S.searchText;
-  $('#f-reset').hidden = !hasFilters;
+    || S.range !== 'all' || S.hasCmts !== 'all' || S.tags !== 'all' || !!S.searchText
+    || (S.searchScope && S.searchScope !== 'all');
+  const resetBtn = $('#f-reset');
+  if (resetBtn) resetBtn.hidden = !hasFilters;
   railSync();   // 视图/排序/来源/博主的所有变更都汇到这：轨上高亮与 tip 即时跟
 }
 
 function resetFilters() {
   S.group = 'all'; S.author = 'all'; S.source = 'all';
   S.range = 'all'; S.hasCmts = 'all'; S.tags = 'all'; S.searchText = '';
+  S.searchScope = 'all';
+  S.appliedSearchText = '';
+  S.appliedSearchScope = 'all';
+  if (typeof setSpotlightScope === 'function') setSpotlightScope('all');
   $('#f-search').value = '';
+  if ($('#spotlight-input')) {
+    $('#spotlight-input').value = '';
+    updateSpotlightClearBtn();
+  }
   renderViewButton();
   renderViewPanel();
+  renderActiveSearchChip();
   load(true);
 }
 
 /* 正文搜索：只在回车时应用（输入过程不打扰列表）；清空后回车即重置 */
-function applySearch(v) {
+function applySearch(v, scope) {
   v = (v || '').trim().slice(0, 100);
-  if (v === S.searchText) return;
+  const nextScope = !v ? 'all' : (scope !== undefined ? scope : (S.searchScope || 'all'));
+  if (v === S.appliedSearchText && nextScope === S.appliedSearchScope) return;
   S.searchText = v;
+  S.searchScope = nextScope;
+  S.appliedSearchText = S.searchText;
+  S.appliedSearchScope = S.searchScope;
+  if ($('#f-search')) $('#f-search').value = v;
+  if ($('#spotlight-input')) {
+    $('#spotlight-input').value = v;
+    updateSpotlightClearBtn();
+  }
   closeLBIfOpen(); closeDetailIfOpen();
   renderViewButton();
-  railSync();   // 右轨搜索抽屉的输入镜像即时对齐
+  renderActiveSearchChip();
+  railSync();   // 右轨搜索状态即时对齐
   load(true);
 }
-$('#f-reset').onclick = resetFilters;
-// 排序段（最新/点赞/随机）：面板内静态 segctl，绑一次即可；编年态由 CSS 收起（点赞/随机不打时间序）
-$('#f-sort-ctl').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-v]');
-  if (!b) return;
-  const v = b.dataset.v || '';
-  if (S.sort === v) return;
-  S.sort = v;
-  renderViewPanel();
-  load(true);
+
+function renderActiveSearchChip() {
+  const chipContainer = $('#feed-search-chip');
+  const term = (S.searchText || '').trim();
+  const topClear = $('#f-search-clear');
+  const searchWrap = $('.searchwrap');
+
+  if (topClear) topClear.hidden = !term;
+  if (searchWrap) searchWrap.classList.toggle('has-query', !!term);
+
+  if (!chipContainer) return;
+  if (!term) {
+    chipContainer.hidden = true;
+    chipContainer.innerHTML = '';
+    return;
+  }
+
+  const scope = S.searchScope || 'all';
+  const meta = {
+    author: { icon: '👤', label: '博主', cls: 'cat-author' },
+    tag: { icon: '🏷️', label: '标签', cls: 'cat-tag' },
+    comment: { icon: '💬', label: '评论', cls: 'cat-comment' },
+    text: { icon: '📝', label: '内容', cls: 'cat-content' },
+    all: { icon: '🔍', label: '全部', cls: 'cat-all' },
+  }[scope] || { icon: '🔍', label: '全部', cls: 'cat-all' };
+
+  const displayTerm = scope === 'tag' && !term.startsWith('#') ? `#${term}` : term;
+
+  chipContainer.hidden = false;
+  chipContainer.innerHTML = `
+    <div class="active-search-chip ${meta.cls}" role="button" tabindex="0" title="点击调整检索">
+      <span class="active-search-badge ${meta.cls}">${meta.icon} ${esc(meta.label)}</span>
+      <span class="active-search-text">${esc(displayTerm)}</span>
+      <button type="button" class="active-search-clear" aria-label="清空当前检索" title="清空检索">✕</button>
+    </div>
+  `;
+
+  const chipEl = chipContainer.querySelector('.active-search-chip');
+  chipEl?.addEventListener('click', (e) => {
+    const clearBtn = e.target.closest('.active-search-clear');
+    if (clearBtn) {
+      e.stopPropagation();
+      applySearch('', 'all');
+      return;
+    }
+    openSpotlightSearch(S.searchScope);
+  });
+  chipEl?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openSpotlightSearch(S.searchScope);
+    }
+  });
+}
+if ($('#f-reset')) $('#f-reset').onclick = resetFilters;
+$('#f-search').addEventListener('input', () => {
+  let val = $('#f-search').value;
+  let newScope = null;
+  if (val.startsWith('@') || val.startsWith('＠')) {
+    newScope = 'author';
+    val = val.slice(1);
+  } else if (val.startsWith('#') || val.startsWith('＃')) {
+    newScope = 'tag';
+    val = val.slice(1);
+  } else if (val.startsWith('//') || val.startsWith('／／')) {
+    newScope = 'comment';
+    val = val.slice(2);
+  } else if (/^c:/i.test(val) || /^c：/i.test(val)) {
+    newScope = 'comment';
+    val = val.slice(2);
+  }
+  if (newScope) {
+    $('#f-search').value = val;
+    S.searchScope = newScope;
+    railSync();
+  }
+  if (!newScope && !$('#f-search').value && S.searchText) {
+    applySearch('', S.searchScope);
+  }
 });
 $('#f-search').addEventListener('keydown', (e) => {
   e.stopPropagation();   // 输入框里的方向键/回车不进全局快捷键
-  if (e.key === 'Enter') applySearch($('#f-search').value);
+  if (e.key === 'Enter') applySearch($('#f-search').value, S.searchScope);
 });
 function viewState() {
-  // 视图按钮信息模型：状态名为主文字，其余筛选条件计入漏斗徽章
+  // 视图/筛选角标计数：状态名为主文字，其余激活筛选计入徽章
   let n = 0;
-  if (S.group !== 'all') n += 1;      // 分组/时间/评论无面板入口，深链仍可带上
+  if (S.group !== 'all') n += 1;
   if (S.source !== 'all') n += 1;
   if (S.author !== 'all') n += 1;
   if (S.hasCmts !== 'all') n += 1;
@@ -2269,22 +2605,41 @@ function renderViewButton() {
 }
 
 const viewwrap = $('.viewwrap');
-/* 面板开合收敛到这两个入口（按钮、Shift+F、点外收起共用）：
-   收起时博主选择器一并归位，重开从收起态起步 */
+/* 面板开合收敛到这两个入口（顶栏钮、右上筛选钮、Shift+F、点外收起共用）：
+   桌面端紧贴右上胶囊 #tt-filter 下沿右对齐；收起时重置筛选浮层状态 */
+function alignViewPanel() {
+  const panel = $('#view-panel');
+  const btn = document.getElementById('tt-filter');
+  if (window.innerWidth >= 900 && btn) {
+    const rect = btn.getBoundingClientRect();
+    panel.style.top = `${Math.round(rect.bottom + 10)}px`;
+    panel.style.right = '16px';
+    panel.style.left = 'auto';
+    panel.style.transform = 'none';
+  } else {
+    panel.style.top = '';
+    panel.style.right = '';
+    panel.style.left = '';
+    panel.style.transform = '';
+  }
+}
 function closeViewPanel() {
   const panel = $('#view-panel');
   if (panel.hidden) return;
   panel.hidden = true;
   $('#btn-view').setAttribute('aria-expanded', 'false');
   authorPickerOpen = false; authorQuery = '';
+  railSync();
 }
 function toggleViewPanel() {
   const panel = $('#view-panel');
   if (panel.hidden) {
+    alignViewPanel();
     panel.hidden = false;
     $('#btn-view').setAttribute('aria-expanded', 'true');
     refreshTags();   // 打开面板时补一次标签清单，chip 计数与新增标签不滞后
     renderViewPanel();
+    railSync();
   } else closeViewPanel();
 }
 $('#btn-view').onclick = (e) => {
@@ -2292,12 +2647,13 @@ $('#btn-view').onclick = (e) => {
   toggleViewPanel();
 };
 document.addEventListener('click', (e) => {
-  // 用 composedPath 判界：面板内胶囊点击会同步重渲染 #f-status/#f-source（innerHTML
+  // 用 composedPath 判界：面板内胶囊点击会同步重渲染 #f-source/#f-tags（innerHTML
   // 换血），到 document 层时 e.target 已脱离 DOM，closest() 会误判「点外」关掉面板；
-  // #ir-filter 是桌面打开本面板的右轨钮（rail.js 绑定），点它同样不算「点外」
-  const path = e.composedPath();
-  const inside = path.some((n) => n instanceof Element
-    && (n.id === 'view-panel' || n.classList?.contains('viewwrap') || n.id === 'ir-filter'));
+  // #tt-filter 是桌面打开本面板的右上胶囊钮（rail.js 绑定），点它同样不算「点外」
+  const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+  const inside = path.length ? path.some((n) => n instanceof Element
+    && (n.id === 'view-panel' || n.classList?.contains('viewwrap') || n.id === 'tt-filter'))
+    : !!(e.target instanceof Element && e.target.closest('#view-panel, .viewwrap, #tt-filter'));
   if (!inside) closeViewPanel();
 });
 
@@ -2323,6 +2679,7 @@ function syncUrl() {
   if (S.source !== 'all') p.set('source', S.source);
   if (S.tags !== 'all') p.set('tags', S.tags);
   if (S.searchText) p.set('q', S.searchText);
+  if (S.searchScope && S.searchScope !== 'all') p.set('scope', S.searchScope);
   if (S.sort) p.set('sort', S.sort);
   const qs = p.toString();
   history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
@@ -2330,6 +2687,11 @@ function syncUrl() {
 
 (function () {   // URL 查询串 → 初始筛选：链接打开即还原视图（可收藏、可分享）
   const p = new URLSearchParams(location.search);
+  if (p.has('code')) {
+    const clean = new URL(location.href);
+    clean.searchParams.delete('code');
+    try { history.replaceState(null, '', clean.pathname + (clean.search || '') + clean.hash); } catch (e) {}
+  }
   if (['pending', 'kept', 'discarded', 'favorites', 'all'].includes(p.get('status')))
     S.status = p.get('status');
   // 旧链接的 ?fav=1 折叠进收藏视图（同为 favorite=1 口径，结果集等价）
@@ -2347,6 +2709,12 @@ function syncUrl() {
     S.searchText = p.get('q').slice(0, 100);
     $('#f-search').value = S.searchText;
   }
+  const scope = p.get('scope');
+  if (['all', 'text', 'comment', 'tag', 'author'].includes(scope)) {
+    S.searchScope = scope;
+  }
+  S.appliedSearchText = S.searchText;
+  S.appliedSearchScope = S.searchScope;
 })();
 
 /* 编年时间线：收卡口挂在 appendToShortestCol/insertCardAt/ensureFeedCols 三处，
@@ -2371,20 +2739,702 @@ const authorView = createAuthorView({
 });
 authorView.init();
 
+/* ---------- 居中聚光灯大搜索栏（Spotlight Search） ---------- */
+const RECENT_SEARCH_KEY = 'pw_recent_searches';
+
+function getRecentSearches() {
+  try {
+    const raw = localStorage.getItem(RECENT_SEARCH_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveRecentSearch(text, scope = 'all') {
+  const q = (text || '').trim().slice(0, 100);
+  if (!q) return;
+  let list = getRecentSearches();
+  list = list.filter((item) => {
+    const itemQ = typeof item === 'string' ? item : item.q;
+    return itemQ !== q;
+  });
+  list.unshift({ q, scope: scope || 'all' });
+  if (list.length > 8) list = list.slice(0, 8);
+  try {
+    localStorage.setItem(RECENT_SEARCH_KEY, JSON.stringify(list));
+  } catch (e) {}
+}
+
+function deleteRecentSearch(q) {
+  let list = getRecentSearches();
+  list = list.filter((item) => {
+    const itemQ = typeof item === 'string' ? item : item.q;
+    return itemQ !== q;
+  });
+  try {
+    localStorage.setItem(RECENT_SEARCH_KEY, JSON.stringify(list));
+  } catch (e) {}
+  renderSpotlightRecents();
+}
+
+function clearRecentSearches() {
+  try {
+    localStorage.removeItem(RECENT_SEARCH_KEY);
+  } catch (e) {}
+  renderSpotlightRecents();
+}
+
+let currentSpotlightScope = 'all';
+
+function setSpotlightScope(scope) {
+  currentSpotlightScope = scope || 'all';
+  const scopesEl = $('#spotlight-scopes');
+  if (scopesEl) {
+    scopesEl.querySelectorAll('.s-scope').forEach((b) => {
+      b.classList.toggle('on', b.dataset.scope === currentSpotlightScope);
+    });
+  }
+}
+
+function renderSpotlightRecents() {
+  const sec = $('#spotlight-recents-section');
+  const container = $('#spotlight-recents');
+  if (!sec || !container) return;
+  const list = getRecentSearches();
+  if (!list.length) {
+    sec.hidden = true;
+    container.innerHTML = '';
+    return;
+  }
+  sec.hidden = false;
+  container.innerHTML = list.map((item) => {
+    const q = typeof item === 'string' ? item : item.q;
+    const scope = typeof item === 'string' ? 'all' : (item.scope || 'all');
+    const scopeLabel = { text: '内容', comment: '评论', tag: '标签', author: '博主' }[scope];
+    const badge = scopeLabel ? `<span class="spotlight-chip-badge">${esc(scopeLabel)}</span>` : '';
+    return `<div class="spotlight-chip" role="button" tabindex="0" data-search-q="${esc(q)}" data-search-scope="${esc(scope)}">`
+      + `${badge}<span class="spotlight-chip-text">${esc(q)}</span>`
+      + `<button type="button" class="spotlight-chip-del" data-del-q="${esc(q)}" aria-label="删除此条记录">×</button>`
+      + `</div>`;
+  }).join('');
+}
+
+function renderSpotlightTags() {
+  const container = $('#spotlight-tags');
+  if (!container) return;
+  const tags = (S.tagList || []).slice(0, 10);
+  if (!tags.length) {
+    container.innerHTML = '<span class="hint">暂无标签</span>';
+    return;
+  }
+  container.innerHTML = tags.map((t) => {
+    return `<button type="button" class="spotlight-chip spotlight-tag-chip" data-tag-name="${esc(t.tag)}">`
+      + `<span class="spotlight-tag-hash">#</span><span class="spotlight-chip-text">${esc(t.tag)}</span>`
+      + (t.n ? `<span class="spotlight-chip-count">${t.n}</span>` : '')
+      + `</button>`;
+  }).join('');
+}
+
+function detectSpotlightPrefix() {
+  const inp = $('#spotlight-input');
+  if (!inp) return null;
+  let val = inp.value;
+  let newScope = null;
+  if (val.startsWith('@') || val.startsWith('＠')) {
+    newScope = 'author';
+    val = val.slice(1);
+  } else if (val.startsWith('#') || val.startsWith('＃')) {
+    newScope = 'tag';
+    val = val.slice(1);
+  } else if (val.startsWith('//') || val.startsWith('／／')) {
+    newScope = 'comment';
+    val = val.slice(2);
+  } else if (/^c:/i.test(val) || /^c：/i.test(val)) {
+    newScope = 'comment';
+    val = val.slice(2);
+  }
+  if (newScope) {
+    inp.value = val;
+    setSpotlightScope(newScope);
+    return newScope;
+  }
+  return null;
+}
+
+let liveSearchTimer = null;
+let liveSearchController = null;
+let liveSearchSeq = 0;
+let spotlightNavIndex = -1;
+
+function highlightSnippet(text, query, maxLen = 80) {
+  if (!text) return '';
+  const cleanQ = (query || '').trim();
+  if (!cleanQ) return esc(text.length > maxLen ? text.slice(0, maxLen) + '…' : text);
+
+  const lowerText = text.toLowerCase();
+  const lowerQ = cleanQ.toLowerCase();
+  const idx = lowerText.indexOf(lowerQ);
+
+  if (idx === -1) {
+    return esc(text.length > maxLen ? text.slice(0, maxLen) + '…' : text);
+  }
+
+  const matchLen = cleanQ.length;
+  let start = Math.max(0, idx - 20);
+  let end = Math.min(text.length, idx + matchLen + 40);
+
+  if (end - start < maxLen) {
+    if (start === 0) end = Math.min(text.length, maxLen);
+    else if (end === text.length) start = Math.max(0, text.length - maxLen);
+  }
+
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+
+  const before = text.slice(start, idx);
+  const matched = text.slice(idx, idx + matchLen);
+  const after = text.slice(idx + matchLen, end);
+
+  return prefix + esc(before) + '<mark>' + esc(matched) + '</mark>' + esc(after) + suffix;
+}
+
+function updateSpotlightNav(items, newIndex) {
+  if (!items || !items.length) {
+    spotlightNavIndex = -1;
+    return;
+  }
+  items.forEach((item, idx) => {
+    const isSel = idx === newIndex;
+    item.classList.toggle('selected', isSel);
+    item.setAttribute('aria-selected', String(isSel));
+    if (isSel) {
+      item.scrollIntoView({ block: 'nearest' });
+    }
+  });
+  spotlightNavIndex = newIndex;
+}
+
+function renderLiveResults(data, query, scope) {
+  const container = $('#spotlight-live-results');
+  const defaultBody = $('#spotlight-default-body');
+  if (!container) return;
+
+  const q = (query || '').trim();
+  if (!q) {
+    container.hidden = true;
+    container.innerHTML = '';
+    if (defaultBody) defaultBody.hidden = false;
+    return;
+  }
+
+  if (defaultBody) defaultBody.hidden = true;
+  container.hidden = false;
+
+  const authors = data?.authors || [];
+  const tags = data?.tags || [];
+  const content = data?.content || [];
+  const comments = data?.comments || [];
+  const total = authors.length + tags.length + content.length + comments.length;
+
+  let html = '';
+
+  if (total === 0) {
+    html += `<div class="spotlight-empty-state"><span>未找到与 “<b>${esc(q)}</b>” 相关的匹配结果</span><span class="spotlight-empty-sub">尝试按回车在图片墙搜索，或更换关键词</span></div>`;
+  } else {
+    // 1. 博主分区 (Author Partition)
+    if (authors.length > 0) {
+      html += `<div class="spotlight-res-group spotlight-partition cat-author" data-group="author">`;
+      html += `<div class="spotlight-group-head">`
+        + `<div class="spotlight-partition-title">`
+        + `<svg class="spotlight-group-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`
+        + `<span>博主</span>`
+        + `</div>`
+        + `<span class="spotlight-partition-count">${authors.length}</span>`
+        + `</div>`;
+      html += `<div class="spotlight-partition-list">`;
+      html += authors.map((a) => {
+        const av = avatarSrc(a.avatar);
+        const avHtml = av
+          ? `<img class="spotlight-res-avatar" src="${esc(av)}" alt="" decoding="async">`
+          : `<span class="spotlight-res-avatar-fallback">${esc((a.author || '微')[0])}</span>`;
+        const cleanAuthorQ = q.replace(/^[@＠]/, '');
+        return `<div class="spotlight-result-item" data-type="author" data-uid="${esc(a.uid)}" data-name="${esc(a.author)}" data-avatar="${esc(a.avatar)}" role="option" tabindex="0">`
+          + avHtml
+          + `<div class="spotlight-res-main"><span class="spotlight-res-title">${highlightSnippet(a.author, cleanAuthorQ)}<span class="spotlight-res-sub">UID: ${esc(a.source_uid || a.uid)}</span></span></div>`
+          + `<span class="spotlight-res-meta">${a.n} 篇</span>`
+          + `</div>`;
+      }).join('');
+      html += `</div></div>`;
+    }
+
+    // 2. 标签分区 (Tag Partition)
+    if (tags.length > 0) {
+      html += `<div class="spotlight-res-group spotlight-partition cat-tag" data-group="tag">`;
+      html += `<div class="spotlight-group-head">`
+        + `<div class="spotlight-partition-title">`
+        + `<svg class="spotlight-group-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>`
+        + `<span>标签</span>`
+        + `</div>`
+        + `<span class="spotlight-partition-count">${tags.length}</span>`
+        + `</div>`;
+      html += `<div class="spotlight-partition-list">`;
+      html += tags.map((t) => {
+        const cleanTagQ = q.replace(/^[#＃]/, '');
+        return `<div class="spotlight-result-item" data-type="tag" data-tag="${esc(t.tag)}" role="option" tabindex="0">`
+          + `<span class="spotlight-tag-icon">#</span>`
+          + `<div class="spotlight-res-main"><span class="spotlight-res-title">${highlightSnippet(t.tag, cleanTagQ)}</span></div>`
+          + `<span class="spotlight-res-meta">${t.n} 篇</span>`
+          + `</div>`;
+      }).join('');
+      html += `</div></div>`;
+    }
+
+    // 3. 内容分区 (Content Partition)
+    if (content.length > 0) {
+      html += `<div class="spotlight-res-group spotlight-partition cat-content" data-group="content">`;
+      html += `<div class="spotlight-group-head">`
+        + `<div class="spotlight-partition-title">`
+        + `<svg class="spotlight-group-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`
+        + `<span>内容</span>`
+        + `</div>`
+        + `<span class="spotlight-partition-count">${content.length}</span>`
+        + `</div>`;
+      html += `<div class="spotlight-partition-list">`;
+      html += content.map((c) => {
+        const thumb = mediaSrc(c.thumb);
+        const thumbHtml = thumb
+          ? `<img class="spotlight-res-thumb" src="${esc(thumb)}" alt="" loading="lazy" decoding="async">`
+          : `<span class="spotlight-res-thumb-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>`;
+        return `<div class="spotlight-result-item" data-type="content" data-sid="${esc(c.sid)}" role="option" tabindex="0">`
+          + thumbHtml
+          + `<div class="spotlight-res-main"><span class="spotlight-res-snippet">${highlightSnippet(c.text, q, 70)}</span></div>`
+          + `<span class="spotlight-res-meta"><span>${esc(c.author || '')}</span>${c.created_at ? `<time class="spotlight-res-date">${fmtDate(c.created_at)}</time>` : ''}</span>`
+          + `</div>`;
+      }).join('');
+      html += `</div></div>`;
+    }
+
+    // 4. 评论分区 (Comment Partition)
+    if (comments.length > 0) {
+      html += `<div class="spotlight-res-group spotlight-partition cat-comment" data-group="comment">`;
+      html += `<div class="spotlight-group-head">`
+        + `<div class="spotlight-partition-title">`
+        + `<svg class="spotlight-group-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`
+        + `<span>评论</span>`
+        + `</div>`
+        + `<span class="spotlight-partition-count">${comments.length}</span>`
+        + `</div>`;
+      html += `<div class="spotlight-partition-list">`;
+      html += comments.map((cm) => {
+        const av = avatarSrc(cm.avatar);
+        const avHtml = av
+          ? `<img class="spotlight-res-avatar" src="${esc(av)}" alt="" decoding="async">`
+          : `<span class="spotlight-res-avatar-fallback">${esc((cm.author || '评')[0])}</span>`;
+        const cleanCmtQ = q.replace(/^(\/\/|／／|c:|c：)/i, '');
+        return `<div class="spotlight-result-item" data-type="comment" data-sid="${esc(cm.sid)}" data-cid="${esc(cm.comment_id || '')}" role="option" tabindex="0">`
+          + avHtml
+          + `<div class="spotlight-res-main"><span class="spotlight-res-snippet">${highlightSnippet(cm.body, cleanCmtQ, 70)}</span></div>`
+          + `<span class="spotlight-res-meta"><span>${esc(cm.author || '')}</span>${cm.created_at ? `<time class="spotlight-res-date">${fmtDate(cm.created_at)}</time>` : ''}</span>`
+          + `</div>`;
+      }).join('');
+      html += `</div></div>`;
+    }
+  }
+
+  // 底部统一动作：在图片墙查看全部结果 ↵
+  html += `<div class="spotlight-result-item spotlight-action-all" data-type="action-all" role="option" tabindex="0">`
+    + `<svg class="spotlight-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`
+    + `<div class="spotlight-res-main"><span class="spotlight-res-title">在图片墙查看全部结果 <b>“${esc(q)}”</b></span></div>`
+    + `<kbd class="spotlight-res-kbd">↵ Enter</kbd>`
+    + `</div>`;
+
+  container.innerHTML = html;
+  spotlightNavIndex = -1;
+}
+
+function triggerLiveSearch(query, scope) {
+  clearTimeout(liveSearchTimer);
+  const q = (query || '').trim();
+  const defaultBody = $('#spotlight-default-body');
+  const liveResults = $('#spotlight-live-results');
+
+  if (!q) {
+    liveSearchSeq++;
+    liveSearchController?.abort();
+    if (liveResults) {
+      liveResults.hidden = true;
+      liveResults.innerHTML = '';
+    }
+    if (defaultBody) defaultBody.hidden = false;
+    return;
+  }
+
+  liveSearchTimer = setTimeout(async () => {
+    liveSearchController?.abort();
+    liveSearchController = new AbortController();
+    const seq = ++liveSearchSeq;
+    try {
+      const activeScope = scope || currentSpotlightScope || 'all';
+      const url = `/api/search/live?q=${encodeURIComponent(q)}&q_scope=${encodeURIComponent(activeScope)}`;
+      const data = await api(url, 'GET', undefined, { signal: liveSearchController.signal });
+      const curInput = $('#spotlight-input')?.value.trim() || '';
+      if (seq === liveSearchSeq && curInput === q && activeScope === currentSpotlightScope) {
+        renderLiveResults(data, q, activeScope);
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        // 请求失败静默
+      }
+    }
+  }, 150);
+}
+
+function selectSpotlightItem(item) {
+  if (!item) return;
+  const type = item.dataset.type;
+  const inp = $('#spotlight-input');
+  const q = inp ? inp.value.trim() : '';
+
+  if (type === 'author') {
+    const uid = item.dataset.uid;
+    const name = item.dataset.name;
+    const avatar = item.dataset.avatar;
+    saveRecentSearch(name, 'author');
+    closeSpotlightSearch();
+    authorView.open(uid, { author: name, avatar });
+  } else if (type === 'tag') {
+    const tagName = item.dataset.tag;
+    setSpotlightScope('tag');
+    applySearch(tagName, 'tag');
+    saveRecentSearch(tagName, 'tag');
+    closeSpotlightSearch();
+  } else if (type === 'content') {
+    const sid = item.dataset.sid;
+    if (q) saveRecentSearch(q, 'text');
+    closeSpotlightSearch();
+    openDetail(sid);
+  } else if (type === 'comment') {
+    const sid = item.dataset.sid;
+    if (q) saveRecentSearch(q, 'comment');
+    closeSpotlightSearch();
+    openDetail(sid, true);
+  } else if (type === 'action-all') {
+    detectSpotlightPrefix();
+    applySearch(q, currentSpotlightScope);
+    if (q) saveRecentSearch(q, currentSpotlightScope);
+    closeSpotlightSearch();
+  }
+}
+
+function updateSpotlightClearBtn() {
+  const inp = $('#spotlight-input');
+  const btn = $('#spotlight-clear');
+  if (inp && btn) {
+    btn.hidden = !inp.value;
+  }
+}
+
+function openSpotlightSearch(initialScope) {
+  const modal = $('#modal-spotlight-search');
+  if (!modal) return;
+  if (!modal.hidden && !modal.classList.contains('closing')) {
+    const targetScope = initialScope || currentSpotlightScope;
+    if (targetScope === currentSpotlightScope) {
+      $('#spotlight-input')?.focus();
+      return;
+    }
+  }
+  // 关闭可能冲突的其他浮层与面板
+  document.querySelectorAll('.modal:not([hidden])').forEach((m) => {
+    if (m.id !== 'modal-spotlight-search') closeModal(m.id);
+  });
+  closeViewPanel();
+  closeLBIfOpen();
+  closeDetailIfOpen();
+  setSpotlightScope(initialScope || S.searchScope || 'all');
+  const inp = $('#spotlight-input');
+  const topVal = $('#f-search')?.value || '';
+  const val = topVal || S.searchText || '';
+  if (inp) {
+    inp.value = val;
+    updateSpotlightClearBtn();
+  }
+  renderSpotlightRecents();
+  renderSpotlightTags();
+  if (!(S.tagList || []).length) {
+    refreshTags().then(renderSpotlightTags);
+  }
+  if (val.trim()) {
+    triggerLiveSearch(val, currentSpotlightScope);
+  } else {
+    const liveResults = $('#spotlight-live-results');
+    const defaultBody = $('#spotlight-default-body');
+    if (liveResults) {
+      liveResults.hidden = true;
+      liveResults.innerHTML = '';
+    }
+    if (defaultBody) defaultBody.hidden = false;
+  }
+  openModal('modal-spotlight-search');
+  if (inp) {
+    inp.focus();
+    inp.select();
+  }
+  railSync();
+}
+
+function closeSpotlightSearch() {
+  closeModal('modal-spotlight-search');
+  railSync();
+}
+
+function initSpotlightSearch() {
+  const inp = $('#spotlight-input');
+  const clearBtn = $('#spotlight-clear');
+  const scopesEl = $('#spotlight-scopes');
+  const recentsEl = $('#spotlight-recents');
+  const clearHistBtn = $('#spotlight-clear-history');
+  const tagsEl = $('#spotlight-tags');
+  const liveResults = $('#spotlight-live-results');
+
+  if (liveResults) {
+    liveResults.addEventListener('click', (e) => {
+      const item = e.target.closest('.spotlight-result-item');
+      if (item) selectSpotlightItem(item);
+    });
+  }
+
+  if (inp) {
+    inp.addEventListener('input', (e) => {
+      if (e.isComposing) return;
+      detectSpotlightPrefix();
+      updateSpotlightClearBtn();
+      triggerLiveSearch(inp.value, currentSpotlightScope);
+    });
+    inp.addEventListener('compositionend', () => {
+      detectSpotlightPrefix();
+      updateSpotlightClearBtn();
+      triggerLiveSearch(inp.value, currentSpotlightScope);
+    });
+    inp.addEventListener('search', () => {
+      updateSpotlightClearBtn();
+      triggerLiveSearch(inp.value, currentSpotlightScope);
+    });
+    inp.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      e.stopPropagation();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const lr = $('#spotlight-live-results');
+        if (lr && !lr.hidden) {
+          const items = lr.querySelectorAll('.spotlight-result-item');
+          if (items.length) {
+            const nextIdx = spotlightNavIndex < 0 ? 0 : (spotlightNavIndex + 1) % items.length;
+            updateSpotlightNav(items, nextIdx);
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const lr = $('#spotlight-live-results');
+        if (lr && !lr.hidden) {
+          const items = lr.querySelectorAll('.spotlight-result-item');
+          if (items.length) {
+            const prevIdx = spotlightNavIndex <= 0 ? items.length - 1 : (spotlightNavIndex - 1 + items.length) % items.length;
+            updateSpotlightNav(items, prevIdx);
+          }
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const lr = $('#spotlight-live-results');
+        if (lr && !lr.hidden) {
+          const items = lr.querySelectorAll('.spotlight-result-item');
+          if (items.length && spotlightNavIndex >= 0 && spotlightNavIndex < items.length) {
+            selectSpotlightItem(items[spotlightNavIndex]);
+            return;
+          }
+        }
+        detectSpotlightPrefix();
+        const v = inp.value.trim();
+        applySearch(v, currentSpotlightScope);
+        if (v) saveRecentSearch(v, currentSpotlightScope);
+        closeSpotlightSearch();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSpotlightSearch();
+      } else if (e.key === 'Backspace' && !inp.value && currentSpotlightScope !== 'all') {
+        setSpotlightScope('all');
+      }
+    });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (inp) {
+        inp.value = '';
+        updateSpotlightClearBtn();
+        triggerLiveSearch('', currentSpotlightScope);
+        inp.focus();
+      }
+    });
+  }
+
+  if (scopesEl) {
+    scopesEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('.s-scope');
+      if (!btn) return;
+      setSpotlightScope(btn.dataset.scope);
+      if (inp) {
+        inp.focus();
+        if (inp.value.trim()) {
+          triggerLiveSearch(inp.value, currentSpotlightScope);
+        }
+      }
+    });
+  }
+
+  if (recentsEl) {
+    const handleRecent = (target) => {
+      const delBtn = target.closest('.spotlight-chip-del');
+      if (delBtn) {
+        deleteRecentSearch(delBtn.dataset.delQ);
+        if (inp) inp.focus();
+        return;
+      }
+      const chip = target.closest('.spotlight-chip');
+      if (chip) {
+        const q = chip.dataset.searchQ;
+        const scope = chip.dataset.searchScope || 'all';
+        if (inp) inp.value = q;
+        setSpotlightScope(scope);
+        applySearch(q, scope);
+        saveRecentSearch(q, scope);
+        closeSpotlightSearch();
+      }
+    };
+    recentsEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleRecent(e.target);
+    });
+    recentsEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleRecent(e.target);
+      }
+    });
+  }
+
+  if (clearHistBtn) {
+    clearHistBtn.addEventListener('click', () => {
+      clearRecentSearches();
+    });
+  }
+
+  if (tagsEl) {
+    tagsEl.addEventListener('click', (e) => {
+      const chip = e.target.closest('.spotlight-tag-chip');
+      if (chip) {
+        const tagName = chip.dataset.tagName;
+        if (inp) inp.value = tagName;
+        setSpotlightScope('tag');
+        applySearch(tagName, 'tag');
+        saveRecentSearch(tagName, 'tag');
+        closeSpotlightSearch();
+      }
+    });
+  }
+
+  document.querySelectorAll('.syntax-hint').forEach((hint) => {
+    hint.addEventListener('click', () => {
+      const syntax = hint.dataset.syntax;
+      if (syntax === '@') setSpotlightScope('author');
+      else if (syntax === '#') setSpotlightScope('tag');
+      else if (syntax === '//') setSpotlightScope('comment');
+      if (inp) {
+        inp.focus();
+        if (inp.value.trim()) {
+          triggerLiveSearch(inp.value, currentSpotlightScope);
+        }
+      }
+    });
+  });
+
+  // 顶栏搜索框与聚光灯联动
+  $('#f-search')?.addEventListener('focus', (e) => {
+    e.target.blur();
+    openSpotlightSearch();
+  });
+  $('#f-search')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.target.blur();
+    openSpotlightSearch();
+  });
+  $('#f-search')?.addEventListener('input', () => {
+    const val = $('#f-search').value;
+    openSpotlightSearch();
+    const sinp = $('#spotlight-input');
+    if (sinp) {
+      sinp.value = val;
+      triggerLiveSearch(val, currentSpotlightScope);
+    }
+  });
+  $('.searchwrap')?.addEventListener('click', (e) => {
+    if (e.target.closest('#f-search-clear')) {
+      e.stopPropagation();
+      applySearch('', 'all');
+      return;
+    }
+    $('#f-search')?.blur();
+    openSpotlightSearch();
+  });
+  $('#f-search-clear')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    applySearch('', 'all');
+  });
+
+  // 阻断聚光灯弹窗滚动穿透到后方主页面
+  const spModal = $('#modal-spotlight-search');
+  if (spModal) {
+    spModal.addEventListener('wheel', (e) => {
+      const scrollable = spModal.querySelector('.spotlight-body');
+      if (!scrollable || !e.target.closest('.spotlight-body')) {
+        e.preventDefault();
+        return;
+      }
+      const { scrollTop, scrollHeight, clientHeight } = scrollable;
+      const delta = e.deltaY;
+      if (delta > 0 && scrollTop + clientHeight >= scrollHeight - 1) {
+        e.preventDefault();
+      } else if (delta < 0 && scrollTop <= 0) {
+        e.preventDefault();
+      }
+    }, { passive: false });
+  }
+}
+
 loadStatus().then(() => load(true)).catch((e) => toast('加载失败：' + e.message));
 refreshTags();   // 标签清单首载（失败静默，筛选行给引导文案）
+initSpotlightSearch();
+renderActiveSearchChip();
 
-/* ---------- 左右轨（rail.js）集成钩子 ----------
+/* ---------- 左右轨与右上胶囊（rail.js）集成钩子 ----------
    轨道只做壳与交互，业务逻辑全部走这里暴露的最小能力面；不复制状态、不合成事件。 */
 window.pwRail = {
   S,
   switchStatusView,
   startQuickTriage,
-  applySearch,
+  applySearch: (v, scope) => applySearch(v, scope),
+  openSpotlightSearch: (scope) => openSpotlightSearch(scope),
+  closeSpotlightSearch: () => closeSpotlightSearch(),
+  syncUrl,
   resetFilters,
   renderViewPanel,
-  toggleViewPanel,     // 右轨筛选钮：桌面视图面板唯一可见入口
-  feedColCount,        // 列栈公式单源：rail.js 的自愈对照不再复制 310/156 魔数
+  toggleViewPanel,
+  viewState,
+  feedColCount,        // 列栈公式单源：rail.js 的自愈对照不再复制公式魔数
+  relayoutFeed: () => { colWidth = 0; ensureFeedCols(); },
   load: (reset) => load(reset),
   openDetail,
   authorViewOpen: (uid, hint) => authorView.open(uid, hint),
@@ -2393,6 +3443,7 @@ window.pwRail = {
   notesOpen: () => notes.open(),
   chronoActive: () => timeline.active(),
   setChrono: (on) => timeline.setLayout(on),
-  scrollTop: scrollFeedTop,     // 右轨回顶部：直连动作本身，不再遥控桌面隐藏的 #btn-top
-  openSettings: () => settings.openSettings(),   // 右轨设置行：直开弹窗，不再遥控桌面隐藏的 #btn-settings
+  scrollTop: scrollFeedTop,
+  openSettings: () => settings.openSettings(),
+  setSelectMode: (on) => setSelectMode(on),
 };

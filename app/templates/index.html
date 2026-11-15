@@ -11,71 +11,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#ffffff">
-  <script>
-  /* 个性化初始化：必须跑在 CSS 之前（主题防闪白、纯图模式防闪正文）。
-     pw_prefs = { theme, accent, bg, font, skin, author, pureimg, dblfav }；
-     主题三态：light/dark/system；旧 pw_theme='dark' 迁移为深色，其余跟随系统。
-     皮肤（skin）：swiss/brut/photo，空=默认苹果风；皮肤自带底色，theme-color 跟随。 */
-  (function () {
-    var KEY = 'pw_prefs';
-    var THEME_BG = { light: '#ffffff', dark: '#0d0d0f' };
-    var SKIN_BG = {
-      swiss: { light: '#f7f6f2', dark: '#0f0f11' },
-      brut:  { light: '#f3ead6', dark: '#16130d' },
-      photo: { light: '#fbfbfa', dark: '#0b0b0c' }
-    };
-    var root = document.documentElement;
-    function prefs() {
-      try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
-    }
-    function sysTheme() {
-      return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
-        ? 'dark' : 'light';
-    }
-    function theme() {
-      var p = prefs();
-      if (p.theme === 'light' || p.theme === 'dark') return p.theme;
-      if (p.theme === 'system') return sysTheme();
-      try { if (localStorage.getItem('pw_theme') === 'dark') return 'dark'; } catch (e) {}
-      return sysTheme();   // 从未配置过：跟随系统
-    }
-    function applyAll() {
-      var p = prefs();
-      var t = theme();
-      root.setAttribute('data-theme', t);
-      var m = document.querySelector('meta[name="theme-color"]');
-      if (m) m.setAttribute('content', (SKIN_BG[p.skin] || THEME_BG)[t]);
-      ['accent', 'bg', 'font', 'skin'].forEach(function (k) {
-        var v = p[k];
-        if (k === 'accent' && v && ['indigo', 'green', 'plum'].indexOf(v) < 0) v = '';   // 琥珀已退役（专职收藏标记），旧档回落默认
-        if (k === 'skin' && v && ['swiss', 'brut', 'photo'].indexOf(v) < 0) v = '';      // 未知皮肤档位回落默认
-        if (v) root.setAttribute('data-' + k, v);
-        else root.removeAttribute('data-' + k);
-      });
-      if (p.pureimg) root.setAttribute('data-pureimg', '1');
-      else root.removeAttribute('data-pureimg');
-      root.setAttribute('data-x-blur', p['x-blur'] === 'off' ? 'off' : 'on');
-    }
-    /* 供设置面板写入：'' 表示清除该配置（如 theme='' 回归跟随系统） */
-    window.pwSetPref = function (key, val) {
-      var p = prefs();
-      if (val === '' || val === null || val === undefined) delete p[key];
-      else p[key] = val;
-      try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {}
-      applyAll();
-    };
-    window.pwGetPrefs = prefs;
-    applyAll();
-    if (window.matchMedia) {
-      var mq = matchMedia('(prefers-color-scheme: dark)');
-      var follow = function () { if (!prefs().theme || prefs().theme === 'system') applyAll(); };
-      mq.addEventListener ? mq.addEventListener('change', follow) : mq.addListener(follow);
-    }
-    window.addEventListener('storage', function (e) {
-      if (e.key === KEY) applyAll();
-    });
-  })();
-  </script>
+  <script src="/static/boot.js?v={{ v }}"></script>
   <link rel="stylesheet" href="/static/style.css?v={{ v }}">
 </head>
 <body>
@@ -92,7 +28,8 @@
     </div>
     <div class="searchwrap">
       <svg class="sicon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="f-search" class="f-search" type="search" placeholder="搜正文/评论…" maxlength="100" autocomplete="off">
+      <input id="f-search" class="f-search" type="search" placeholder="搜索正文、评论、标签、博主…" maxlength="100" autocomplete="off">
+      <button id="f-search-clear" class="f-search-clear" type="button" aria-label="清空搜索" hidden>✕</button>
     </div>
   </div>
   <button id="btn-settings" class="tbtn ic" title="设置" aria-label="设置"
@@ -102,227 +39,153 @@
 </header>
 
 <div id="view-panel" class="view-panel" hidden>
-  <div class="f-row"><span class="f-label">状态</span><div class="f-chips" id="f-status"></div></div>
+  <div class="f-row" id="f-sort-row"><span class="f-label">排序</span><div class="f-chips" id="f-sort"></div></div>
+  <div class="f-row" id="f-group-row"><span class="f-label">分组</span><div class="f-chips" id="f-group"></div></div>
   <div class="f-row"><span class="f-label">来源</span><div class="f-chips" id="f-source"></div></div>
-  <div class="f-row"><span class="f-label">博主</span><div class="f-chips" id="f-author"></div></div>
   <div class="f-row"><span class="f-label">标签</span><div class="f-chips" id="f-tags"></div></div>
-  <hr class="f-divider">
-  <div class="f-row" id="f-viewctl-row">
-    <span class="f-label">视图</span>
-    <div class="f-viewctl">
-      <div class="segctl" id="f-sort-ctl" hidden>
-        <button data-v=""><span class="mic" aria-hidden="true">↓</span>最新</button>
-        <button data-v="keep_count"><span class="mic" aria-hidden="true">#</span>点赞</button>
-        <button data-v="shuffle"><span class="mic" aria-hidden="true">✦</span>随机</button>
-      </div>
-      <div class="segctl" id="f-layout">
-        <button data-v="wall"><span class="mic" aria-hidden="true">⊞</span>墙</button>
-        <button data-v="chrono"><span class="mic" aria-hidden="true">☰</span>编年</button>
-      </div>
-      <button id="f-reset" class="f-reset" hidden>重置筛选</button>
-    </div>
+  <div class="f-row"><span class="f-label">时间</span><div class="f-chips" id="f-range"></div></div>
+  <div class="f-row"><span class="f-label">评论</span><div class="f-chips" id="f-has-cmts"></div></div>
+  <div class="f-foot">
+    <button id="f-reset" class="f-reset" hidden>重置筛选</button>
   </div>
 </div>
 
 <!-- 抓取状态栈：右侧悬浮小卡（登录失效/未配分组/抓取中/告警），由 app.js renderBanner 填充 -->
 <div id="banner"></div>
 
-<!-- 桌面左右轨（≥900px 显示，顶栏在桌面隐藏；移动端布局不变）。
-     图标列恒 56px 不变形；分组/博主/会话等内容在 #rail-panel 浮层里
-     只由 #rail-toggle 按钮展开/收起（不悬停自动浮出）。行为与数据填充在 rail.js。 -->
+<!-- 桌面左悬浮胶囊导航（≥900px 显示，顶栏在桌面隐藏；纯 Overlay 悬停展开，零重排不钉住）。 -->
 <aside id="rail" class="rail" aria-label="主导航">
-  <div class="rstrip">
-    <span class="rbrand" title="PWALL"><span class="lgm" aria-hidden="true"><i></i><i></i><i></i><i></i></span></span>
-  </div>
-  <button class="rrow" id="rail-toggle" type="button" aria-expanded="false" aria-controls="rail-panel" aria-label="展开导航面板">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>
-    <span class="tip" id="rail-toggle-tip">展开导航</span>
-  </button>
-  <div class="rsec" id="rail-views">
-    <!-- 展示序 = 键位序：保留1 / 已删除2 / 收藏3 / 全部4；新增（待筛墙）无常驻数字键，
-         排首作每日入口——此前它只在右轨条件出现（有待筛帖才显），视图本身无法被发现 -->
-    <button class="rrow vw" data-status="pending" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-      <span class="tip">新增</span>
-    </button>
-    <button class="rrow vw" data-status="kept" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-      <span class="tip">保留 <kbd>1</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="discarded" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-      <span class="tip">已删除 <kbd>2</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="favorites" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-      <span class="tip">收藏 <kbd>3</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="all" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-      <span class="tip">全部 <kbd>4</kbd></span>
+  <div class="rhead">
+    <button class="rrow rbrand" id="rail-brand" type="button" title="PWALL · 回到顶部" aria-label="PWALL 回到顶部">
+      <span class="ricon-slot">
+        <span class="lgm" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      </span>
+      <span class="brand-name">PWALL</span>
     </button>
   </div>
   <div class="rscroll">
-    <button class="rrow" id="rail-groups" type="button" aria-haspopup="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <span class="tip">分组</span>
-    </button>
-    <button class="rrow" id="rail-authors-entry" type="button" aria-haspopup="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-      <span class="bdg" id="rail-authors-bdg" hidden></span>
-      <span class="tip">所有博主</span>
-    </button>
-    <button class="rrow js-chrono" id="rail-chrono" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-      <span class="tip">编年视图 <kbd>V</kbd></span>
-    </button>
+    <div class="rsec" id="rail-views">
+      <button class="rrow vw" data-status="all" type="button" title="全部">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </span>
+        <span class="lb">全部</span>
+        <span class="cnt"></span>
+      </button>
+      <button class="rrow vw" data-status="kept" type="button" title="保留">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </span>
+        <span class="lb">保留</span>
+        <span class="cnt"></span>
+      </button>
+      <button class="rrow vw" data-status="favorites" type="button" title="收藏">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </span>
+        <span class="lb">收藏</span>
+        <span class="cnt"></span>
+      </button>
+    </div>
+
+    <div class="rsec" id="rail-author-sec">
+      <a class="rrow" id="rail-authors-entry" href="/kiosk" title="所有博主">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </span>
+        <span class="lb">所有博主</span>
+      </a>
+      <button class="rrow" id="rail-triage" type="button" title="待筛" hidden>
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          <span class="bdg" id="rail-triage-bdg" hidden></span>
+        </span>
+        <span class="lb">待筛</span>
+        <span class="cnt" id="rail-triage-cnt"></span>
+      </button>
+    </div>
+
+    <div class="rsec" id="rail-extra-sec">
+      <button class="rrow js-chrono" id="rail-chrono" type="button" title="编年视图">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </span>
+        <span class="lb">编年视图</span>
+      </button>
+      <a class="rrow" id="rail-stats-link" href="/stats" title="回看统计">
+        <span class="ricon-slot">
+          <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </span>
+        <span class="lb">回看统计</span>
+      </a>
+    </div>
   </div>
   <div class="rbottom">
-    <button class="rrow js-settings" id="rail-settings" type="button" aria-label="设置">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      <span class="tip">设置</span>
+    <button class="rrow js-settings" id="rail-settings" type="button" aria-label="设置" title="设置">
+      <span class="ricon-slot">
+        <svg class="ricon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </span>
+      <span class="lb">设置</span>
     </button>
   </div>
 </aside>
 
-<!-- 导航浮层面板：图标列功能的「延伸」——同一批功能行按相同顺序与行高节奏
-     排布（每枚图标在面板里有同 y 的图标+文字形态），分组树/博主列表就地
-     长在自己的行下面。展开/收起只认 #rail-toggle 按钮，不推挤墙。行为见 rail.js。 -->
-<div id="rail-panel" class="rail-panel" aria-label="导航面板">
-  <div class="phead">
-    <span class="lb">PWALL</span>
-  </div>
-  <!-- 与轨上 #rail-toggle 同 y 的镜像行：保住「面板行 y 与图标行 y 一一对齐」的节奏，点它同样收起面板 -->
-  <button class="rrow" id="rail-panel-toggle" type="button" aria-label="收起导航面板">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>
-  </button>
-  <div class="rsec" id="panel-views">
-    <!-- 视图行带全量计数（.cnt 由 rail.js sync 填充）；.rend 把计数与键位打包右对齐 -->
-    <button class="rrow vw" data-status="pending" type="button">
-      <span class="lb">新增</span><span class="cnt"></span>
-    </button>
-    <button class="rrow vw" data-status="kept" type="button">
-      <span class="lb">保留</span><span class="rend"><span class="cnt"></span><kbd class="kb">1</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="discarded" type="button">
-      <span class="lb">已删除</span><span class="rend"><span class="cnt"></span><kbd class="kb">2</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="favorites" type="button">
-      <span class="lb">收藏</span><span class="rend"><span class="cnt"></span><kbd class="kb">3</kbd></span>
-    </button>
-    <button class="rrow vw" data-status="all" type="button">
-      <span class="lb">全部</span><span class="rend"><span class="cnt"></span><kbd class="kb">4</kbd></span>
-    </button>
-  </div>
-  <div class="pscroll">
-    <div class="rsec">
-      <div class="rrow head">
-        <span class="lb">分组</span>
-      </div>
-      <div id="rail-tree" class="rtree"></div>
-    </div>
-    <div class="rsec">
-      <div class="rrow head">
-        <span class="lb">所有博主</span><span class="head-hint">点开博主页面</span>
-      </div>
-      <div id="rail-authors" class="rtree"></div>
-    </div>
-    <button class="rrow js-chrono" type="button">
-      <span class="lb">编年视图</span><kbd class="kb">V</kbd>
-    </button>
-    <a class="rrow" href="/kiosk" title="报刊亭：博主杂志墙">
-      <span class="lb">报刊亭</span>
-    </a>
-    <a class="rrow" href="/stats" title="统计室：回看与入库报告">
-      <span class="lb">回看统计</span>
-    </a>
-    <button class="rrow js-settings" type="button">
-      <span class="lb">设置</span>
-    </button>
-  </div>
-</div>
-
-<nav id="irail" class="irail" aria-label="快捷动作">
-  <!-- 排序（自左轨移入）：悬停/点按出选项抽屉；仅在保留/收藏/全部视图可排序（rail.js 管闸）。
-       三档与手机视图面板排序段同全集（最新/点赞/随机）——桌面抽屉此前漏复制随机档 -->
-  <div class="isl" id="ir-sort">
-    <button class="ibtn" id="ir-sort-btn" type="button" aria-label="排序" aria-haspopup="true"
-      aria-controls="ir-sort-drawer" aria-expanded="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="20" x2="12" y2="10"/><polyline points="18 20 18 4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="3" y1="14" x2="9" y2="14"/><line x1="15" y1="10" x2="21" y2="10"/></svg>
-      <span class="tip" id="ir-sort-tip">排序：最新</span>
-    </button>
-    <div class="drawer" id="ir-sort-drawer">
-      <h5>排序</h5>
-      <button class="d-opt" data-sort-opt="" type="button">按最新 <span class="d-sub">抓取时间序</span></button>
-      <button class="d-opt" data-sort-opt="keep_count" type="button">按点赞 <span class="d-sub">保留次数多在前</span></button>
-      <button class="d-opt" data-sort-opt="shuffle" type="button">按随机 <span class="d-sub">打乱顺序</span></button>
-      <p class="d-hint">仅保留 / 收藏 / 全部视图可排序；其余视图按时间序。</p>
-    </div>
-  </div>
-  <!-- 筛选：桌面上视图面板（状态/来源/博主/排序/布局）唯一可见入口——
-       触发按钮 #btn-view 只在移动端顶栏存在，此前桌面只剩 Shift+F 一条暗道 -->
-  <div class="isl">
-    <button class="ibtn" id="ir-filter" type="button" aria-label="筛选" aria-haspopup="true" aria-controls="view-panel" aria-expanded="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-      <span class="tip">筛选 <kbd>Shift+F</kbd></span>
-    </button>
-  </div>
-  <div class="isl">
-    <button class="ibtn" id="ir-search" type="button" aria-label="搜索" aria-haspopup="true"
-      aria-controls="ir-search-drawer" aria-expanded="false">
+<!-- 桌面右上紧凑悬浮胶囊：搜索 / 筛选与排序(合并) / 纯图 / 多选 / 更多⋯ -->
+<nav id="top-tools" class="top-tools" aria-label="快捷工具">
+  <div class="tt-isl">
+    <button class="ttool" id="tt-search" type="button" aria-label="搜索" title="搜索"
+      aria-haspopup="dialog" aria-controls="modal-spotlight-search" aria-expanded="false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <span class="tip" id="ir-search-tip">搜索</span>
     </button>
-    <div class="drawer" id="ir-search-drawer">
-      <h5>搜索</h5>
-      <label class="d-search">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input id="ir-search-input" type="search" placeholder="搜正文/评论…" maxlength="100" autocomplete="off" aria-label="搜索正文与评论">
-      </label>
-      <p class="d-hint">Enter 搜索，Esc 清除或关闭。命中批注会在卡片上高亮。</p>
+  </div>
+  <div class="tt-isl">
+    <button class="ttool" id="tt-filter" type="button" aria-label="筛选与排序" title="筛选与排序"
+      aria-haspopup="true" aria-controls="view-panel" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+      <span class="bdg" id="tt-filter-bdg" hidden></span>
+    </button>
+  </div>
+  <div class="tt-isl">
+    <button class="ttool" id="tt-pureimg" type="button" aria-label="纯图模式" title="纯图模式">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+    </button>
+  </div>
+  <div class="tt-isl">
+    <button class="ttool" id="tt-select" type="button" aria-label="多选模式" title="多选模式">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21.12 10.9V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9.71"/></svg>
+    </button>
+  </div>
+  <div class="tt-isl" id="tt-more">
+    <button class="ttool" id="tt-more-btn" type="button" aria-label="更多功能" title="更多功能"
+      aria-haspopup="true" aria-controls="tt-more-menu" aria-expanded="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+    </button>
+    <div class="tt-menu" id="tt-more-menu" hidden>
+      <button class="tt-mitem" id="tt-play" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+        <span>幻灯片放映</span>
+      </button>
+      <button class="tt-mitem" id="tt-random" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+        <span>随机一张</span>
+      </button>
+      <button class="tt-mitem" id="tt-notes" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        <span>最近批注</span>
+      </button>
     </div>
-  </div>
-  <div class="isl">
-    <button class="ibtn" id="ir-play" type="button" aria-label="放映" aria-haspopup="true"
-      aria-controls="ir-play-drawer" aria-expanded="false">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>
-    </button>
-    <div class="drawer" id="ir-play-drawer">
-      <h5>幻灯片放映</h5>
-      <p class="d-hint">按设置里的回看数量与间隔放映</p>
-      <button class="d-cta" id="ir-play-go" type="button">开始放映</button>
-    </div>
-  </div>
-  <div class="isl">
-    <button class="ibtn" id="ir-random" type="button" aria-label="随机一张">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
-      <span class="tip">随机一张</span>
-    </button>
-  </div>
-  <div class="isl">
-    <button class="ibtn" id="ir-notes" type="button" aria-label="最近批注">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-      <span class="tip">最近批注</span>
-    </button>
-  </div>
-  <div class="ispacer"></div>
-  <!-- 待筛入口：有待筛帖才出现（rail.js syncSession 控制），点击直达四格快筛 -->
-  <div class="isl" id="ir-triage" hidden>
-    <button class="ibtn" type="button" aria-label="待筛">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-      <span class="bdg" id="ir-triage-bdg" hidden></span>
-      <span class="tip">待筛</span>
-    </button>
-  </div>
-  <div class="isl">
-    <button class="ibtn" id="ir-top" type="button" aria-label="回到顶部">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
-      <span class="tip">回顶部</span>
-    </button>
   </div>
 </nav>
 
+<!-- 桌面右下角极简回顶部胶囊 -->
+<div id="corner-tools" class="corner-tools">
+  <button class="ttool" id="tt-top" type="button" aria-label="回到顶部" title="回到顶部">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+  </button>
+</div>
+
 <div id="author-view" class="author-view" hidden></div>
+<div id="feed-search-chip" class="feed-search-chip" hidden></div>
 
 <main id="feed" class="feed"></main>
 <div class="more">
@@ -632,7 +495,7 @@
               <span class="dt-line2"><b class="dt-author"></b><span class="dt-via" hidden></span></span>
             </div>
             <div class="dt-side">
-              <a class="dt-weibo" target="_blank" rel="noopener" title="打开原博 (L)" aria-label="打开原博"></a>
+              <a class="dt-weibo" target="_blank" rel="noopener noreferrer" title="打开原博 (L)" aria-label="打开原博"></a>
               <button class="dt-close" title="关闭帖子详情 (Esc)" aria-label="关闭帖子详情">✕</button>
             </div>
           </div>
@@ -676,7 +539,7 @@
               <span class="dt-line2"><b class="dt-author"></b><span class="dt-via" hidden></span></span>
             </div>
             <div class="dt-side">
-              <a class="dt-weibo" target="_blank" rel="noopener" title="打开原博 (L)" aria-label="打开原博"></a>
+              <a class="dt-weibo" target="_blank" rel="noopener noreferrer" title="打开原博 (L)" aria-label="打开原博"></a>
               <button class="dt-close" title="关闭帖子详情 (Esc)" aria-label="关闭帖子详情">✕</button>
             </div>
           </div>
@@ -748,6 +611,57 @@
         <button class="pbtn ghost" data-close="modal-tags">取消</button>
         <button id="tags-apply" class="pbtn">应用</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- 居中聚光灯大搜索栏（Spotlight Search）：支持快捷键 /、Cmd+K、右轨搜索与手机端唤起 -->
+<div id="modal-spotlight-search" class="modal spotlight-modal" role="dialog" aria-modal="true" aria-label="聚光灯搜索" hidden>
+  <div class="modal-card spotlight-card">
+    <div class="spotlight-input-row">
+      <svg class="spotlight-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="spotlight-input" class="spotlight-input" type="search" placeholder="搜索正文、评论、标签、博主…" maxlength="100" autocomplete="off" aria-label="搜索">
+      <button id="spotlight-clear" class="spotlight-clear" type="button" aria-label="清空输入" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <kbd class="spotlight-kbd-badge" title="按 ESC 退出">ESC</kbd>
+    </div>
+    <div class="search-scopes" id="spotlight-scopes">
+      <button type="button" class="s-scope on" data-scope="all">全部</button>
+      <button type="button" class="s-scope" data-scope="text">内容</button>
+      <button type="button" class="s-scope" data-scope="comment">评论</button>
+      <button type="button" class="s-scope" data-scope="tag">标签</button>
+      <button type="button" class="s-scope" data-scope="author">博主</button>
+    </div>
+    <div class="spotlight-body">
+      <div class="spotlight-live-results" id="spotlight-live-results" hidden></div>
+      <div id="spotlight-default-body">
+        <div class="spotlight-section" id="spotlight-recents-section" hidden>
+          <div class="spotlight-sec-head">
+            <span class="spotlight-sec-title">最近搜索</span>
+            <button id="spotlight-clear-history" type="button" class="spotlight-btn-text">清空</button>
+          </div>
+          <div class="spotlight-chips" id="spotlight-recents"></div>
+        </div>
+        <div class="spotlight-section" id="spotlight-tags-section">
+          <div class="spotlight-sec-head">
+            <span class="spotlight-sec-title">常用标签</span>
+          </div>
+          <div class="spotlight-chips" id="spotlight-tags"></div>
+        </div>
+        <div class="spotlight-section spotlight-hints-section">
+          <div class="spotlight-syntax-hints">
+            <button type="button" class="syntax-hint" data-syntax="@" title="搜博主 (@昵称)"><code>@昵称</code> 搜博主</button>
+            <button type="button" class="syntax-hint" data-syntax="#" title="搜标签 (#标签)"><code>#标签</code> 搜标签</button>
+            <button type="button" class="syntax-hint" data-syntax="//" title="搜评论 (//内容)"><code>//内容</code> 搜评论</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="spotlight-footer">
+      <span class="spotlight-hint"><kbd>↑</kbd><kbd>↓</kbd> 移动</span>
+      <span class="spotlight-hint"><kbd>↵</kbd> 检索</span>
+      <span class="spotlight-hint"><kbd>ESC</kbd> 退出</span>
     </div>
   </div>
 </div>
