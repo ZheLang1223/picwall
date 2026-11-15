@@ -1794,4 +1794,13 @@ test('关闭详情焦点归还墙卡：closeDetail 关闭后把键盘焦点还�
   const body = appSrc.slice(appSrc.indexOf('function closeDetail()'), appSrc.indexOf('async function refreshDetail'));
   assert.ok(body.includes('CSS.escape(sid)'), '墙卡选择器应对 sid 做 CSS.escape 转义');
   assert.ok(body.includes('focus({preventScroll:true})'), '焦点应回到墙上对应卡片且不滚动页面');
+test('筛选面板关闭回归焦点：hadFocus 捕获 + 焦点还给可见打开按钮', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function closeViewPanel()');
+  const end = source.indexOf('function toggleViewPanel()');
+  assert.ok(start !== -1 && end !== -1 && start < end, 'app.js 应存在 closeViewPanel 与 toggleViewPanel');
+  const body = source.slice(start, end);
+  assert.ok(body.includes('panel.contains(document.activeElement)'), '关面板前应捕获焦点是否在面板内');
+  assert.ok(body.includes('focus({preventScroll:true})'), '面板关闭后应把焦点还给实际可见的打开按钮');
 });

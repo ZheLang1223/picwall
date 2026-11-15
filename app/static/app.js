@@ -2670,10 +2670,17 @@ function alignViewPanel() {
 function closeViewPanel() {
   const panel = $('#view-panel');
   if (panel.hidden) return;
+  const hadFocus = panel.contains(document.activeElement);
   panel.hidden = true;
   $('#btn-view').setAttribute('aria-expanded', 'false');
   authorPickerOpen = false; authorQuery = '';
   railSync();
+  if (hadFocus) {
+    // 焦点原先在面板内，hidden 后会掉回 <body>：还给实际可见的打开按钮（桌面 #tt-filter / 窄屏 #btn-view）
+    const tt = document.getElementById('tt-filter');
+    const opener = (tt && tt.offsetParent !== null) ? tt : $('#btn-view');
+    opener?.focus({preventScroll:true});
+  }
 }
 function toggleViewPanel() {
   const panel = $('#view-panel');

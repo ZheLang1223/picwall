@@ -137,3 +137,4 @@ date: 2026-10-12
 - 2026-11-16 04:17：报刊亭合上杂志后焦点回到刚才那本封面——此前点「合上杂志」或按 Esc 后焦点掉回页面顶部，键盘用户要从头 Tab。验证：pytest 381 passed + frontend 69 pass（test_connections_probe_proxy_and_batched_record 为已知环境失败，与本改动无关）。
 - 2026-11-16 04:22：悬浮球菜单键盘可达性：Esc 关闭后焦点回到悬浮球按钮，Tab 移出菜单自动收起，菜单项 type=button（fix/fab-menu-keyboard）
 - 2026-11-16 05:18：关闭详情后键盘焦点回到墙上对应卡片，不再掉回页面顶部（fix/detail-close-focus）
+- 2026-11-16 06:21：按 Esc 关闭筛选面板后键盘焦点回到筛选按钮，不再掉回页面顶部（fix/view-panel-close-focus）
