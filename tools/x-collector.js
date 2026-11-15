@@ -20,6 +20,8 @@
   const PICWALL = 'http://localhost:8081';
   const DEVICE_TOKEN = ''; // ← 必填：make picwall-collector-token；不得使用管理令牌
   const FLUSH_AT = 30;
+  const MAX_SEEN = 5000;
+  const TIMELINE_RE = /\/graphql\/.*\/(ListLatestTweetsTimeline|ListTimeline)/;
 
   if (!LIST_ID || !DEVICE_TOKEN) { console.error('[pwX] 先填 LIST_ID 与 DEVICE_TOKEN'); return; }
 
@@ -27,6 +29,17 @@
   const buffer = [];
   let stopped = false, posted = 0;
   let sending = false;
+  let autoFlushBlocked = false;
+
+  const rememberId = (id) => {
+    if (seen.has(id)) return false;
+    if (seen.size >= MAX_SEEN) {
+      const oldest = seen.values().next().value;
+      if (oldest !== undefined) seen.delete(oldest);
+    }
+    seen.add(id);
+    return true;
+  };
 
   const iso = (s) => { const d = new Date(s); return isNaN(d) ? '' : d.toISOString(); };
 
@@ -51,8 +64,7 @@
       }).filter(Boolean);
     if (!images.length && !videos.length) return;     // 无图无视频帖不进图片墙
     const id = (rt && src.id_str) || r.rest_id || legacy.id_str;
-    if (!id || seen.has(id)) return;
-    seen.add(id);
+    if (!id || !rememberId(id)) return;
     const user = (rtResult || r).core?.user_results?.result || {};
     const u = {...(user.legacy || {}), ...(user.core || {}), ...(src.user || {})};
     const item = {
@@ -85,14 +97,14 @@
   };
 
   const eatGraphQL = (url, json) => {
-    if (stopped || !/graphql\/.*\/(ListLatestTweetsTimeline|ListTimeline)/.test(url)) return;
+    if (stopped || !TIMELINE_RE.test(url)) return;
     try {
       const d = json?.data;
       walkInstructions(d?.list?.tweets_timeline?.timeline?.instructions
         || d?.tweet_list?.timeline_response?.timeline?.instructions
         || d?.user?.result?.timeline?.timeline?.instructions || []);
       console.log(`[pwX] 累计采集 ${buffer.length}（去重后），已推送 ${posted}`);
-      if (buffer.length >= FLUSH_AT) pwXFlush();
+      if (buffer.length >= FLUSH_AT && !autoFlushBlocked) flush(false);
     } catch (err) { console.warn('[pwX] 解析失败（结构又变了，忽略该响应）', err); }
   };
 
@@ -101,7 +113,7 @@
     const res = await _fetch.apply(this, args);
     try {
       const u = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
-      if (u.includes('/graphql/')) {
+      if (!stopped && TIMELINE_RE.test(u)) {
         const clone = res.clone();
         clone.json().then(j => eatGraphQL(u, j)).catch(() => {});
       }
@@ -110,40 +122,53 @@
   };
   const _open = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (m, u, ...rest) {
-    this.addEventListener('load', function () {
-      try {
-        if (String(u).includes('/graphql/')
-            && (this.responseType === 'json' || !this.responseType)) {
-          eatGraphQL(String(u), typeof this.response === 'string'
-            ? JSON.parse(this.response) : this.response);
-        }
-      } catch (e) {}
-    });
+    const url = String(u);
+    if (!stopped && TIMELINE_RE.test(url)) {
+      this.addEventListener('load', function () {
+        try {
+          if (!stopped && (this.responseType === 'json' || !this.responseType)) {
+            eatGraphQL(url, typeof this.response === 'string'
+              ? JSON.parse(this.response) : this.response);
+          }
+        } catch (e) {}
+      });
+    }
     return _open.call(this, m, u, ...rest);
   };
 
-  window.pwXFlush = async function () {
+  async function flush(manual = false) {
+    if (manual) autoFlushBlocked = false;
     if (sending) return;
     if (!buffer.length) { console.log('[pwX] 没有待推送的推文'); return; }
     const batch = buffer.splice(0, 100);
     sending = true;
     try {
       const r = await fetch(`${PICWALL}/api/ingest/x`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization:'Bearer '+DEVICE_TOKEN },
-      signal:AbortSignal.timeout(120000),
-      body: JSON.stringify({ list_id: LIST_ID, name: LIST_NAME, tweets: batch }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + DEVICE_TOKEN },
+        signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ list_id: LIST_ID, name: LIST_NAME, tweets: batch }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j.ok) throw new Error(j.detail || j.msg || `HTTP ${r.status}`);
+      autoFlushBlocked = false;
       posted += j.new_posts || 0;
       console.log(`[pwX] 推送 ${batch.length} → 新入 ${j.new_posts} 帖 / ${j.new_pics} 图（累计新入 ${posted}）`);
       if (buffer.length) console.log(`[pwX] 余 ${buffer.length} 条，再调一次 pwXFlush()`);
-    } catch(e) {
+    } catch (e) {
       buffer.unshift(...batch);
-      console.error('[pwX] 推送未确认，待发送内容已保留；重新配对或连接恢复后调用 pwXFlush()',e.message);
+      autoFlushBlocked = true;
+      console.error('[pwX] 推送未确认，已暂停自动推送并保留待发内容；恢复后请手动调用 pwXFlush()', e.message);
     } finally { sending = false; }
-  };
-  window.pwXStop = () => { stopped = true; console.log('[pwX] 已停止（刷新页面即卸载钩子）'); };
+  }
+  function stop() {
+    stopped = true;
+    window.fetch = _fetch;
+    XMLHttpRequest.prototype.open = _open;
+    try { delete window.pwXFlush; delete window.pwXStop; } catch (e) {}
+    console.log('[pwX] 已停止并卸载拦截钩子');
+  }
+  Object.defineProperty(window, 'pwXFlush', { value: () => flush(true), configurable: true });
+  Object.defineProperty(window, 'pwXStop', { value: stop, configurable: true });
   console.log('[pwX] 采集已挂载：滚动列表即可，pwXFlush() 手动推送 / pwXStop() 停止');
 })();

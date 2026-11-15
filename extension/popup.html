@@ -18,12 +18,15 @@
             min-height: 34px; white-space: pre-wrap; }
   #status.ok { color: #1a7f37; }
   #status.bad { color: #c94436; }
+  .warn { margin-top: 6px; padding: 7px 9px; font-size: 11.5px; line-height: 1.45;
+          border-radius: 7px; background: #fff4e5; color: #8a4b00; border: 1px solid #ffd59e; }
 </style>
 </head>
 <body>
   <h1>PWALL Cookie 助手</h1>
   <label>PWALL 地址</label>
   <input id="addr" spellcheck="false" placeholder="http://localhost:8081">
+  <div id="lan-warn" class="warn" hidden>当前使用明文 HTTP 连接局域网设备：管理令牌与来源 Cookie 在同网络下可能被窃听，建议改用 HTTPS。</div>
   <label>管理设备配对码（电脑终端：make picwall-pair ROLE=admin）</label>
   <input id="pair-code" spellcheck="false" autocomplete="off" placeholder="XXXX-XXXX-XXXX">
   <button id="pair" class="ghost">配对助手</button>

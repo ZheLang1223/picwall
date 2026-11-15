@@ -10,86 +10,111 @@ large 的行：
 幂等：只处理 url 仍可改写的行，跑完再跑是无操作。
 用法：项目根目录  .venv/bin/python tools/migrate_to_large.py
 """
-import hashlib
+import asyncio
 import os
 import re
 import shutil
 import sys
-import threading
+import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
-from PIL import Image
 
-from app import config, db, storage, weibo
+from app import config, db, media_fetch, storage, weibo
+from tools import runtime
 
 SCALED = re.compile(r"/(orj|sti)\d+/")   # 缩放档特征（用于清单展示；改写以 _to_large 为准）
-WRITE_LOCK = threading.Lock()
 
 
-def fetch_large(client: httpx.Client, url: str):
-    """下载 large 档并落盘+生成缩略图，返回 (file_rel, w, h, thumb_rel)；失败 None。"""
-    try:
-        r = client.get(url, headers={"User-Agent": weibo.UA,
-                                     "Referer": weibo.BASE + "/"})
-        r.raise_for_status()
-    except httpx.HTTPError:
+def _safe_pic_path(base: Path, rel: str) -> Path | None:
+    if not rel:
         return None
-    ct = r.headers.get("content-type", "")
-    if "html" in ct or "json" in ct or "text/" in ct or len(r.content) < 100:
+    p = Path(rel)
+    if p.is_absolute():
         return None
-    data = r.content
-    h = hashlib.sha1(data).hexdigest()
-    ym = datetime.now().strftime("%Y/%m")
-    ext = storage.ext_of(url, data)
-    rel = f"{ym}/{h}{ext}"
-    t_rel = f"{ym}/t_{h}.jpg"
-    path = config.PICS_DIR / rel
-    with WRITE_LOCK:   # 不同 URL 可能解出相同内容，同路径并发写要串行
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-        if not (config.PICS_DIR / t_rel).exists() and \
-                not storage._make_thumb(path, config.PICS_DIR / t_rel):
-            t_rel = rel
+    root = base.resolve()
+    resolved = (root / p).resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        return None
+    return resolved
+
+
+async def _fetch_all(urls: list[str]) -> dict[str, bytes | None]:
+    sem = asyncio.Semaphore(8)
+    headers = {"User-Agent": weibo.UA, "Referer": weibo.BASE + "/"}
+    out: dict[str, bytes | None] = {}
+    done = 0
+    t0 = time.monotonic()
+
+    async def one(client: httpx.AsyncClient, u: str) -> None:
+        nonlocal done
+        async with sem:
+            data = await media_fetch.fetch(client, u, headers)
+        out[u] = data if data and len(data) >= 100 else None
+        done += 1
+        if done % 100 == 0:
+            print(f"  下载 {done}/{len(urls)}  用时 {time.monotonic() - t0:.0f}s")
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        await asyncio.gather(*(one(client, u) for u in urls))
+    return out
+
+
+def fetch_large(url: str, data: bytes | None) -> tuple[str, int, int, str] | None:
+    """校验像素/字节并按统一策略原子落盘 + 生成缩略图；失败返回 None。"""
+    if not data or not media_fetch.permitted(url):
+        return None
     try:
-        with Image.open(path) as im:
-            w, hh = im.size
-    except Exception:
-        w = hh = 0
-    return rel, w, hh, t_rel
+        return storage.save_image(data, url)
+    except (ValueError, OSError):
+        return None
 
 
 def refresh_export(old_rel: str, new_rel: str) -> int:
     """export/<日>/<旧文件名> 的保留副本 → 换成原图档内容并改名。"""
-    old_name, new_name = Path(old_rel).name, Path(new_rel).name
-    if old_name == new_name or not config.EXPORT_DIR.is_dir():
+    src = _safe_pic_path(config.PICS_DIR, new_rel)
+    if src is None or not src.is_file():
         return 0
+    old_name, new_name = Path(old_rel).name, Path(new_rel).name
+    if not old_name or old_name == new_name or not config.EXPORT_DIR.is_dir():
+        return 0
+    export_root = config.EXPORT_DIR.resolve()
     n = 0
     for old_copy in config.EXPORT_DIR.glob(f"*/{old_name}"):
+        if old_copy.is_symlink() or not old_copy.is_file():
+            continue
+        new_copy = old_copy.with_name(new_name)
+        if not new_copy.resolve().is_relative_to(export_root):
+            continue
+        tmp = None
         try:
-            new_copy = old_copy.with_name(new_name)
-            shutil.copy2(config.PICS_DIR / new_rel, new_copy)
+            fd, tmp = tempfile.mkstemp(prefix=".export-", dir=new_copy.parent)
+            os.close(fd)
+            shutil.copy2(src, tmp)
+            os.replace(tmp, new_copy)
+            tmp = None
             old_copy.unlink(missing_ok=True)
             n += 1
         except OSError:
             continue
+        finally:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
     return n
 
 
 def main():
+    runtime.require_stopped_container("原图迁移")
     with db.conn() as c:
         rows = [dict(r) for r in c.execute("SELECT id, file, thumb, url FROM pics")]
     limit = int(os.environ.get("MIGRATE_LIMIT", "0"))   # 冒烟测试用：只迁前 N 张
     plan = []
     for row in rows:
         large = weibo._to_large(row["url"])
-        if large != row["url"]:
+        if large != row["url"] and media_fetch.permitted(large):
             plan.append((row, large))
         if limit and len(plan) >= limit:
             break
@@ -99,16 +124,11 @@ def main():
         return
 
     unique = sorted({large for _, large in plan})
-    print(f"去重后需下载 {len(unique)} 张，8 线程开跑…")
-    results: dict[str, tuple | None] = {}
-    with httpx.Client(timeout=30, follow_redirects=True) as client:
-        t0 = time.monotonic()
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for i, (url, res) in enumerate(
-                    zip(unique, ex.map(lambda u: fetch_large(client, u), unique)), 1):
-                results[url] = res
-                if i % 100 == 0:
-                    print(f"  下载 {i}/{len(unique)}  用时 {time.monotonic() - t0:.0f}s")
+    print(f"去重后需下载 {len(unique)} 张，8 并发开跑…")
+    raw_map = asyncio.run(_fetch_all(unique))
+    results: dict[str, tuple[str, int, int, str] | None] = {
+        u: fetch_large(u, raw_map.get(u)) for u in unique
+    }
 
     done = fail = exported = 0
     failures: list[str] = []
@@ -120,7 +140,7 @@ def main():
             failures.append(row["url"])
             continue
         new_rel, w, hh, new_thumb = hit
-        with db.conn() as c:
+        with db._write_lock, db.conn() as c:
             c.execute("UPDATE pics SET file=?, thumb=?, w=?, h=?, url=? WHERE id=?",
                       (new_rel, new_thumb, w, hh, large, row["id"]))
         exported += refresh_export(row["file"], new_rel)
@@ -135,11 +155,17 @@ def main():
                                (old_file,)).fetchone()[0]
             n_thumb = c.execute("SELECT COUNT(*) FROM pics WHERE thumb=?",
                                 (old_thumb,)).fetchone()[0]
-        if old_file and n_file == 0:   # file 为空 = 原图下载失败的行，不能拼进 PICS_DIR
-            (config.PICS_DIR / old_file).unlink(missing_ok=True)
+        old_file_path = _safe_pic_path(config.PICS_DIR, old_file) if n_file == 0 else None
+        if old_file_path is not None:
+            old_file_path.unlink(missing_ok=True)
             deleted += 1
-        if old_thumb and old_thumb != old_file and n_thumb == 0:
-            (config.PICS_DIR / old_thumb).unlink(missing_ok=True)
+        old_thumb_path = (
+            _safe_pic_path(config.PICS_DIR, old_thumb)
+            if old_thumb and old_thumb != old_file and n_thumb == 0
+            else None
+        )
+        if old_thumb_path is not None:
+            old_thumb_path.unlink(missing_ok=True)
 
     print(f"\n迁移完成：成功 {done}，失败 {fail}；export 副本刷新 {exported} 份，"
           f"清理旧原图 {deleted} 个")

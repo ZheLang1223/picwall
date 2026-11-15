@@ -6,8 +6,7 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # data/ 是 bind mount，macOS Docker Desktop 的文件共享层按宿主用户放行读写。
 RUN useradd --create-home --uid 1000 pw
 COPY app/ app/
-COPY tests/ tests/
-COPY tools/ tools/
+COPY tools/runtime.py tools/backup.py tools/maintenance.py tools/pair.py tools/
 # 架构图谱（PWALL 设置 → 开发管理 /atlas 读它；源文件在仓库 docs/，镜像里保持同相对路径）
 COPY docs/project_atlas.html docs/project_atlas.html
 USER pw

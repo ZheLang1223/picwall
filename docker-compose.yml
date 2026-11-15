@@ -28,5 +28,14 @@ services:
       X_PROXY_URL: ${X_PROXY_URL:-}   # X 抓取专用代理（x.com/twimg 被墙时配 http://host.docker.internal:7897）；微博不受影响
       PICWALL_MAX_IMAGE_PIXELS: ${PICWALL_MAX_IMAGE_PIXELS:-}   # 单图像素上限（解码保护），默认 100000000
       PICWALL_MAX_VIDEO_BYTES: ${PICWALL_MAX_VIDEO_BYTES:-}   # 单个视频体积上限，默认 536870912（512 MiB）
+      # 可在 .env 中按需补充的同级运行参数（默认由 app/config.py 兜底）：
+      # PICWALL_MAX_IMAGE_BYTES=${PICWALL_MAX_IMAGE_BYTES:-}  (默认 67108864 / 64 MiB)
+      # X_CRAWL_MAX_PAGES=${X_CRAWL_MAX_PAGES:-}              (默认 1)
     volumes:
       - ./data:/app/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    pids_limit: 256

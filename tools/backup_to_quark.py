@@ -20,7 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import cloud, config, db
+from app import cloud, config
+from tools import runtime
 
 
 def digest(path: Path) -> str:
@@ -33,13 +34,20 @@ def digest(path: Path) -> str:
 
 def local_blobs() -> list[Path]:
     blob_dir = config.DATA_DIR / "backups" / "blobs"
-    return sorted(p for p in blob_dir.iterdir() if p.is_file()) if blob_dir.is_dir() else []
+    if not blob_dir.is_dir():
+        return []
+    root = blob_dir.resolve()
+    return sorted(
+        p for p in blob_dir.iterdir()
+        if not p.is_symlink() and p.is_file() and not p.name.startswith(".")
+        and p.resolve().is_relative_to(root)
+    )
 
 
 def sample_verify(store: cloud.QuarkBlobs, n: int, seed: int = 0) -> list[str]:
     """随机抽 n 个已登记 blob 从云端回读，sha256 不符/读取失败即进返回的错误清单。"""
-    with db.conn() as c:
-        rows = c.execute("SELECT key,fid,size FROM cloud_blobs ORDER BY key").fetchall()
+    del store
+    rows = runtime.cloud_db("list_blobs") or []
     if not rows:
         return ["云端登记表为空，无法校验"]
     picked = random.Random(seed).sample(rows, min(n, len(rows)))
@@ -59,12 +67,17 @@ def sample_verify(store: cloud.QuarkBlobs, n: int, seed: int = 0) -> list[str]:
     return errors
 
 
-def prune_local(known: set[str]) -> int:
-    """删除本地 blobs/ 中云端已登记的文件；目录空了连目录一起删。返回删除文件数。"""
+def prune_local(known: set[str], prune_all: bool = False) -> int:
+    """删除本地 blobs/ 中云端已登记的文件（prune_all=True 时连同未登记文件一并清理）；目录空了连目录一起删。"""
     blob_dir = config.DATA_DIR / "backups" / "blobs"
+    if not blob_dir.is_dir():
+        return 0
+    root = blob_dir.resolve()
     removed = 0
     for p in local_blobs():
-        if p.name in known:
+        if not p.resolve().is_relative_to(root):
+            continue
+        if prune_all or p.name in known:
             p.unlink()
             removed += 1
     if blob_dir.is_dir() and not any(blob_dir.iterdir()):
@@ -86,11 +99,11 @@ def main() -> int:
     if config.BLOB_STORE != "quark":
         print("提示：PICWALL_BLOB_STORE!=quark，本工具仍可跑（同步不依赖该开关）", flush=True)
 
-    db.init_db()   # 幂等：确保 cloud_blobs 表在场（独立于容器启动也能登记）
+    runtime.cloud_db("init_db")   # 幂等：容器活时经 docker exec 在同内核登记
     local = local_blobs()
     print(f"本地 blobs：{len(local)} 个", flush=True)
     store = cloud.QuarkBlobs()
-    known = store.known()
+    known = set(runtime.cloud_db("known_keys") or ())
     print(f"云端已登记：{len(known)} 个", flush=True)
 
     pending = [(p.name, p) for p in local if p.name not in known]
@@ -109,9 +122,12 @@ def main() -> int:
             failed += len(chunk)
             continue
         by_name = {p.name: (sha, p) for sha, p in chunk}
-        for name, fid in result.items():
-            sha, p = by_name[name]
-            cloud.register(sha, fid, p.stat().st_size)
+        reg_items = [
+            {"key": by_name[name][0], "fid": fid, "size": by_name[name][1].stat().st_size}
+            for name, fid in result.items()
+        ]
+        if reg_items:
+            runtime.cloud_db("register", {"items": reg_items})
         uploaded += len(result)
         done = min(i + batch, len(pending))
         print(f"  进度 {done}/{len(pending)}（+{len(result)}）", flush=True)
@@ -120,7 +136,7 @@ def main() -> int:
         return 1
     print(f"上传完成：{uploaded} 个，全部登记", flush=True)
 
-    known = store.known()
+    known = set(runtime.cloud_db("known_keys") or ())
     if args.verify_sample:
         errors = sample_verify(store, args.verify_sample,
                                seed=args.seed or int(datetime.now().timestamp()))
@@ -137,7 +153,7 @@ def main() -> int:
         if unregistered and not args.prune_all:
             print(f"本地仍有 {len(unregistered)} 个未登记 blob，默认保留"
                   f"（确认云端不需要它们时加 --prune-all）", flush=True)
-        removed = prune_local(known)
+        removed = prune_local(known, prune_all=args.prune_all)
         left = len(local_blobs())
         print(f"本地清理：删除 {removed} 个，剩余 {left} 个"
               + ("（未登记保留）" if unregistered and not args.prune_all else ""), flush=True)

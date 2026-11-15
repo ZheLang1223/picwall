@@ -37,13 +37,16 @@ def main() -> None:
         print(f"目录不存在：{PICS}", file=sys.stderr)
         sys.exit(1)
 
-    # 1) 文件系统盘点（按顶层目录 = 年份/avatars）
+    # 1) 文件系统盘点（按顶层目录 = 年份/avatars，同时构建一致性集合避免二次遍历）
     by_top = defaultdict(lambda: [0, 0])   # top -> [count, bytes]
     size_map = defaultdict(list)           # size -> [path]
+    disk_files: set[str] = set()
     total_n = total_b = 0
     for p in PICS.rglob("*"):
-        if not p.is_file() or p.name.startswith("."):
+        if p.is_symlink() or not p.is_file() or p.name.startswith("."):
             continue
+        rel = p.relative_to(PICS).as_posix()
+        disk_files.add(rel)
         s = p.stat().st_size
         top = p.relative_to(PICS).parts[0]
         by_top[top][0] += 1
@@ -72,7 +75,7 @@ def main() -> None:
 
     # 3) 库-磁盘一致性（只读）
     if DB.exists():
-        with sqlite3.connect(f"file:{DB}?mode=ro", uri=True) as c:
+        with sqlite3.connect(DB.resolve().as_uri() + "?mode=ro", uri=True) as c:
             db_files = {r[0] for r in c.execute("SELECT file FROM pics")}
             try:  # thumb 列有单独的缩略图文件，一并计入
                 db_files |= {r[0] for r in c.execute("SELECT thumb FROM pics")
@@ -83,7 +86,6 @@ def main() -> None:
             avatar_files = {r[0].removeprefix('/media/') for r in c.execute(
                 "SELECT avatar FROM posts WHERE avatar LIKE '/media/%'")}
             db_files |= avatar_files
-        disk_files = {str(p.relative_to(PICS)) for p in PICS.rglob("*") if p.is_file()}
         avatar_cache = {p for p in disk_files if p.startswith('avatars/')}
         orphan_disk = disk_files - db_files - avatar_cache
         missing_db = db_files - disk_files

@@ -12,17 +12,23 @@ avatar 字段。幂等：已有头像的帖子跳过。
 """
 import asyncio
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 
 from app import config, db, media_fetch, storage
 from app.sources import xapi
+from tools import runtime
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 
 async def main() -> int:
+    runtime.require_stopped_container("头像回填")
+    config.ensure_dirs()
     with db.conn() as c:
         rows = c.execute(
             "SELECT uid, MAX(handle) handle, MAX(avatar) avatar FROM posts "
@@ -73,5 +79,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    config.ensure_dirs()
     sys.exit(asyncio.run(main()))

@@ -1,14 +1,33 @@
 /* 浏览器已有登录态 → PWALL；服务端校验成功后替换，不保存浏览器密码。 */
 import {destination} from './destination.js';
+import {filterWeiboCookies, isInsecureLanHttp, originPatternFor} from './cookies.js';
 const $ = (s) => document.querySelector(s);
 let BASE = "http://localhost:8081";
 let TOKEN = '';
 
+function updateLanWarning(origin) {
+  const el = $('#lan-warn');
+  if (el) el.hidden = !isInsecureLanHttp(origin);
+}
+
+async function revokeUnusedOrigins(keepPattern) {
+  try {
+    const staticHosts = new Set(chrome.runtime.getManifest().host_permissions || []);
+    const { origins = [] } = await chrome.permissions.getAll();
+    const stale = origins.filter((o) => o !== keepPattern && !staticHosts.has(o));
+    if (stale.length) await chrome.permissions.remove({ origins: stale });
+  } catch (e) { /* 忽略不支持或不可撤回权限的清理错误 */ }
+}
+
 async function allowDestination() {
-  BASE = destination($('#addr').value.trim() || BASE);
-  const url = new URL(BASE);
-  const granted = await chrome.permissions.request({origins:[`${url.protocol}//${url.hostname}/*`]});
+  const nextBase = destination($('#addr').value.trim() || BASE);
+  updateLanWarning(nextBase);
+  const pattern = originPatternFor(nextBase);
+  const already = chrome.permissions.contains ? await chrome.permissions.contains({ origins: [pattern] }) : false;
+  const granted = already || await chrome.permissions.request({ origins: [pattern] });
   if (!granted) throw new Error('需要允许访问填写的 PWALL 地址');
+  BASE = nextBase;
+  await revokeUnusedOrigins(pattern);
   const saved = await chrome.storage.local.get(['devices']);
   TOKEN = saved.devices?.[BASE] || '';
 }
@@ -40,10 +59,7 @@ async function sendWeibo() {
     await allowDestination();
     if (!TOKEN) throw new Error('请先使用管理配对码连接助手');
     const cookies = await chrome.cookies.getAll({ url: "https://weibo.com/" });
-    const fields = new Map();
-    // 同名不同 path 的 Cookie 按最具体路径优先，避免混合出重复 SUB。
-    cookies.sort((a,b)=>b.path.length-a.path.length).forEach(c=>{if(!fields.has(c.name)) fields.set(c.name,c.value);});
-    const str = [...fields].map(([name,value]) => `${name}=${value}`).join("; ");
+    const { fields, cookieHeader: str } = filterWeiboCookies(cookies);
     if (!fields.get("SUB") || !fields.get("XSRF-TOKEN")) {
       status("bad：微博未登录（没有 SUB），请先在本浏览器登录 weibo.com", "bad");
       return;
@@ -111,12 +127,11 @@ $("#send-weibo").addEventListener("click", sendWeibo);
 $("#send-x").addEventListener("click", sendX);
 $("#addr").addEventListener("change", async () => {
   try {
-    BASE = destination($("#addr").value.trim());
-    const saved = await chrome.storage.local.get(['devices']);
-    TOKEN = saved.devices?.[BASE] || '';
+    await allowDestination();
     await chrome.storage.local.set({ pwall: BASE });
-    refresh();
-  } catch(e) { TOKEN=''; status(e.message,'bad'); }
+    if (TOKEN) await refresh();
+    else status('请先使用管理配对码连接助手。');
+  } catch(e) { TOKEN=''; updateLanWarning($('#addr').value.trim() || BASE); status(e.message,'bad'); }
 });
 
 $('#pair').addEventListener('click', async () => {
@@ -134,6 +149,7 @@ chrome.storage.local.get(["pwall",'devices'], ({ pwall,devices }) => {
   try {
     BASE = destination(pwall || BASE); TOKEN=devices?.[BASE] || '';
     $("#addr").value = BASE;
+    updateLanWarning(BASE);
     if (TOKEN) refresh(); else status('请先使用管理配对码连接助手。');
   } catch(e) { status(e.message,'bad'); }
 });

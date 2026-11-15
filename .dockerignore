@@ -1,9 +1,16 @@
-# 构建上下文只带源码：data/（图片库+数据库，会越滚越大）、cookie、缓存都不进
+# 构建上下文只带源码：data/（图片库+数据库，会越滚越大）、cookie、缓存、测试都不进
 data/
 __pycache__/
 *.pyc
 .env
 .git/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.zcode/
+.DS_Store
+tests/
+docs/verification/
 Dockerfile
 docker-compose.yml
 README.md
