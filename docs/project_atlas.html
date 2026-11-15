@@ -1433,7 +1433,7 @@ tailwind.config = {
           "role": "请求指定微博分组的单页时间线接口，返回原始微博条目字典列表。",
           "sideEffects": "网络 I/O：携带 Cookie 与自动提取的 X-XSRF-TOKEN 请求头发起 GET；会话失效时向上抛出 CookieExpired。",
           "file": "app/weibo.py",
-          "line": 64
+          "line": 70
         },
         {
           "name": "parse_mblog",
@@ -1441,7 +1441,7 @@ tailwind.config = {
           "role": "将单条原始微博 JSON 清洗转换为统一 Post 结构（含转发穿透、主键校验、图片提取与时间归一化）。",
           "sideEffects": "纯函数（无网络 I/O、无共享状态修改）；无图帖或缺失主键时静默返回 None。",
           "file": "app/weibo.py",
-          "line": 263
+          "line": 295
         },
         {
           "symbol_note": "",
@@ -1450,7 +1450,7 @@ tailwind.config = {
           "role": "解析用户分组列表供「管理分组」导入。",
           "sideEffects": "纯函数；强制过滤 sysgroup == 2 的系统聚合分组。",
           "file": "app/weibo.py",
-          "line": 82
+          "line": 95
         },
         {
           "name": "all_groups",
@@ -1458,7 +1458,7 @@ tailwind.config = {
           "role": "拉取账号全部分组；同时被 connections 模块用作凭据探活的只读探针。",
           "sideEffects": "网络 I/O；登录失效抛 CookieExpired。",
           "file": "app/weibo.py",
-          "line": 70
+          "line": 83
         },
         {
           "name": "profile_bio",
@@ -1466,7 +1466,7 @@ tailwind.config = {
           "role": "拉取作者签名（博主视图头部的悬停文案）。",
           "sideEffects": "网络 I/O；失败返回空串由前端优雅降级。",
           "file": "app/weibo.py",
-          "line": 122
+          "line": 141
         },
         {
           "name": "CookieExpired",
@@ -1474,7 +1474,7 @@ tailwind.config = {
           "role": "登录态失效或触发反爬通行证重定向的专用领域异常。",
           "sideEffects": "供上层调度器捕获，进而更新 /api/status 的连接状态为 expired 并触发前端顶部告警横幅。",
           "file": "app/weibo.py",
-          "line": 25
+          "line": 29
         }
       ],
       "l2_callTree": "├── group_timeline(list_id, page, cookie)   [Public: 分页拉取入口]\n│   └── _get_json(url, cookie)              [Private: 从 Cookie 提取 X-XSRF-TOKEN 注入请求头\n│                                            + 统一拦截登录失效信号 → CookieExpired]\n├── all_groups(cookie)                      [Public: 全部分组（兼作凭据探活探针）]\n│   └── parse_groups(data)                  [Public: 过滤 sysgroup == 2 系统聚合分组]\n├── parse_mblog(item)                       [Public: 单帖解析主干纯函数]\n│   ├── 1. 转发穿透：若含 retweeted_status，取原博为图片提取源，\n│   │        正文拼接为「原博正文（@转发者 转发：转发理由）」\n│   ├── 2. 主键校验：sid = mblogid · uid = user.id；任一缺失立即返回 None\n│   ├── 3. extract_pics(src)                [Private: 提取图片并按 pid 去重；空列表（无图帖）→ None]\n│   │   ├── _norm_pic(pid, full, mid)       [Private: 组装双档位元数据]\n│   │   └── _to_large(url)                  [Private: 缩放档路径段正则重写为 /large/]\n│   └── 4. parse_time(raw)                  [Private: 标准时间与 6 种相对时间归一化；非法值兜底 now]\n└── profile_bio(cookie, uid)                [Public: 作者签名（失败返回空串）]",
@@ -1612,7 +1612,7 @@ tailwind.config = {
           "role": "GraphQL 会话客户端：固定携带 Chrome UA 与 ct0 CSRF 头，统一发起 GraphQL 查询。",
           "sideEffects": "网络 I/O；按 HTTP 状态码与业务错误码归类抛出 XApiError（auth/structure/rate_limit）；响应 Set-Cookie 的 ct0 自动回写后续请求头（自愈）。",
           "file": "app/sources/xapi.py",
-          "line": 86
+          "line": 98
         },
         {
           "name": "parse_list_timeline",
@@ -1620,7 +1620,7 @@ tailwind.config = {
           "role": "解析列表时间线响应为标准条目列表与下一页游标。",
           "sideEffects": "纯函数；结构不认识抛 StructureError。",
           "file": "app/sources/xapi.py",
-          "line": 346
+          "line": 370
         },
         {
           "name": "crawl_lists",
@@ -1628,7 +1628,7 @@ tailwind.config = {
           "role": "按列表端点翻页抓取。",
           "sideEffects": "网络 I/O；经 XGraphQL 会话。",
           "file": "app/sources/xapi.py",
-          "line": 358
+          "line": 382
         },
         {
           "name": "crawl_users",
@@ -1636,7 +1636,7 @@ tailwind.config = {
           "role": "按用户主页端点翻页抓取（先 UserByScreenName 校验存在）。",
           "sideEffects": "网络 I/O；用户不存在映射为 auth/structure 错误。",
           "file": "app/sources/xapi.py",
-          "line": 405
+          "line": 431
         },
         {
           "name": "XApiError",
@@ -1644,7 +1644,7 @@ tailwind.config = {
           "role": "X 侧错误领域异常：kind ∈ auth / structure / rate_limit / access。",
           "sideEffects": "供 server._crawl_x 捕获并写入状态页 x_last_error。",
           "file": "app/sources/xapi.py",
-          "line": 78
+          "line": 90
         }
       ],
       "l2_callTree": "├── crawl_lists(client, auth_token, list_id)     [Public: 列表翻页抓取]\n│   └── XGraphQL._call(endpoint, variables)       [Private: Chrome UA + ct0 自愈 + 错误分类]\n│       └── _walk_tweets(data, root)              [Private: 泛化遍历双根结构找推文节点\n│                                                  结构不认识 → StructureError（严格失败）]\n│           └── _tweet_to_item(result)           [Private: 归一化 8 键标准条目]\n│               ├── 头像兜底：avatar.image_url → legacy.profile_image_url_https（去 _normal）\n│               ├── 图片：extended_entities 中 type == photo，URL 追加 ?name=orig\n│               └── 时间：strptime 解析后转东八区 ISO8601\n└── crawl_users(client, auth_token, handle)      [Public: 用户主页抓取]\n    └── UserByScreenName（添加目标时的实连校验）→ UserTweets 翻页",
@@ -1768,7 +1768,7 @@ tailwind.config = {
           "role": "浏览器代抓推文 → 8 键标准条目（时间转东八区 ISO8601）。",
           "sideEffects": "纯函数。",
           "file": "app/sources/x.py",
-          "line": 120
+          "line": 152
         },
         {
           "name": "SourceError",
@@ -1868,7 +1868,7 @@ tailwind.config = {
           "role": "抓取总入口（定时与手动共用）：逐分组翻页 → 过滤 → 登记下载 → 汇总 outcome。",
           "sideEffects": "网络 I/O；写 meta（last_attempt/last_crawl/checkpoint）；模块级 state.running 防重入，重复调用直接拒绝。",
           "file": "app/crawler.py",
-          "line": 403
+          "line": 678
         },
         {
           "name": "retry_missing",
@@ -1876,7 +1876,7 @@ tailwind.config = {
           "role": "消化缺图补抓队列：取 image_jobs 中 attempts<3 且到期的记录，每轮至多 100 帖。",
           "sideEffects": "网络 I/O + DB；媒体失败 attempts+1 且 next_retry_at = now+4h；attempts≥3 后仅手动触发可救。",
           "file": "app/crawler.py",
-          "line": 286
+          "line": 512
         },
         {
           "name": "deep_stop",
@@ -1884,7 +1884,7 @@ tailwind.config = {
           "role": "深度回补终止判定：本轮零新帖且整页 created_at 早于截止日期。",
           "sideEffects": "纯函数。",
           "file": "app/crawler.py",
-          "line": 35
+          "line": 44
         },
         {
           "name": "fresh_posts",
@@ -1892,7 +1892,7 @@ tailwind.config = {
           "role": "三重过滤：sid 本轮首现 + 非墓碑 + 未入库（不在 posts 且不在 image_jobs）。",
           "sideEffects": "纯函数（查询 DB）。",
           "file": "app/crawler.py",
-          "line": 68
+          "line": 143
         },
         {
           "name": "catch_up_if_stale",
@@ -1900,7 +1900,7 @@ tailwind.config = {
           "role": "启动追赶：距上次成功抓取超 20 小时且启动 20 秒后自动补一轮。",
           "sideEffects": "网络 I/O；经 lifespan 派发。",
           "file": "app/crawler.py",
-          "line": 538
+          "line": 815
         }
       ],
       "l2_callTree": "├── crawl(trigger, only)\n│   ├── 前置：state.running 防重入 → meta last_attempt → 无 Cookie 记 cookie_state\n│   └── 逐分组 _crawl_group(list_id)\n│       ├── 首次判定：meta group_seen:<id> 不存在 → deep 回补（30 天 / 100 页上限）\n│       ├── 翻页循环：weibo.group_timeline → observe_post → fresh_posts → queue_posts\n│       │   ├── queue_posts → 登记 image_jobs → 逐帖 _store_post（下载落盘）\n│       │   └── 全部图失败的帖不入 posts，留在队列等补抓\n│       ├── 终止：end（空页）· date_boundary（deep_stop）· known_page（整页旧帖）· page_limit\n│       │   └── 仅 end / date_boundary 写 group_seen（page_limit 下轮继续深补）\n│       └── @db · @tombstones：入库通道统一先拦墓碑防复活\n└── retry_missing(manual)\n    ├── queue_missing_files：扫描磁盘缺失图 → 入队（墓碑过滤）\n    └── SQL：attempts < 3 AND 到期 · ORDER BY attempts · LIMIT 100\n        └── X 来源帖走 _x_http_client 代理通道",
@@ -2020,7 +2020,7 @@ tailwind.config = {
           "role": "URL 白名单单点校验：scheme 必须 https、禁止内嵌账号密码、端口仅 443 或缺省、域名仅 sinaimg.cn（含子域）与 pbs/abs.twimg.com。",
           "sideEffects": "纯函数。",
           "file": "app/media_fetch.py",
-          "line": 9
+          "line": 33
         },
         {
           "name": "fetch",
@@ -2028,7 +2028,7 @@ tailwind.config = {
           "role": "带预算的流式下载：最多 5 跳重定向、每跳重新过白名单、声明体积与流式累计双重 64MiB 上限、<100 字节视为无效。",
           "sideEffects": "网络 I/O；所有失败（403/超限/非图/网络错）折叠为返回 None——调用方以「原图失败回落 mid 档」兜底。",
           "file": "app/media_fetch.py",
-          "line": 21
+          "line": 109
         }
       ],
       "l2_callTree": "├── permitted(url)                      [Public: 白名单三查（scheme/端口/域名）]\n└── fetch(client, url, headers)         [Public: 流式下载]\n    ├── 循环至多 5 跳：每跳开头重新 permitted（相对 Location 经 urljoin 解析）\n    ├── raise_for_status（非 2xx 拒绝）\n    ├── content-type 含 html / json / text → 拒绝（防错误页伪装图片）\n    ├── content-length 声明 > MAX_IMAGE_BYTES(64MiB) → 拒绝\n    ├── aiter_bytes(64KB) 流式累计：累计超限 → 中途掐断\n    └── 累计 < 100 字节 → 视为无效返回 None",
@@ -2113,7 +2113,7 @@ tailwind.config = {
           "role": "建库与幂等迁移：BEGIN IMMEDIATE 逐条 DDL → 缺列补列 → 幂等回填 → 脏数据计数>0 即中止 → 建 4 个校验触发器 → 记 schema_migrations。",
           "sideEffects": "修改数据库结构；版本前向拒绝（库比代码新直接报错）。",
           "file": "app/db.py",
-          "line": 213
+          "line": 228
         },
         {
           "name": "mark_snapshot",
@@ -2121,7 +2121,7 @@ tailwind.config = {
           "role": "决定变更入口：写新状态（时间戳只在对应状态写微秒值；转 kept 同时盖 last_confirm_at 当日账）、version+1、落撤销快照。",
           "sideEffects": "DB 写（持 _write_lock 由调用方保证）；帖不存在返回 None → 上层 404。",
           "file": "app/db.py",
-          "line": 383
+          "line": 575
         },
         {
           "name": "restore_snapshot",
@@ -2129,7 +2129,7 @@ tailwind.config = {
           "role": "单步撤销：四重校验（行全等 / undo 存在 / version 相等 / previous 相等）全过才回写旧状态。",
           "sideEffects": "DB 写；任一校验失败返回 False → 路由层 409 提示刷新。",
           "file": "app/db.py",
-          "line": 405
+          "line": 598
         },
         {
           "name": "insert_post",
@@ -2137,7 +2137,7 @@ tailwind.config = {
           "role": "帖子入库：先拦墓碑（已硬删的 sid 静默跳过），写 posts 并挂接分组。",
           "sideEffects": "DB 写；需在 _write_lock 临界区内调用。",
           "file": "app/db.py",
-          "line": 325
+          "line": 416
         },
         {
           "name": "author_key",
@@ -2145,7 +2145,7 @@ tailwind.config = {
           "role": "跨来源作者键：微博 = uid，非微博 = source:uid（如 x:12345678）。",
           "sideEffects": "纯函数。",
           "file": "app/db.py",
-          "line": 341
+          "line": 433
         },
         {
           "name": "_review_count",
@@ -2153,7 +2153,7 @@ tailwind.config = {
           "role": "回看计次统一入口：reaffirm(+1)/undo(−1)；+1 受每帖每天一次限流（last_confirm_at 东八区同日拒绝，卡上点赞/详情±1/回看/放映同限），刷新 last_confirm_at；undo 时 keep_count≤1 拒绝、不清当日账。",
           "sideEffects": "DB 写 + 写 review_events 审计行；仅 kept 帖允许。",
           "file": "app/db.py",
-          "line": 711
+          "line": 1096
         }
       ],
       "l2_callTree": "├── init_db()                           [幂等迁移总入口]\n│   ├── 读 meta.schema_version → 版本前向拒绝\n│   ├── BEGIN IMMEDIATE：逐条执行 _SCHEMA（19 表 DDL）\n│   ├── pics 按 MIN(id) 去重 + 唯一索引 → posts 补列 → 幂等回填\n│   ├── 脏数据计数 > 0 → 中止（无效决定 / 时间矛盾）\n│   ├── CREATE TRIGGER validate_posts_* / validate_post_times_*  [库层 RAISE(ABORT)]\n│   └── 记 schema_migrations + meta\n├── 决定状态机\n│   ├── mark_snapshot → decision_undos 快照（@server 的 status 路由调用）\n│   ├── restore_snapshot → 四重校验回写（@server 的 restore 路由调用）\n│   └── set_status_bulk → 直接清空 decision_undos（批量无单帖撤销）\n├── 回看计次：reaffirm / undo_reaffirm → _review_count → review_events 审计\n└── 墓碑：has_tombstone → insert_post 见碑静默 return（全部入库通道经过）",
@@ -2270,7 +2270,7 @@ tailwind.config = {
           "role": "验证（64MiB / 100MP / im.verify）→ sha256 查重 → 原子落盘 → 宽 >720 生成缩略图 → 登记 media_contents。",
           "sideEffects": "磁盘写（mkstemp+os.replace 原子写）+ DB upsert；超预算抛 ValueError。",
           "file": "app/storage.py",
-          "line": 96
+          "line": 136
         },
         {
           "name": "_export_one",
@@ -2278,7 +2278,7 @@ tailwind.config = {
           "role": "单图归档：以首次归档日为基准（旧 day 优先）；源图哈希与基准不符且归档副本完好时反向恢复原图。",
           "sideEffects": "磁盘写 + archive_entries 台账更新。",
           "file": "app/storage.py",
-          "line": 217
+          "line": 334
         },
         {
           "name": "rebuild_day_notes",
@@ -2286,7 +2286,7 @@ tailwind.config = {
           "role": "全量重写当日 export/<day>/评论.txt（kept 帖 JOIN 批注，帖序 sid、条序 id）；无批注时删除文件。",
           "sideEffects": "磁盘写/删（tmp+replace 原子替换）。",
           "file": "app/storage.py",
-          "line": 466
+          "line": 601
         },
         {
           "name": "sanitize_filename",
@@ -2294,7 +2294,7 @@ tailwind.config = {
           "role": "文件名清洗唯一出口：剔除路径分隔符与 Windows 保留字符、保留名加前缀、空片段回退。",
           "sideEffects": "纯函数。",
           "file": "app/storage.py",
-          "line": 417
+          "line": 551
         },
         {
           "name": "remove_pic_files",
@@ -2302,7 +2302,7 @@ tailwind.config = {
           "role": "物理删除原图与 t_ 缩略图变体；不做引用判断（引用计数是 purge 的职责）。",
           "sideEffects": "磁盘删除。",
           "file": "app/storage.py",
-          "line": 399
+          "line": 532
         }
       ],
       "l2_callTree": "├── save_image(data, url)\n│   ├── 体积/像素/PIL verify 三重验证（先验证后落盘）\n│   ├── sha256 查 media_contents：命中且旧文件重哈希相等 → 复用旧文件\n│   ├── mkstemp + os.replace 原子写原图\n│   ├── _make_wide_thumb（宽 >720 才生成，LANCZOS q85）\n│   └── media_contents upsert\n├── 保留归档\n│   ├── export_pics → _export_one(rel, kept_day)\n│   │   ├── 基准查询：archive_entries.file → 回退 meta exported:<rel>\n│   │   ├── 源哈希≠基准 且 归档副本完好 → 反向恢复原图（restored）\n│   │   └── 副本已存在且哈希相等 → dup；否则 tmp 复制 + 校验 + replace\n│   └── export_report 汇总（exported/dup/restored/failed + archive_complete）\n└── rebuild_day_notes(day)\n    └── kept 帖 JOIN post_comments（sid, id 排序）→ format_notes → 原子重写；无批注即 unlink",
@@ -2380,7 +2380,7 @@ tailwind.config = {
           "role": "每日 04:10 入口：purge_expired + retry_files，结果 JSON 写 meta last_purge。",
           "sideEffects": "DB 硬删 + 磁盘删除；由调度器触发。",
           "file": "app/purge.py",
-          "line": 117
+          "line": 132
         },
         {
           "name": "purge_expired",
@@ -2388,7 +2388,7 @@ tailwind.config = {
           "role": "筛选超期 discarded（非收藏、无批注、discarded_at 非空、早于截止）并逐帖硬删。",
           "sideEffects": "DB 硬删；days 缺省取 PURGE_DAYS=3。",
           "file": "app/purge.py",
-          "line": 14
+          "line": 15
         },
         {
           "name": "_purge_post",
@@ -2396,7 +2396,7 @@ tailwind.config = {
           "role": "单帖硬删：锁内重验豁免条件 → 删 8 张表行 → 登记 file_jobs → 立墓碑。",
           "sideEffects": "DB 硬删；预览到删除期间被恢复/收藏则返回 None 放弃。",
           "file": "app/purge.py",
-          "line": 35
+          "line": 36
         },
         {
           "name": "retry_files",
@@ -2404,7 +2404,7 @@ tailwind.config = {
           "role": "删图失败重试：file_jobs 按 attempts 升序每轮取 100。",
           "sideEffects": "磁盘删除 + DB。",
           "file": "app/purge.py",
-          "line": 95
+          "line": 110
         }
       ],
       "l2_callTree": "├── run()\n│   ├── purge_expired(days)\n│   │   ├── 筛选 SQL：discarded + 非收藏 + 无评论（NOT EXISTS）+ 超 cutoff\n│   │   └── 逐帖 _purge_post(sid, cutoff)\n│   │       ├── 锁内重验同一条件（期间被恢复/收藏 → 放弃）\n│   │       ├── 删行顺序：pics → posts → image_jobs → decision_undos\n│   │       │            → post_groups → post_observations → post_comments → review_events\n│   │       ├── 每文件 INSERT OR IGNORE file_jobs → 锁内 _remove_file_locked\n│   │       │   ├── pics 仍有引用 → 只删队列行不删文件\n│   │       │   └── 无引用 → @storage.remove_pic_files + 删 media_contents\n│   │       └── INSERT OR IGNORE tombstones（立墓碑防复活）\n│   └── retry_files（attempts 升序 LIMIT 100）",
@@ -2483,7 +2483,7 @@ tailwind.config = {
           "role": "构造列表/编年/打包共用的 WHERE：favorites→favorite=1 跨三态；author 按 source:uid 拆分；range 时间字面量硬编码东八区。",
           "sideEffects": "纯函数。",
           "file": "app/queries.py",
-          "line": 8
+          "line": 52
         },
         {
           "name": "plan",
@@ -2491,7 +2491,7 @@ tailwind.config = {
           "role": "打包文件计划：全局路径去重、zip_entry_name 命名、缺失盘点；单包上限 500 帖。",
           "sideEffects": "读 DB 与磁盘文件存在性。",
           "file": "app/downloads.py",
-          "line": 18
+          "line": 81
         },
         {
           "name": "preview",
@@ -2499,7 +2499,7 @@ tailwind.config = {
           "role": "打包预览：与 ZIP 严格共用 plan 的文件口径；over_limit 时 rows 只回元数据供前端引导拆批。",
           "sideEffects": "读 DB。",
           "file": "app/downloads.py",
-          "line": 121
+          "line": 218
         }
       ],
       "l2_callTree": "├── post_filter(status, group, author, type_, range, has_cmts, source)\n│   ├── status='favorites' → p.favorite=1（跨保留/删除三态）\n│   ├── source → COALESCE(NULLIF(p.source,''),'weibo')=?（旧数据空串归微博）\n│   ├── author → 按 source:uid 冒号拆分（无冒号视作微博）\n│   └── range → BETWEEN/≥ 硬编码 +08:00 字面量（业务日界固定东八区）\n└── downloads.plan(…)\n    ├── select 路径：sids > 500 → HTTPException 400「单包最多 500 帖」\n    ├── 筛选路径：COUNT > 500 → 降级 rows（仅元数据）+ over_limit 标记\n    ├── LEFT JOIN pics 全序取行 → 同文件去重（质量冲突降级 mid/unknown）\n    └── storage.zip_entry_name：日期_作者(清洗截60B)_sid(截40)_{序号:02d}[_正文前30字]",
@@ -2562,7 +2562,7 @@ tailwind.config = {
           "role": "任务执行器：start 幂等（同 kind ACTIVE 时直接返回已有 job，防重复派发）；shutdown 先 stop 信号等 5 秒再 cancel。",
           "sideEffects": "写 meta；派发 asyncio 任务。",
           "file": "app/jobs.py",
-          "line": 55
+          "line": 66
         },
         {
           "name": "recover_interrupted",
@@ -2570,7 +2570,7 @@ tailwind.config = {
           "role": "启动时把所有 ACTIVE 任务标为 interrupted（排队幽灵与半程任务统一处置）。",
           "sideEffects": "写 meta。",
           "file": "app/jobs.py",
-          "line": 45
+          "line": 52
         },
         {
           "name": "status",
@@ -2578,7 +2578,7 @@ tailwind.config = {
           "role": "按 kind 读取任务状态（/api/jobs/{kind} 的数据源）。",
           "sideEffects": "读 meta。",
           "file": "app/jobs.py",
-          "line": 31
+          "line": 38
         }
       ],
       "l2_callTree": "├── start(kind, work)\n│   ├── 持 _write_lock 读 meta job:<kind> → ACTIVE 则返回已有 job（幂等）\n│   ├── 构造 {id=uuid4, state:'queued', progress…} 写 meta（登记即持久化）\n│   └── 不 await 直接 asyncio.create_task → done_callback 自清\n├── _execute\n│   ├── _update(state='running') → work(cancelled, progress)\n│   └── _update 双条件：id 匹配且 state ∈ ACTIVE 才写（旧任务迟到写入被静默丢弃）\n├── 完成分支：result.ok → complete/failed；CancelledError → interrupted；ENOSPC 专属文案\n└── recover_interrupted：启动单次，ACTIVE → interrupted",
@@ -2674,7 +2674,7 @@ tailwind.config = {
           "role": "空目录恢复：manifest 预检 → 逐文件回源 sha256 复核 → 库完整性 + 决定摘要比对 → 清空设备三表；失败 rmtree 清场。",
           "sideEffects": "整目录写；恢复出的文件全部 0600。",
           "file": "app/backup.py",
-          "line": 118
+          "line": 126
         },
         {
           "name": "LocalBlobs",
@@ -2682,7 +2682,7 @@ tailwind.config = {
           "role": "本地 blob 后端（data/backups/blobs/，历史行为逐位保留）。",
           "sideEffects": "磁盘写。",
           "file": "app/cloud.py",
-          "line": 132
+          "line": 156
         },
         {
           "name": "QuarkBlobs",
@@ -2690,7 +2690,7 @@ tailwind.config = {
           "role": "夸克网盘后端（CLI 子进程）。",
           "sideEffects": "网络上传/下载；CLI 无删除能力，云端 blob 只增不减。",
           "file": "app/cloud.py",
-          "line": 170
+          "line": 200
         }
       ],
       "l2_callTree": "├── create(keep, store)\n│   ├── backups 目录 chmod 700 → TemporaryDirectory staging\n│   ├── 「with gate」：sqlite backup API 复制 db + pics/export 硬链接（拒符号链接）\n│   ├── 凭据（cookie.txt/x_auth.txt）→ staging local/（0600）· 永不进 blob 库\n│   ├── 逐文件 digest → files{rel:{sha256,size}} → store.ensure_many（local_only 除外）\n│   ├── 发布前校验：integrity_check · 重算 decisions_sha256 · preexisting_missing 盘点\n│   └── manifest + os.replace 原子发布 → 滚动删除留 7 份（快照与同名 .db 独立计数）\n└── restore(batch, target, store)\n    ├── 目标必须空目录 → manifest 预检（禁绝对路径 / 禁 .. / 哈希 64 位 hex）\n    ├── 逐文件回源（local_only 从快照 local/，其余从 store）+ sha256 复核 + chmod 600\n    ├── 库 integrity_check + decisions_sha256 重算比对\n    ├── 清空 device_sessions / device_codes / pairing_attempts（旧快照不复活设备）\n    └── except BaseException → rmtree(target) 后 re-raise（全有或全无）",
@@ -2776,7 +2776,7 @@ tailwind.config = {
           "role": "每 24 小时修复可重建媒体：重建缩略图、补头像引用、补历史归档；不改变任何用户决定。",
           "sideEffects": "磁盘写 + DB；经调度器与 make picwall-repair 触发。",
           "file": "app/maintenance.py",
-          "line": 9
+          "line": 22
         },
         {
           "name": "health",
@@ -2784,7 +2784,7 @@ tailwind.config = {
           "role": "深度体检：原图/缩略图/头像/历史归档内容级校验，缺失保留问题记录。",
           "sideEffects": "读磁盘与 DB。",
           "file": "app/maintenance.py",
-          "line": 74
+          "line": 144
         },
         {
           "name": "seed",
@@ -2837,7 +2837,7 @@ tailwind.config = {
           "role": "数据目录唯一来源；DB_PATH/COOKIE_FILE/X_AUTH_FILE 均由它派生。",
           "sideEffects": "模块导入时定型。",
           "file": "app/config.py",
-          "line": 30
+          "line": 39
         },
         {
           "name": "PAIR_ROLE",
@@ -2845,7 +2845,7 @@ tailwind.config = {
           "role": "固定配对码角色；非法值回退 editor——宁可落到分拣也不静默禁用配对。",
           "sideEffects": "模块导入时定型。",
           "file": "app/config.py",
-          "line": 63
+          "line": 72
         },
         {
           "name": "DataGate",
@@ -2947,7 +2947,7 @@ tailwind.config = {
           "role": "启动：建库 → 恢复中断任务 → 注册 5 个定时任务（微博 09:30 / 清理 04:10 / X 每 2h / 补抓每 4h / 修复每 24h，misfire 宽限 1 小时=睡眠错过仍补跑）→ 启动追赶；停机时调度器与 Runner 优雅收尾。",
           "sideEffects": "注册 asyncio 任务；网络 I/O（追赶抓取）。",
           "file": "app/server.py",
-          "line": 81
+          "line": 120
         },
         {
           "name": "list_posts",
@@ -2955,7 +2955,7 @@ tailwind.config = {
           "role": "列表主接口：keyset 游标（尾行排序键 base64；次数序三键）+ limit+1 探测 has_more + 批量补图片/评论预览/搜索命中批注。",
           "sideEffects": "读 DB；游标解码失败返回 400。",
           "file": "app/server.py",
-          "line": 501
+          "line": 747
         },
         {
           "name": "mark",
@@ -2963,7 +2963,7 @@ tailwind.config = {
           "role": "决定变更：mark_snapshot 快照式落账（last-write-wins）；kept 时同步归档报告并重建当日批注文本。",
           "sideEffects": "DB 写 + 磁盘归档；并发冲突防护不在本路由（在 /restore 的乐观锁）。",
           "file": "app/server.py",
-          "line": 653
+          "line": 918
         },
         {
           "name": "ingest_harvest",
@@ -2971,7 +2971,7 @@ tailwind.config = {
           "role": "浏览器代抓导入：CORS 仅放行 weibo.com + Bearer 采集令牌 + 单批 ≤100 条 + running 占坑（check→set 无 await，并发双发只进一个）。",
           "sideEffects": "DB 写 + 网络下载；只写 last_ingest 不写 last_result（代抓不证明完整覆盖）。",
           "file": "app/server.py",
-          "line": 1405
+          "line": 1832
         },
         {
           "name": "restore",
@@ -2979,7 +2979,7 @@ tailwind.config = {
           "role": "撤销端点：previous + expected 双比对乐观锁，不匹配 409 提示刷新——跨设备冲突防护的唯一入口。",
           "sideEffects": "DB 写（经 db.restore_snapshot）。",
           "file": "app/server.py",
-          "line": 684
+          "line": 957
         }
       ],
       "l2_callTree": "├── 中间件（http 每请求）\n│   ├── 地址白名单 allowed_host → local_listener 回环校验\n│   ├── _request_cors（仅 ingest 路径）→ OPTIONS 204\n│   ├── 会话解析：local_owner（监听器注入，非 cross-site 无 Origin）或 Bearer/Cookie 会话\n│   ├── public 路径豁免；未配对 → 401；写操作 can_write 矩阵 → 403\n│   └── /api/* /media/* 响应 no-store\n├── @app.get /atlas → FileResponse docs/project_atlas.html（仅管理设备）\n├── 设备域：pair / code / session / devices（admin 校验）\n├── 内容域：/api/posts（keyset）· /status · /restore · /favorite · /reaffirm · /comments · /bulk-status\n├── 采集域：/api/crawl · /api/crawl/x（_crawl_x → _x_http_client 统一代理）\n│   └── /api/ingest/harvest · /api/ingest/x（CORS+Bearer+占坑）\n├── 运维域：/api/purge · /api/jobs/{kind} · /api/{kind}/retry · /api/download/* · /api/demo\n└── lifespan → 调度 5 任务 + catch_up_if_stale",
@@ -3065,7 +3065,7 @@ tailwind.config = {
           "role": "先手动进 lifespan（建库起调度）再并行起两个监听器；信号统一接管；任一退出即全停。",
           "sideEffects": "进程生命周期管理。",
           "file": "app/serve.py",
-          "line": 48
+          "line": 49
         }
       ],
       "l2_callTree": "├── server_configs()\n│   ├── 容器判定：/.dockerenv 存在\n│   ├── 监听器 A（局域网配对入口）：0.0.0.0 · 容器 8080 / 裸机 8082 · 裸 app\n│   └── 监听器 B（本机免密入口）：LocalOwner(app) · 容器 0.0.0.0:8082（宿主映射 127.0.0.1:8081）\n│       ·                              裸机 127.0.0.1:8081\n└── run()\n    ├── async with lifespan(app)：先建库、起调度器，再开端口（数据就绪才对外服务）\n    ├── 双 ManagedServer 并行 serve（capture_signals no-op，信号统一接管）\n    └── FIRST_COMPLETED → 全停 → gather 回收",
@@ -3113,7 +3113,7 @@ tailwind.config = {
           "role": "签发一次性配对码：12 位无歧义字母表（去 0/1/I/O），TTL 600 秒，库存 sha256。",
           "sideEffects": "DB 写 device_codes；清过期码。",
           "file": "app/auth.py",
-          "line": 59
+          "line": 159
         },
         {
           "name": "exchange",
@@ -3121,7 +3121,7 @@ tailwind.config = {
           "role": "码换会话：限流 → 验码（临时码命中即删；未命中比对固定码）→ 建 30 天会话。",
           "sideEffects": "DB 写/删 + 限流计数；429/400 语义化错误。",
           "file": "app/auth.py",
-          "line": 70
+          "line": 171
         },
         {
           "name": "session",
@@ -3129,7 +3129,7 @@ tailwind.config = {
           "role": "会话校验：token 长度钳位后 sha256 比对 device_sessions 且未过期。",
           "sideEffects": "只读 DB。",
           "file": "app/auth.py",
-          "line": 99
+          "line": 200
         },
         {
           "name": "can_write",
@@ -3137,7 +3137,7 @@ tailwind.config = {
           "role": "角色写权限矩阵：admin 全通；collector 仅两个 ingest 端点；editor 帖子决定/评论类；viewer 恒 False。",
           "sideEffects": "纯函数（注意 editor 按路径尾段匹配）。",
           "file": "app/auth.py",
-          "line": 112
+          "line": 237
         },
         {
           "name": "RequestBudget",
@@ -3145,7 +3145,7 @@ tailwind.config = {
           "role": "非 GET 请求体累积分块，>2MiB 直接 413；不信任 Content-Length，分块传输同限。",
           "sideEffects": "读取并回放请求体。",
           "file": "app/auth.py",
-          "line": 17
+          "line": 112
         }
       ],
       "l2_callTree": "├── issue_code(role)\n│   └── secrets.choice(32 字母表去 0/1/I/O) × 12 → sha256 入库（TTL 600s）\n├── exchange(code, name, client)\n│   ├── 限流：清过期窗 → 全局失败 ≥100 或单 client ≥10 → 429\n│   ├── device_codes 命中 → 删码（一次性）；未命中 → 比对 config.PAIR_CODE（固定码不删）\n│   ├── 未命中 → failures+1 → 400\n│   └── 命中 → 清该 client 计数 · 清过期会话 · token_urlsafe(32) · 30 天会话入库\n├── session(token) → sha256 比对 + 过期检查\n├── RequestBudget(scope, receive, send)\n│   ├── GET/HEAD/OPTIONS 直通\n│   └── 循环 receive 累计 body > 2MiB → 413（bounded_receive 回放组装结果）\n└── can_write(role, path)：admin → collector(仅 ingest) → editor(决定/评论) → viewer False",
@@ -3219,7 +3219,7 @@ tailwind.config = {
           "role": "只读探活：微博调 allGroups（301/401/432 或 passport 跳转、code 21332/21331 → expired）；X 用 XGraphQL 拉列表最新 1 条（data.list 非 dict → structure）。",
           "sideEffects": "网络 I/O；绝不导入帖子。",
           "file": "app/connections.py",
-          "line": 86
+          "line": 90
         },
         {
           "name": "record",
@@ -3373,7 +3373,7 @@ tailwind.config = {
           "role": "客户端二次过滤：status/source/group/author/type/favOnly/searchText（正文与 comment_match 同权）/range（东八区）。",
           "sideEffects": "纯函数。",
           "file": "app/static/view-state.js",
-          "line": 40
+          "line": 94
         },
         {
           "name": "keepBadge",
@@ -3381,7 +3381,7 @@ tailwind.config = {
           "role": "点赞次数徽章四档：×2 灰 → ×3-4 主题色 → ×5-9 金 → ×10+ 反白。",
           "sideEffects": "纯函数。",
           "file": "app/static/view-state.js",
-          "line": 30
+          "line": 40
         },
         {
           "name": "avatarSrc",
@@ -3389,7 +3389,7 @@ tailwind.config = {
           "role": "入库相对路径 avatars/… 映射为 /media/…；其余原样。",
           "sideEffects": "纯函数。",
           "file": "app/static/view-state.js",
-          "line": 35
+          "line": 45
         }
       ],
       "l2_callTree": "├── comparePosts(a, b, sort)\n│   └── keep_count 降序（缺省当 1）→ created_at 降序 → sid 字典序  [三键与服务端一致]\n└── matchesView(p, s, now)\n    ├── status：favorites → p.favorite；否则等于 p.status\n    ├── source：'x' 特判，缺省 weibo\n    ├── group：list_id 相等 或 p.groups 包含\n    ├── author：payload uid 已带来源前缀（author_key），直接相等\n    ├── searchText：正文与 comment_match 同权命中\n    └── range：today/yesterday/7d/30d（now+8h 取 ISO 日界，硬编码东八区）",
@@ -3541,6 +3541,9 @@ tailwind.config = {
       "files": [
         {
           "path": "app/static/app.js"
+        },
+        {
+          "path": "app/static/boot.js"
         }
       ],
       "l1_tradeoffs": [
@@ -3570,7 +3573,7 @@ tailwind.config = {
           "role": "分页加载：AbortController + S.requestVersion 双守卫；known 去重；S.decisions 对账（结算晚于请求发起则信本地）；编年态卡片经守卫流入日卷。",
           "sideEffects": "网络 I/O；重写 S.posts/S.images、重渲 feed DOM。",
           "file": "app/static/app.js",
-          "line": 254
+          "line": 331
         },
         {
           "name": "renderStackAt",
@@ -3578,7 +3581,7 @@ tailwind.config = {
           "role": "详情双缓冲渲染：前卡立即渲染，nextInView 渲染进背卡并 eager 预载——「看前卡的时间就是背卡的加载窗口」。",
           "sideEffects": "重写 .is-front/.is-back 两张常驻卡 DOM。",
           "file": "app/static/app.js",
-          "line": 1176
+          "line": 1311
         },
         {
           "name": "detailAdvance",
@@ -3586,7 +3589,7 @@ tailwind.config = {
           "role": "裁决并前进：定 upNext → mark 乐观标记 → 克隆前卡播飞出动画 → 角色互换（背卡即刻就位）→ 滚动复位 → 补队尾 → 异步服务端校正；尾批时自动续页。",
           "sideEffects": "DOM 大改 + 网络（经串行队列）；会话计数与 triage 胶囊更新。",
           "file": "app/static/app.js",
-          "line": 1656
+          "line": 1813
         },
         {
           "name": "appendToShortestCol",
@@ -3594,7 +3597,7 @@ tailwind.config = {
           "role": "收卡总口：编年态转发 timeline.appendCard 按日归桶，墙态选 scrollHeight 最短列——三处编年守卫之一。",
           "sideEffects": "改 feed DOM。",
           "file": "app/static/app.js",
-          "line": 209
+          "line": 283
         }
       ],
       "l2_callTree": "├── 组装（依赖注入，唯一接线点）\n│   ├── createMaintenanceJobs({api, toast, onJob→S.st.jobs, onComplete})\n│   ├── createPostActions({S, feed, $, api, toast, insertCard, rebuildImages, …})\n│   ├── createLightbox({S, $, animatedHide, cancelHide, resetZoom, crossPosts})\n│   ├── createNotes / createFab / initSettings / initDevices / initBatch / createAuthorView\n│   ├── createTimeline({…}) → bindObserver + mountRuler + bindKeys（V 键）\n│   ├── createQuad / createReview / createSlideshow\n│   └── startQuickTriage：桌面分流 quad.open() 四格会话（窄屏退详情单卡流）\n├── load(reset)\n│   ├── reset：abort 旧请求 · 清 cursor/posts/feed · ++S.requestVersion\n│   ├── GET /api/posts（limit 50 · keyset）→ 版本比对 → known 去重\n│   ├── S.decisions 对账：_settledAt < started 才信服务端，否则本地覆盖\n│   ├── matchesView 兜底过滤 → renderCard → appendToShortestCol（编年守卫）\n│   └── rebuildImages：重建 S.images 扁平池（大图/详情/四格共用）\n├── 详情传送带（双缓冲）\n│   ├── renderStackAt：前卡即时 + 背卡 eager 预载\n│   ├── detailAdvance：定 upNext → mark → flyOutGhost → 角色互换 → 复位 → 补尾 → 异步校正\n│   └── review.active() 早退分支：动作分发交由 review 的组内变体接管\n├── keydown 责任链（14 层优先级，详见「跨模块工程机制」签）\n└── 布局守卫三处：appendToShortestCol / insertCardAt / ensureFeedCols（编年态让位 timeline）",
@@ -3755,7 +3758,7 @@ tailwind.config = {
           "role": "乐观变更分拣状态并启动 6 秒撤销窗；返回 null 表示帖已被其他操作摘走（连按竞速守卫）。",
           "sideEffects": "改 p.status/S.decisions；增删 #feed 卡片；Toast 撤销按钮；POST /status 入串行队列；failed_count>0 提示启动归档维护。",
           "file": "app/static/post-actions.js",
-          "line": 68
+          "line": 99
         },
         {
           "name": "undoLastMark",
@@ -3763,7 +3766,7 @@ tailwind.config = {
           "role": "撤销 6 秒内最近一次 mark：先占队列位等正向请求完成，再发 /restore（previous+expected 乐观锁）。",
           "sideEffects": "POST /restore（409 时提示刷新）；失败兜底 GET 单帖取服务端权威状态；恢复 DOM 与详情视图。",
           "file": "app/static/post-actions.js",
-          "line": 112
+          "line": 143
         },
         {
           "name": "reaffirm",
@@ -3771,7 +3774,7 @@ tailwind.config = {
           "role": "点赞次数 ±1：仅 kept 允许；delta<0 且 keep_count≤1 时提示走长按删除。",
           "sideEffects": "递增 p._reaffirmRevision；乐观改 keep_count 并重排；POST/DELETE /reaffirm；失败按修订号回滚。",
           "file": "app/static/post-actions.js",
-          "line": 142
+          "line": 173
         },
         {
           "name": "toggleFavorite",
@@ -3779,7 +3782,7 @@ tailwind.config = {
           "role": "切换收藏星标（独立标记，不改分拣状态）。",
           "sideEffects": "递增 p._favoriteRevision；乐观更新并同步刷新灯箱与详情星标。",
           "file": "app/static/post-actions.js",
-          "line": 176
+          "line": 207
         },
         {
           "name": "enqueue",
@@ -3993,7 +3996,7 @@ tailwind.config = {
           "role": "布局切换：canSwitch 闸门（浮层全关才许切）→ 编年强制清 S.sort → applyLayoutDom（data-layout + --tl-top）→ refreshOutline + load(true) 重建。",
           "sideEffects": "改根元素属性与 feed 类；持久化偏好 pwSetPref('layout')。",
           "file": "app/static/timeline.js",
-          "line": 356
+          "line": 397
         },
         {
           "name": "gotoDay",
@@ -4001,7 +4004,7 @@ tailwind.config = {
           "role": "穿越到目标日：未装载时循环 load(false)+settle 至多 60 页，再平滑滚动到日卷头（扣顶栏实高）。",
           "sideEffects": "网络 I/O（分页装载）+ 滚动。",
           "file": "app/static/timeline.js",
-          "line": 265
+          "line": 290
         }
       ],
       "l2_callTree": "├── init：记忆布局「静默应用」（applyLayoutDom + refreshOutline，不触发 load——首屏 load 自然流入收卡口）\n├── bindObserver：#feed childList+subtree\n│   └── 回调：.card/.tday 被移除 → needOutline → 120ms 防抖\n│       ├── 清理空日卷 section（同步 sections Map）\n│       ├── needOutline → refreshOutline（GET /api/timeline/outline + outlineSeq 竞态守卫）\n│       └── updateCursor：可见日括号重算（视口落间隙贴最近段；scroll/resize 走 rAF）\n├── appendCard(card, p) / insertCard(card, ref)：日卷归桶 / 按 S.posts 全序找插入点\n├── mountRuler：body>#truler（track/inner/cursor/bubble）\n│   ├── planRows：日行高 min(16, 2+round(sqrt(total)×2)) · 宽 max(20, 占比×100)\n│   ├── pointer 拖动/点按 → showBubble → endScrub 命中 dayAt → gotoDay\n│   └── renderRuler：消费 planRows 重建 geo/totalH\n└── setLayout(on)：canSwitch 闸 → 清 S.sort → applyLayoutDom → refreshOutline → load(true)",
@@ -4355,7 +4358,7 @@ tailwind.config = {
           "role": "大图状态机：锚点定位、导航（默认限本帖/纯图跨帖且 scopeSid 跟帖走）、长图判定与回顶、±1 预加载（decode 兜底）、胶片轨道 diff、双击缩放与单击关闭的 800/320ms 时序仲裁。",
           "sideEffects": "DOM（#lightbox 与 #lb-film）；预加载用 new Image()；无直接 API。",
           "file": "app/static/lightbox.js",
-          "line": 3
+          "line": 5
         }
       ],
       "l2_callTree": "├── openLB(i, sid)：记 {sid,file} 锚点 + scopeSid + returnFocus → 锁滚动 → renderLB\n├── renderLB()\n│   ├── getIndex 反查失效 → 自愈关闭\n│   ├── 长图判定 h/w>2：元数据预判 + onload naturalWidth 校正 · 切图回顶\n│   ├── 导航池：非跨帖 filter(sid===scopeSid) · 跨帖全池 · prev/next disabled 按池边界\n│   ├── 相邻 ±1 预加载（preload.decode?.().catch 兜底）\n│   └── 胶片轨道：filmKey 不变只更新高亮/scrollIntoView；变则重建\n└── lbNav(±1)：锚点移动 · 跨帖时 scopeSid 跟帖走（中途关跨帖也不串帖）\n    └── 单击 vs 双击：touch 后 800ms 内忽略单击；鼠标单击延迟 320ms，e.detail>1 取消",
@@ -4450,7 +4453,7 @@ tailwind.config = {
           "role": "打开连接弹窗并渲染五态（unset/saved/ok/expired/error）；cookieAction 三合一（save/check/clear）带 busy 门闩。",
           "sideEffects": "网络 I/O + DOM。",
           "file": "app/static/settings.js",
-          "line": 379
+          "line": 410
         }
       ],
       "l2_callTree": "├── renderPrefs / #modal-prefs 事件委托（id 命名即协议：pref-<key>；ss-comments on→'1' 语义反转）\n├── 推入式导航（手机 ≤640px）：openSettings 无 id → goRoot（收面板/清 on 态/摘 in-pane）｜activate → shell.in-pane + setHeadTitle｜mobileBack 供 Esc 逐层退\n├── openGroups → renderMyGroups（loadStatus → 分组列表 + 移除）\n│   └── discover：前端 for-await 逐个 POST /api/groups（中途失败整段 catch——无事务性）\n├── openConnections(source) → renderConnection（S.st.connections[source]，weibo 兜底旧字段 cookie）\n│   └── cookieAction(save/check/clear)：busy 门闩 → 端点 → finally loadStatus（失败吞掉）→ 重渲染\n├── 配对码：POST /api/device/code → {code, ttl} → 二维码 qrText 拼 ?code= → setTimeout 自毁归位\n│   └── #set-qr：localhost 时问 /api/lan 要宿主 IP → 兜底 localStorage.pw_qrurl · 输入 350ms 防抖\n└── 双击收藏：dblfav 偏好开且 hover 设备 → #lightbox/.dt-pics dblclick → toggleFavorite",
@@ -4517,7 +4520,7 @@ tailwind.config = {
           "role": "绑定设备弹窗：admin 并行拉 GET /api/devices + /api/device/session 渲染列表；撤销自己是 location.reload()，撤销他人移除节点；本机入口提供断开（本机入口会被服务端 409 拒绝，模板已隐藏该按钮）。",
           "sideEffects": "网络 I/O + DOM + 可能整页刷新。",
           "file": "app/static/devices.js",
-          "line": 3
+          "line": 6
         }
       ],
       "l2_callTree": "└── set-devices 点击\n    ├── 非 admin（data-device-role）→ 打开弹窗显示能力文案 → return（零请求）\n    └── admin → Promise.all(GET /api/devices · GET /api/device/session) → 列表渲染\n        ├── 撤销自己（data-device === current.id）→ DELETE /api/devices/{id} → location.reload()\n        └── 撤销他人 → DELETE → 移除该行节点",
@@ -4586,6 +4589,12 @@ tailwind.config = {
         },
         {
           "path": "extension/manifest.json"
+        },
+        {
+          "path": "extension/cookies.js"
+        },
+        {
+          "path": "extension/destination.js"
         }
       ],
       "l1_tradeoffs": [
@@ -4603,7 +4612,7 @@ tailwind.config = {
           "role": "读 weibo.com 全量 Cookie → 去重拼接 → 校验 SUB/XSRF-TOKEN → POST /api/settings/cookie {cookie}。",
           "sideEffects": "网络 I/O（Bearer + 20 秒超时）；目标地址需先经 chrome.permissions.request 授权。",
           "file": "extension/popup.js",
-          "line": 35
+          "line": 54
         },
         {
           "name": "sendX",
@@ -4611,7 +4620,7 @@ tailwind.config = {
           "role": "读 auth_token(+ct0) → POST /api/settings/x-auth；x.com 无 auth_token 回退 twitter.com 再试。",
           "sideEffects": "网络 I/O。",
           "file": "extension/popup.js",
-          "line": 65
+          "line": 81
         }
       ],
       "l2_callTree": "├── allowDestination(base)：chrome.permissions.request 该 origin → 取 storage 令牌\n├── sendWeibo()\n│   ├── chrome.cookies.getAll({url:'https://weibo.com/'})\n│   ├── 同名去重：path.length 降序先到先得\n│   ├── 缺 SUB / XSRF-TOKEN → 报「微博未登录」不发送\n│   └── POST /api/settings/cookie {cookie}\n├── sendX()：getAll(x.com) 无 auth_token → 回退 twitter.com → POST /api/settings/x-auth {auth_token, ct0}\n└── refresh()：GET /api/status → 渲染 weibo/x 五态连接文案",
@@ -4661,7 +4670,7 @@ tailwind.config = {
           "role": "在线维护的安全入口：备份/体检/设备签发在容器内执行；离线维护要求先停服。",
           "sideEffects": "docker exec；读 Docker 状态。",
           "file": "tools/runtime.py",
-          "line": 9
+          "line": 48
         },
         {
           "name": "restore.py",

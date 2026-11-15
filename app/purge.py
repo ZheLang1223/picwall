@@ -6,9 +6,10 @@
 删光评论即恢复清理资格，与收藏豁免同构。
 """
 import json
+import time
 from datetime import datetime, timedelta
 
-from . import config, db, storage
+from . import auth, config, db, storage
 
 
 def purge_expired(days: int | None = None) -> dict:
@@ -67,36 +68,50 @@ def _purge_post(sid: str, cutoff: str | None = None) -> int | None:
             # 墓碑：硬删即立碑，入库通道见碑绕行——深翻页回补不再复活已删帖
             c.execute("INSERT OR IGNORE INTO tombstones(sid, purged_at) VALUES(?, ?)",
                       (sid, datetime.now(config.NOW_TZ).isoformat(timespec="seconds")))
-        for f in files:
-            removed += int(_remove_file_locked(f))
+        removed = _remove_files_locked(files)
     return removed
 
 
-def _remove_file_locked(file: str) -> bool:
+def _remove_files_locked(files: list[str]) -> int:
+    if not files:
+        return 0
+    unique = list(dict.fromkeys(files))
+    qmarks = ",".join("?" * len(unique))
     with db.conn() as c:
-        referenced = c.execute("SELECT 1 FROM pics WHERE file=?", (file,)).fetchone()
-    if referenced:
-        with db.conn() as c:
-            c.execute("DELETE FROM file_jobs WHERE file=?", (file,))
-        return False
-    try:
-        removed = storage.remove_pic_files(file)
-        with db.conn() as c:
-            c.execute("DELETE FROM file_jobs WHERE file=?", (file,))
-            c.execute("DELETE FROM media_contents WHERE file=?", (file,))
-        return removed
-    except (OSError, ValueError) as e:
-        with db.conn() as c:
-            c.execute("UPDATE file_jobs SET attempts=attempts+1,error=?,updated_at=? WHERE file=?",
-                      (type(e).__name__, datetime.now(config.NOW_TZ).isoformat(), file))
-        return False
+        referenced = {r[0] for r in c.execute(f"SELECT DISTINCT file FROM pics WHERE file IN ({qmarks})", unique)}
+    delete_jobs = [f for f in unique if f in referenced]
+    removed_files = []
+    failed_updates = []
+    now_iso = datetime.now(config.NOW_TZ).isoformat()
+    for f in unique:
+        if f in referenced:
+            continue
+        try:
+            if storage.remove_pic_files(f):
+                removed_files.append(f)
+            delete_jobs.append(f)
+        except (OSError, ValueError) as e:
+            failed_updates.append((type(e).__name__, now_iso, f))
+    with db.conn() as c:
+        if delete_jobs:
+            c.execute(f"DELETE FROM file_jobs WHERE file IN ({','.join('?' * len(delete_jobs))})", delete_jobs)
+        if removed_files:
+            c.execute(f"DELETE FROM media_contents WHERE file IN ({','.join('?' * len(removed_files))})", removed_files)
+        if failed_updates:
+            c.executemany("UPDATE file_jobs SET attempts=attempts+1,error=?,updated_at=? WHERE file=?",
+                          failed_updates)
+    return len(removed_files)
+
+
+def _remove_file_locked(file: str) -> bool:
+    return bool(_remove_files_locked([file]))
 
 
 def retry_files() -> dict:
     with db._write_lock:
         with db.conn() as c:
             files = [r[0] for r in c.execute("SELECT file FROM file_jobs ORDER BY attempts LIMIT 100")]
-        removed = sum(_remove_file_locked(f) for f in files)
+        removed = _remove_files_locked(files)
         with db.conn() as c:
             remaining = c.execute("SELECT COUNT(*) FROM file_jobs").fetchone()[0]
     return {"removed": removed, "remaining": remaining}
@@ -118,5 +133,8 @@ def run() -> dict:
     """定时任务入口：跑一轮清理并把结果写进 meta。"""
     result = purge_expired()
     result["file_retry"] = retry_files()
+    with db._write_lock, db.conn() as c:
+        c.execute("DELETE FROM device_sessions WHERE expires<?", (time.time(),))
+    auth.invalidate_session_cache()
     db.set_meta("last_purge", json.dumps(result, ensure_ascii=False))
     return result

@@ -39,9 +39,10 @@ def server_configs(in_container=None):
         in_container = Path("/.dockerenv").is_file()
     # Docker 的安全边界是宿主端口映射；裸进程必须由监听器自身绑定回环地址。
     return [
-        uvicorn.Config(app, host="0.0.0.0", port=8080 if in_container else 8082, lifespan="off"),
+        uvicorn.Config(app, host="0.0.0.0", port=8080 if in_container else 8082,
+                       lifespan="off", proxy_headers=False),
         uvicorn.Config(LocalOwner(app), host="0.0.0.0" if in_container else "127.0.0.1",
-                       port=8082 if in_container else 8081, lifespan="off"),
+                       port=8082 if in_container else 8081, lifespan="off", proxy_headers=False),
     ]
 
 

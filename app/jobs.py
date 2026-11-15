@@ -9,7 +9,7 @@ from datetime import datetime
 
 from . import config, db
 
-# download 是批量打包任务：与归档/补抓一样可恢复核对，打包产物 zip 路径记录在 result.file。
+# download 是批量打包任务：与归档/补抓一样可恢复核对，产物路径登记在 downloads 内存表（不落库暴露）。
 KINDS = ("archive", "media", "download")
 ACTIVE = ("queued", "running")
 logger = logging.getLogger("picwall.jobs")
@@ -21,7 +21,13 @@ def _now():
 
 def _read(c, kind):
     row = c.execute("SELECT v FROM meta WHERE k=?", ("job:" + kind,)).fetchone()
-    return json.loads(row[0]) if row else {"kind": kind, "state": "idle"}
+    if not row:
+        return {"kind": kind, "state": "idle"}
+    try:
+        data = json.loads(row[0])
+    except (ValueError, TypeError):
+        return {"kind": kind, "state": "idle"}
+    return data if isinstance(data, dict) and "state" in data else {"kind": kind, "state": "idle"}
 
 
 def _write(c, job):
@@ -44,13 +50,17 @@ def _update(kind, job_id, **values):
 
 
 def recover_interrupted():
-    """仅在单进程启动时调用；原媒体/归档记录保留，用户可继续重试。"""
+    """仅在单进程启动时调用；原媒体/归档记录保留，清理残留临时打包产物。"""
+    from . import downloads
+
     with db._write_lock, db.conn() as c:
         for kind in KINDS:
             job = _read(c, kind)
             if job["state"] in ACTIVE:
                 _write(c, job | {"state": "interrupted", "finished_at": _now(),
                                  "error": "服务重启，任务中断；已完成的文件保留，可重试"})
+    downloads._RESULT_FILES.clear()
+    downloads.sweep_tmp_dir(0)
 
 
 class Runner:

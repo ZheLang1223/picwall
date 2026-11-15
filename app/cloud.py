@@ -9,6 +9,7 @@ blob 一律按内容 sha256 命名寻址，两个实现对备份格式（manifes
 - 命令无删除能力：云 GC（purge 联动）延后，云端 blob 只增不减是已知边界。
 只有宿主侧 make backup / tools 走本模块；容器内服务从不执行备份。
 """
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,21 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config, db
+
+_SAFE_ENV_KEYS = (
+    "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "LC_CTYPE",
+    "USER", "LOGNAME", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+    "NODE_OPTIONS", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+    "https_proxy", "http_proxy", "no_proxy",
+)
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class BlobError(RuntimeError):
@@ -33,7 +49,8 @@ def _cli_events(args: list[str], timeout: int, env_extra: dict | None = None) ->
     node = shutil.which("node")
     if not node:
         raise BlobError("找不到 node，夸克 CLI 无法运行")
-    env = os.environ | {"CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli"}
+    env = {k: os.environ[k] for k in _SAFE_ENV_KEYS if k in os.environ}
+    env.update({"CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli"})
     env.update(env_extra or {})
     sid = f"{int(datetime.now().timestamp())}-{os.urandom(3).hex()}"
     try:
@@ -78,6 +95,8 @@ def resolve_dir(path: str, parent_fid: str = "") -> str:
 
 def upload_files(paths: list[Path], parent_fid: str) -> dict[str, str]:
     """一批本地上传到指定目录，返回 {文件名: fid}。存在失败任务即抛错（续跑按表跳过）。"""
+    if len({p.name for p in paths}) != len(paths):
+        raise BlobError("upload: 存在同名文件，无法区分上传结果")
     events = _cli_events(["upload", *[str(p) for p in paths], "--parent-fid", parent_fid],
                          timeout=3600)
     result = _result(events, "upload")
@@ -107,10 +126,15 @@ def read_blob(fid: str, workdir: Path, retries: int = 3) -> Path:
                                   "--output-dir", str(outdir), "--overwrite"],
                                  timeout=1800)
             src = (_result(events, "download").get("data") or {}).get("filePath", "")
-            if not src or not Path(src).is_file():
+            src_path = Path(src) if src else None
+            if not src_path or src_path.is_symlink() or not src_path.is_file():
                 raise BlobError(f"download 未产出文件（fid={fid[:8]}…）")
-            dest = workdir / Path(src).name
-            shutil.move(src, dest)
+            if not src_path.resolve().is_relative_to(outdir.resolve()):
+                raise BlobError(f"download 产出路径越界（fid={fid[:8]}…）")
+            dest = workdir / src_path.name
+            if not dest.resolve().is_relative_to(workdir.resolve()):
+                raise BlobError(f"download 目标文件名无效（fid={fid[:8]}…）")
+            shutil.move(src_path, dest)
             shutil.rmtree(outdir, ignore_errors=True)
             return dest
         except BlobError as e:
@@ -140,20 +164,23 @@ class LocalBlobs:
     def known(self) -> set[str]:
         return {p.name for p in self.root.iterdir()} if self.root.is_dir() else set()
 
-    def ensure_many(self, items: list[tuple[str, Path]]) -> None:
-        """把 (sha256, 源文件) 落进本地库；已存在且校验通过的跳过。"""
-        import hashlib
+    def ensure_many(self, items: list[tuple[str, Path]], verify: bool = False) -> None:
+        """把 (sha256, 源文件) 落进本地库；已存在且大小一致的跳过（verify=True 时逐位重算 sha256）。"""
         self.root.mkdir(parents=True, exist_ok=True)
         os.chmod(self.root, 0o700)
         for sha, src in items:
             blob = self.root / sha
-            if blob.is_file() and hashlib.sha256(blob.read_bytes()).hexdigest() == sha:
-                continue
+            if blob.is_file() and not blob.is_symlink():
+                if verify:
+                    if _file_sha256(blob) == sha:
+                        continue
+                elif blob.stat().st_size == src.stat().st_size:
+                    continue
             fd, tmp = tempfile.mkstemp(prefix=".blob-", dir=self.root)
             os.close(fd)
             try:
                 shutil.copyfile(src, tmp)
-                if hashlib.sha256(Path(tmp).read_bytes()).hexdigest() != sha:
+                if _file_sha256(Path(tmp)) != sha:
                     raise OSError("备份复制校验失败")
                 os.chmod(tmp, 0o600)
                 os.replace(tmp, blob)
@@ -161,7 +188,10 @@ class LocalBlobs:
                 Path(tmp).unlink(missing_ok=True)
 
     def fetch_into(self, key: str, dest: Path) -> None:
-        shutil.copyfile(self.root / key, dest)
+        blob = self.root / key
+        if blob.is_symlink() or not blob.resolve().is_relative_to(self.root.resolve()):
+            raise BlobError("blob 路径越界")
+        shutil.copyfile(blob, dest)
 
     def describe(self) -> dict:
         return {"store": "local", "blobs": len(self.known())}
@@ -188,17 +218,34 @@ class QuarkBlobs:
 
     def ensure_many(self, items: list[tuple[str, Path]]) -> None:
         known = known_keys()
-        pending = [(sha, src) for sha, src in items if sha not in known]
+        pending_map: dict[str, Path] = {}
+        for sha, src in items:
+            if sha not in known and sha not in pending_map:
+                pending_map[sha] = src
+        pending = list(pending_map.items())
         for i in range(0, len(pending), self.batch):
             chunk = pending[i:i + self.batch]
-            uploaded = upload_files([src for _, src in chunk], self.dir_fid())
-            by_name = {src.name: (sha, src) for sha, src in chunk}
-            for name, fid in uploaded.items():
-                sha, src = by_name[name]
-                register(sha, fid, src.stat().st_size)
-            if len(uploaded) != len(chunk):
-                missing = sorted(set(by_name) - set(uploaded))
-                raise BlobError(f"upload: {len(missing)} 个 blob 未确认：{missing[:3]}")
+            with tempfile.TemporaryDirectory(prefix="quark-upload-") as stage:
+                stage_dir = Path(stage)
+                by_name: dict[str, tuple[str, Path]] = {}
+                paths: list[Path] = []
+                for sha, src in chunk:
+                    staged = stage_dir / sha
+                    try:
+                        os.link(src, staged)
+                    except OSError:
+                        shutil.copyfile(src, staged)
+                    by_name[sha] = (sha, src)
+                    paths.append(staged)
+                uploaded = upload_files(paths, self.dir_fid())
+                for name, fid in uploaded.items():
+                    if name not in by_name:
+                        raise BlobError(f"upload 返回未登记文件名：{name}")
+                    sha, src = by_name[name]
+                    register(sha, fid, src.stat().st_size)
+                if len(uploaded) != len(chunk):
+                    missing = sorted(set(by_name) - set(uploaded))
+                    raise BlobError(f"upload: {len(missing)} 个 blob 未确认：{missing[:3]}")
 
     def fetch_into(self, key: str, dest: Path) -> None:
         with db.conn() as c:

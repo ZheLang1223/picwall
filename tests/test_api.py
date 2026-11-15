@@ -194,5 +194,192 @@ class AtlasPageTest(ApiTestBase):
             self.assertEqual(r_anon.status_code, 401)
 
 
+class MultiDimensionalSearchTest(ApiTestBase):
+    """验证多维搜索接口 (q_scope: all/text/comment/tag/author) 及其筛选隔离性。"""
+
+    def setUp(self):
+        super().setUp()
+        # 为 demo0000 打上特定标签用于测试
+        db.set_post_tags("demo0000", add=["海边日落"])
+
+    async def test_search_scopes_isolation(self):
+        async with self.client() as c:
+            # 1. 搜文本（内容）
+            # demo0000 的 text 含有 "山间"，但 author 是 "演示作者 · A"，comment 含 "北坡观景台"，tag 含 "海边日落"
+            # 当 q="山间" 且 q_scope="text" -> 命中
+            r = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=text")
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r.json()["posts"]))
+
+            # 当 q="北坡观景台"（仅在评论中）且 q_scope="text" -> 应该查不到
+            r = await c.get("/api/posts?status=all&group=all&q=北坡观景台&q_scope=text")
+            self.assertEqual(len(r.json()["posts"]), 0)
+
+            # 2. 搜评论 (comment)
+            # q="北坡观景台" 且 q_scope="comment" -> 应该命中 demo0000，且注入 comment_match
+            r = await c.get("/api/posts?status=all&group=all&q=北坡观景台&q_scope=comment")
+            self.assertEqual(r.status_code, 200)
+            posts = r.json()["posts"]
+            self.assertTrue(any(p["sid"] == "demo0000" for p in posts))
+            hit = next(p for p in posts if p["sid"] == "demo0000")
+            self.assertIn("北坡观景台", hit.get("comment_match", ""))
+
+            # q="山间"（正文词）且 q_scope="comment" -> 应该查不到
+            r = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=comment")
+            self.assertEqual(len(r.json()["posts"]), 0)
+
+            # 3. 搜标签 (tag)
+            # q="海边日落" 且 q_scope="tag" -> 应该命中 demo0000
+            r = await c.get("/api/posts?status=all&group=all&q=海边日落&q_scope=tag")
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r.json()["posts"]))
+
+            # q="山间" 且 q_scope="tag" -> 应该查不到
+            r = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=tag")
+            self.assertEqual(len(r.json()["posts"]), 0)
+
+            # 4. 搜博主 (author)
+            # q="演示作者 · A" 且 q_scope="author" -> 应该命中 demo0000
+            r = await c.get("/api/posts?status=all&group=all&q=演示作者 · A&q_scope=author")
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r.json()["posts"]))
+
+            # q="山间" 且 q_scope="author" -> 应该查不到
+            r = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=author")
+            self.assertEqual(len(r.json()["posts"]), 0)
+
+            # 5. 搜全部 (all)
+            # 文本、评论、标签、博主任何维度命中，q_scope="all" 均应命中
+            r_text = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=all")
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r_text.json()["posts"]))
+
+            r_cmt = await c.get("/api/posts?status=all&group=all&q=北坡观景台&q_scope=all")
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r_cmt.json()["posts"]))
+
+            r_tag = await c.get("/api/posts?status=all&group=all&q=海边日落&q_scope=all")
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r_tag.json()["posts"]))
+
+            r_auth = await c.get("/api/posts?status=all&group=all&q=演示作者 · A&q_scope=all")
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r_auth.json()["posts"]))
+
+            # 6. comment_match 隔离性：仅在 all 或 comment 维度注入，text 维度不注入
+            r_text_nomatch = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=text")
+            p_text = next(p for p in r_text_nomatch.json()["posts"] if p["sid"] == "demo0000")
+            self.assertNotIn("comment_match", p_text)
+
+            # 7. q_scope 容错与大小写归一化
+            r_ci = await c.get("/api/posts?status=all&group=all&q=山间&q_scope=TEXT")
+            self.assertTrue(any(p["sid"] == "demo0000" for p in r_ci.json()["posts"]))
+
+    async def test_search_live_endpoint(self):
+        """验证实时搜索接口 (/api/search/live) 快速返回多维命中结果。"""
+        async with self.client() as c:
+            # 1. 空查询返回空分类
+            r = await c.get("/api/search/live?q=")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["authors"], [])
+            self.assertEqual(data["tags"], [])
+            self.assertEqual(data["content"], [])
+            self.assertEqual(data["comments"], [])
+
+            # 2. q="山间" (正文) 命中 content
+            r = await c.get("/api/search/live?q=山间")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertTrue(any(item["sid"] == "demo0000" for item in data["content"]))
+            content_item = next(item for item in data["content"] if item["sid"] == "demo0000")
+            self.assertIn("山间", content_item["text"])
+            self.assertTrue(content_item["author"])
+
+            # 3. q="北坡观景台" (评论) 命中 comments
+            r = await c.get("/api/search/live?q=北坡观景台")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertTrue(any(item["sid"] == "demo0000" for item in data["comments"]))
+            comment_item = next(item for item in data["comments"] if item["sid"] == "demo0000")
+            self.assertIn("北坡观景台", comment_item["body"])
+
+            # 4. q="海边日落" (标签) 命中 tags
+            r = await c.get("/api/search/live?q=海边日落")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertTrue(any(item["tag"] == "海边日落" for item in data["tags"]))
+
+            # 5. q="演示作者" (博主) 命中 authors
+            r = await c.get("/api/search/live?q=演示作者")
+            self.assertEqual(r.status_code, 200)
+            data = r.json()
+            self.assertTrue(any("演示作者" in item["author"] for item in data["authors"]))
+            auth_item = next(item for item in data["authors"] if "演示作者" in item["author"])
+            self.assertTrue(auth_item["uid"])
+            self.assertTrue(auth_item["n"] >= 1)
+
+            # 6. q_scope 维度限定隔离性
+            # 当 q="山间" 且 q_scope="comment" 时，content 应该为空
+            r_scope = await c.get("/api/search/live?q=山间&q_scope=comment")
+            self.assertEqual(r_scope.status_code, 200)
+            self.assertEqual(r_scope.json()["content"], [])
+            self.assertEqual(r_scope.json()["authors"], [])
+            self.assertEqual(r_scope.json()["tags"], [])
+
+            # 7. 语法前缀容错支持：@博主、#标签、//评论（显式 scope 与默认 scope=all 前缀推断）
+            r_prefix_auth = await c.get("/api/search/live", params={"q": "@演示作者", "q_scope": "author"})
+            self.assertEqual(r_prefix_auth.status_code, 200)
+            self.assertTrue(any("演示作者" in item["author"] for item in r_prefix_auth.json()["authors"]))
+
+            r_prefix_tag = await c.get("/api/search/live", params={"q": "#海边日落", "q_scope": "tag"})
+            self.assertEqual(r_prefix_tag.status_code, 200)
+            self.assertTrue(any(item["tag"] == "海边日落" for item in r_prefix_tag.json()["tags"]))
+
+            # scope=all 下携带 @/# 前缀智能分类推断
+            r_auto_auth = await c.get("/api/search/live", params={"q": "@演示作者"})
+            self.assertEqual(r_auto_auth.status_code, 200)
+            self.assertTrue(any("演示作者" in item["author"] for item in r_auto_auth.json()["authors"]))
+
+            r_auto_tag = await c.get("/api/search/live", params={"q": "#海边日落"})
+            self.assertEqual(r_auto_tag.status_code, 200)
+            self.assertTrue(any(item["tag"] == "海边日落" for item in r_auto_tag.json()["tags"]))
+
+            r_auto_cmt = await c.get("/api/search/live", params={"q": "//北坡观景台"})
+            self.assertEqual(r_auto_cmt.status_code, 200)
+            self.assertTrue(any(item["sid"] == "demo0000" for item in r_auto_cmt.json()["comments"]))
+
+            # 8. 内容与评论返回字段契约（缩略图、日期、正文、作者等完整性）
+            r_all = await c.get("/api/search/live?q=山间")
+            content_row = r_all.json()["content"][0]
+            self.assertIn("created_at", content_row)
+            self.assertIn("thumb", content_row)
+            self.assertIn("sid", content_row)
+            self.assertIn("text", content_row)
+
+            r_cmt_all = await c.get("/api/search/live?q=北坡观景台")
+            comment_row = r_cmt_all.json()["comments"][0]
+            self.assertIn("created_at", comment_row)
+            self.assertIn("comment_id", comment_row)
+            self.assertIn("sid", comment_row)
+            self.assertIn("body", comment_row)
+
+    async def test_timeline_outline_scope(self):
+        async with self.client() as c:
+            # timeline/outline 按 tag 维度统计
+            r = await c.get("/api/timeline/outline?status=all&group=all&q=海边日落&q_scope=tag")
+            self.assertEqual(r.status_code, 200)
+            days = r.json()["days"]
+            self.assertTrue(len(days) >= 1)
+            self.assertTrue(sum(d["total"] for d in days) >= 1)
+
+            # timeline/outline 按 comment 维度统计
+            r_cmt = await c.get("/api/timeline/outline?status=all&group=all&q=北坡观景台&q_scope=comment")
+            self.assertEqual(r_cmt.status_code, 200)
+            days_cmt = r_cmt.json()["days"]
+            self.assertTrue(len(days_cmt) >= 1)
+
+            # 不存在的 tag 返回空日集
+            r_empty = await c.get("/api/timeline/outline?status=all&group=all&q=不存在的标签&q_scope=tag")
+            self.assertEqual(len(r_empty.json()["days"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

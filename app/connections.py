@@ -58,35 +58,40 @@ def record(source: str, credential: str, state: str, error: str = "", updated=Fa
     if current(source) != credential:
         return
     prefix = _prefix(source)
-    db.set_meta(prefix + "_state", state)
-    db.set_meta(prefix + "_error", error)
-    db.set_meta(prefix + "_fingerprint", hashlib.sha256(credential.encode()).hexdigest())
     now = datetime.now(config.NOW_TZ).isoformat(timespec="seconds")
-    if state != "saved":
-        db.set_meta(prefix + "_checked_at", now)
-    else:
-        db.set_meta(prefix + "_checked_at", "")
+    rows = [
+        (prefix + "_state", state),
+        (prefix + "_error", error),
+        (prefix + "_fingerprint", hashlib.sha256(credential.encode()).hexdigest()),
+        (prefix + "_checked_at", now if state != "saved" else ""),
+    ]
     if updated:
-        db.set_meta(prefix + "_updated_at", now)
+        rows.append((prefix + "_updated_at", now))
+    with db._write_lock, db.conn() as c:
+        c.executemany("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", rows)
 
 
 def status(source: str) -> dict:
     credential = current(source)
     prefix = _prefix(source)
     src = config.cookie_source() if source == "weibo" else "web" if credential else "none"
-    fingerprint = db.get_meta(prefix + "_fingerprint")
+    keys = [prefix + "_fingerprint", prefix + "_state", prefix + "_error", prefix + "_updated_at", prefix + "_checked_at"]
+    with db.conn() as c:
+        meta = dict(c.execute(f"SELECT k,v FROM meta WHERE k IN ({','.join('?' * len(keys))})", keys).fetchall())
+    fingerprint = meta.get(prefix + "_fingerprint", "")
     stale = bool(fingerprint and fingerprint != hashlib.sha256(credential.encode()).hexdigest())
-    state = db.get_meta(prefix + "_state") if credential and not stale else ""
+    state = meta.get(prefix + "_state", "") if credential and not stale else ""
     return {"state": state if state in ("ok", "expired", "error", "saved") else "saved" if credential else "unset",
-            "source": src, "error": db.get_meta(prefix + "_error") if credential and not stale else "",
-            "updated_at": db.get_meta(prefix + "_updated_at") if not stale else "",
-            "checked_at": db.get_meta(prefix + "_checked_at") if credential and not stale else ""}
+            "source": src, "error": meta.get(prefix + "_error", "") if credential and not stale else "",
+            "updated_at": meta.get(prefix + "_updated_at", "") if not stale else "",
+            "checked_at": meta.get(prefix + "_checked_at", "") if credential and not stale else ""}
 
 
 async def probe(source: str, credential: str, ct0: str = "") -> dict:
     """验证连接只请求分组／时间线，不抓取或导入帖子。"""
     try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=False) as client:
+        proxy = config.X_PROXY_URL or None if source == "x" else None
+        async with httpx.AsyncClient(timeout=12, follow_redirects=False, proxy=proxy) as client:
             if source == "weibo":
                 await weibo.all_groups(client, credential)
             else:

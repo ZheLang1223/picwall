@@ -15,8 +15,10 @@ post_tags 是用户自定义标签（sid,tag），与决定状态/收藏正交�
 """
 import hashlib
 import json
+import os
 import sqlite3
 import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta
 
 from . import config
@@ -27,12 +29,26 @@ from .gate import WriteLock
 _write_lock = WriteLock()
 write_lock = _write_lock   # 规范公开别名，兼容原有 _write_lock
 
+# shuffle 全序缓存：按 (db_sig, where, args, seed) 命中，写操作或外部修改自动失效。
+_SHUFFLE_CACHE: OrderedDict[tuple, tuple[tuple, list[tuple[str, str]]]] = OrderedDict()
+_SHUFFLE_CACHE_MAX = 32
+_shuffle_lock = threading.Lock()
+_shuffle_epoch = 0
+
+
+def _bump_shuffle_epoch() -> None:
+    global _shuffle_epoch
+    with _shuffle_lock:
+        _shuffle_epoch += 1
+
+
 # schema 版本：v1 初始；v2 favorite/source；v3 缺图重试与分页；
 # v4 决定版本、收录与媒体校验；v5 设备配对与会话；v6 回看计数（keep_count 等）；
 # v7 帖子评论（单人批注时间线）；v9 X 本地分组（xg: 组与成员映射）；
-# v10 帖子标签（post_tags，用户自定义归类维度）；v11 视频媒体（pics.kind/dur_ms/poster_url）。
+# v10 帖子标签（post_tags，用户自定义归类维度）；v11 视频媒体（pics.kind/dur_ms/poster_url）；
+# v12 热路径索引与 FTS5 trigram 全文检索；v13 保持 idx_posts_status 晚于复合状态索引 + ANALYZE。
 # 迁移全部走「缺列补列 + 幂等回填」，老库升级不丢数据；版本号只作诊断展示，不作为分支依据。
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 13
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS posts (
@@ -62,12 +78,11 @@ CREATE TABLE IF NOT EXISTS pics (
   h     INTEGER,
   url   TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_pics_sid ON pics(sid);
 CREATE INDEX IF NOT EXISTS idx_pics_file ON pics(file);
 CREATE INDEX IF NOT EXISTS idx_posts_list ON posts(list_id);
-CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_status_cursor ON posts(status,created_at DESC,sid);
+CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status);
 CREATE TABLE IF NOT EXISTS groups (
   list_id  TEXT PRIMARY KEY,
   name     TEXT,
@@ -213,6 +228,7 @@ def conn() -> sqlite3.Connection:
 def init_db() -> None:
     config.ensure_dirs()
     with _write_lock, conn() as c:
+        current = 0
         if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").fetchone():
             version = c.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone()
             try:
@@ -260,7 +276,7 @@ def init_db() -> None:
         c.execute("UPDATE posts SET source='weibo' WHERE source='' OR source IS NULL")
         if "text_complete" not in cols:
             c.execute("UPDATE posts SET text_complete=0 WHERE is_long=1 AND COALESCE(text_full,'')='' ")
-        c.execute("INSERT OR IGNORE INTO post_groups SELECT sid,list_id FROM posts WHERE list_id IS NOT NULL")
+        c.execute("INSERT OR IGNORE INTO post_groups SELECT sid,list_id FROM posts WHERE list_id IS NOT NULL AND list_id != ''")
         for table, additions in (
             ("pics", (("position", "INTEGER"), ("actual_url", "TEXT DEFAULT ''"),
                       ("quality", "TEXT DEFAULT 'unknown'"), ("media_id", "TEXT DEFAULT ''"),
@@ -275,6 +291,74 @@ def init_db() -> None:
                 if col not in existing:
                     c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
         c.execute("UPDATE pics SET position=(SELECT COUNT(*) FROM pics old WHERE old.sid=pics.sid AND old.id<pics.id) WHERE position IS NULL")
+        # 迁移/新建统一补齐热查询索引与 FTS5 trigram 虚拟表（必须在补列之后创建）
+        c.execute("DROP INDEX IF EXISTS idx_pics_sid")
+        for idx_ddl in (
+            "CREATE INDEX IF NOT EXISTS idx_pics_sid_pos ON pics(sid,position,id,thumb,file)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_fav_cursor ON posts(created_at DESC,sid) WHERE favorite=1",
+            "CREATE INDEX IF NOT EXISTS idx_posts_status_keep ON posts(status,keep_count DESC,created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_author_source ON posts(COALESCE(NULLIF(source,''),'weibo'),uid,created_at DESC,fetched_at DESC,sid DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_posts_src_uid_latest ON posts(source,uid,created_at DESC,fetched_at DESC,sid)",
+            "CREATE INDEX IF NOT EXISTS idx_post_comments_created ON post_comments(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_review_events_action_created ON review_events(action,created_at)",
+        ):
+            c.execute(idx_ddl)
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS sync_post_groups_insert "
+            "AFTER INSERT ON posts WHEN NEW.list_id IS NOT NULL AND NEW.list_id != '' "
+            "BEGIN INSERT OR IGNORE INTO post_groups(sid,list_id) VALUES(NEW.sid,NEW.list_id); END"
+        )
+        had_posts_fts = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='posts_fts'"
+        ).fetchone() is not None
+        had_comments_fts = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='post_comments_fts'"
+        ).fetchone() is not None
+        c.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5("
+            "text, author, uid, content='posts', content_rowid='rowid', tokenize='trigram')"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_ai AFTER INSERT ON posts BEGIN "
+            "INSERT INTO posts_fts(rowid,text,author,uid) "
+            "VALUES(new.rowid,COALESCE(new.text,''),COALESCE(new.author,''),COALESCE(new.uid,'')); END"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_ad AFTER DELETE ON posts BEGIN "
+            "INSERT INTO posts_fts(posts_fts,rowid,text,author,uid) "
+            "VALUES('delete',old.rowid,COALESCE(old.text,''),COALESCE(old.author,''),COALESCE(old.uid,'')); END"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS posts_fts_au AFTER UPDATE OF text,author,uid ON posts BEGIN "
+            "INSERT INTO posts_fts(posts_fts,rowid,text,author,uid) "
+            "VALUES('delete',old.rowid,COALESCE(old.text,''),COALESCE(old.author,''),COALESCE(old.uid,'')); "
+            "INSERT INTO posts_fts(rowid,text,author,uid) "
+            "VALUES(new.rowid,COALESCE(new.text,''),COALESCE(new.author,''),COALESCE(new.uid,'')); END"
+        )
+        c.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS post_comments_fts USING fts5("
+            "body, content='post_comments', content_rowid='id', tokenize='trigram')"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS post_comments_fts_ai AFTER INSERT ON post_comments BEGIN "
+            "INSERT INTO post_comments_fts(rowid,body) VALUES(new.id,COALESCE(new.body,'')); END"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS post_comments_fts_ad AFTER DELETE ON post_comments BEGIN "
+            "INSERT INTO post_comments_fts(post_comments_fts,rowid,body) "
+            "VALUES('delete',old.id,COALESCE(old.body,'')); END"
+        )
+        c.execute(
+            "CREATE TRIGGER IF NOT EXISTS post_comments_fts_au AFTER UPDATE OF body ON post_comments BEGIN "
+            "INSERT INTO post_comments_fts(post_comments_fts,rowid,body) "
+            "VALUES('delete',old.id,COALESCE(old.body,'')); "
+            "INSERT INTO post_comments_fts(rowid,body) VALUES(new.id,COALESCE(new.body,'')); END"
+        )
+        if not had_posts_fts:
+            c.execute("INSERT INTO posts_fts(posts_fts) VALUES('rebuild')")
+        if not had_comments_fts:
+            c.execute("INSERT INTO post_comments_fts(post_comments_fts) VALUES('rebuild')")
+        _bump_shuffle_epoch()
         c.execute("INSERT OR IGNORE INTO archive_entries(file,day) SELECT substr(k,10),v FROM meta WHERE k LIKE 'exported:%' AND v!=''")
         # 老库里已处于 discarded 的行补计时起点（只补 NULL，不重置已有计时）
         c.execute("UPDATE posts SET discarded_at=? "
@@ -304,6 +388,13 @@ def init_db() -> None:
                                  "(status='discarded' AND (discarded_at IS NULL OR julianday(discarded_at) IS NULL OR kept_at IS NOT NULL))").fetchone()[0]
         if time_invalid:
             raise ValueError(f"迁移停止：{time_invalid} 条决定时间不一致，需要先修复副本")
+        if current < 13:
+            # SQLite 无统计或同选择度并列时倾向选后创建的同前缀索引；确保 idx_posts_status 在
+            # idx_posts_status_cursor / idx_posts_status_keep 之后，避免全状态 LIKE 误走 keep 索引随机寻址。
+            c.execute("DROP INDEX IF EXISTS idx_posts_status")
+            c.execute("CREATE INDEX idx_posts_status ON posts(status)")
+            if c.execute("SELECT 1 FROM posts LIMIT 1").fetchone():
+                c.execute("ANALYZE")
         c.execute("INSERT OR IGNORE INTO schema_migrations VALUES(?,?,?)",
                   (_SCHEMA_VERSION, datetime.now(config.NOW_TZ).isoformat(),
                    json.dumps({"merged_duplicate_pics": duplicates})))
@@ -336,6 +427,7 @@ def insert_post(p: dict, list_id: str) -> None:
         c.execute("UPDATE posts SET handle=?,text_complete=?,avatar_url=? WHERE sid=?",
                   (p.get("handle", ""), int(p.get("text_complete", not p.get("is_long", 0))),
                    p.get("avatar_url", p.get("avatar", "")) if not p.get("avatar", "").startswith("/media/") else p.get("avatar_url", ""), p["sid"]))
+    _bump_shuffle_epoch()
 
 
 def author_key(source: str, uid: str) -> str:
@@ -358,6 +450,61 @@ def observe_post(p: dict, list_id: str):
     with _write_lock, conn() as c:
         if c.execute("SELECT 1 FROM posts WHERE sid=?", (p["sid"],)).fetchone():
             _link_group_locked(c, p, list_id)
+    _bump_shuffle_epoch()
+
+
+def observe_posts(posts: list[dict], list_id: str) -> int:
+    """批量收录观测与分组关联：整批仅一次 _write_lock + 一次提交，消除逐条 WAL fsync。"""
+    unique = {}
+    for p in posts:
+        sid = p.get("sid")
+        if sid and sid not in unique:
+            unique[sid] = p
+    if not unique:
+        return 0
+    now = datetime.now(config.NOW_TZ).isoformat()
+    sids = list(unique.keys())
+    existing: set[str] = set()
+    with _write_lock, conn() as c:
+        for idx in range(0, len(sids), 400):
+            chunk = sids[idx:idx + 400]
+            qmarks = ",".join("?" * len(chunk))
+            existing.update(
+                r[0] for r in c.execute(f"SELECT sid FROM posts WHERE sid IN ({qmarks})", chunk)
+            )
+        targets = [sid for sid in sids if sid in existing]
+        if targets:
+            extra_groups = [
+                r[0] for r in c.execute(
+                    "SELECT list_id FROM group_members WHERE member_id=?", (list_id,)
+                )
+            ]
+            c.executemany(
+                "INSERT OR IGNORE INTO post_groups VALUES(?,?)",
+                [(sid, list_id) for sid in targets],
+            )
+            if extra_groups:
+                c.executemany(
+                    "INSERT OR IGNORE INTO post_groups VALUES(?,?)",
+                    [(sid, gid) for sid in targets for gid in extra_groups],
+                )
+            c.executemany(
+                "INSERT INTO post_observations VALUES(?,?,?,?,?) "
+                "ON CONFLICT(sid,list_id,via) DO UPDATE SET text=excluded.text,observed_at=excluded.observed_at",
+                [
+                    (
+                        sid,
+                        list_id,
+                        unique[sid].get("via", ""),
+                        unique[sid].get("text", ""),
+                        unique[sid].get("fetched_at") or now,
+                    )
+                    for sid in targets
+                ],
+            )
+    if targets:
+        _bump_shuffle_epoch()
+    return len(targets)
 
 
 def insert_pic(sid: str, file: str, thumb: str, w: int, h: int, url: str,
@@ -367,17 +514,62 @@ def insert_pic(sid: str, file: str, thumb: str, w: int, h: int, url: str,
                            poster_url=poster_url)
 
 
-def _insert_pic_locked(sid: str, file: str, thumb: str, w: int, h: int, url: str,
-                       kind: str = "photo", dur_ms: int = 0, poster_url: str = "") -> None:
-    """已持 _write_lock 时用：供「写文件 + 插行」跨函数临界区组合（见 crawler._store_post）。
+def _insert_pic_locked(
+    sid: str,
+    file: str,
+    thumb: str,
+    w: int,
+    h: int,
+    url: str,
+    kind: str = "photo",
+    dur_ms: int = 0,
+    poster_url: str = "",
+    position: int | None = None,
+    media_id: str = "",
+    actual_url: str = "",
+    quality: str = "",
+    replace_url: bool = False,
+) -> None:
+    """已持 _write_lock 时用：供「写文件 + 插行」跨函数单一事务临界区组合（见 crawler._store_post）。
 
     kind='video' 时 w/h 存宽高比整数（aspect_w/aspect_h），thumb 存海报缩略图路径，
     dur_ms 存时长毫秒、poster_url 存海报原址（缺图补抓时海报可重下，内容寻址自动去重）。
     """
     with conn() as c:
-        c.execute("INSERT OR IGNORE INTO pics(sid,file,thumb,w,h,url,kind,dur_ms,poster_url) "
-                  "VALUES(?,?,?,?,?,?,?,?,?)",
-                  (sid, file, thumb, w, h, url, kind, int(dur_ms or 0), poster_url))
+        if replace_url:
+            c.execute("DELETE FROM pics WHERE sid=? AND url=?", (sid, url))
+        if position is None:
+            c.execute(
+                "INSERT OR IGNORE INTO pics(sid,file,thumb,w,h,url,kind,dur_ms,poster_url) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (sid, file, thumb, w, h, url, kind, int(dur_ms or 0), poster_url),
+            )
+        else:
+            c.execute(
+                "INSERT OR IGNORE INTO pics"
+                "(sid,file,thumb,w,h,url,kind,dur_ms,poster_url,position,media_id,actual_url,quality) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    sid,
+                    file,
+                    thumb,
+                    w,
+                    h,
+                    url,
+                    kind,
+                    int(dur_ms or 0),
+                    poster_url,
+                    int(position),
+                    media_id,
+                    actual_url,
+                    quality,
+                ),
+            )
+            if quality:
+                c.execute(
+                    "UPDATE pics SET position=?,media_id=?,actual_url=?,quality=? WHERE sid=? AND file=?",
+                    (int(position), media_id, actual_url, quality, sid, file),
+                )
 
 
 def mark_snapshot(sid: str, status: str) -> dict | None:
@@ -399,6 +591,7 @@ def mark_snapshot(sid: str, status: str) -> dict | None:
                    now if status == "kept" else None, after["decision_version"], sid))
         c.execute("INSERT OR REPLACE INTO decision_undos VALUES(?,?,?)",
                   (sid, after["decision_version"], json.dumps(before)))
+    _bump_shuffle_epoch()
     return {"previous": before, "decision": after}
 
 
@@ -414,6 +607,7 @@ def restore_snapshot(sid: str, previous: dict, expected: dict) -> bool:
         c.execute("UPDATE posts SET status=?,kept_at=?,discarded_at=?,decision_version=decision_version+1 WHERE sid=?",
                   (original["status"], original["kept_at"], original["discarded_at"], sid))
         c.execute("DELETE FROM decision_undos WHERE sid=?", (sid,))
+    _bump_shuffle_epoch()
     return True
 
 
@@ -434,6 +628,7 @@ def set_status_bulk(sids: list[str], status: str) -> None:
                       "last_confirm_at=COALESCE(?, last_confirm_at), decision_version=decision_version+1 WHERE sid=?",
                       [(status, kept_at, discarded_at, kept_at, s) for s in sids])
         c.executemany("DELETE FROM decision_undos WHERE sid=?", [(s,) for s in sids])
+    _bump_shuffle_epoch()
 
 
 def set_favorite(sid: str, favorite: bool) -> None:
@@ -445,6 +640,7 @@ def set_favorite(sid: str, favorite: bool) -> None:
                   "ELSE discarded_at END WHERE sid=?",
                   (int(favorite), int(favorite), int(favorite),
                    datetime.now(config.NOW_TZ).isoformat(timespec="seconds"), sid))
+    _bump_shuffle_epoch()
 
 
 def list_comments(sid: str) -> list[dict]:
@@ -489,6 +685,7 @@ def add_comment(sid: str, body: str, created_at: str | None = None) -> dict:
                         (sid, body, now))
         row = c.execute("SELECT id,body,created_at,updated_at FROM post_comments WHERE id=?",
                         (cur.lastrowid,)).fetchone()
+    _bump_shuffle_epoch()
     return dict(row)
 
 
@@ -502,12 +699,14 @@ def update_comment(sid: str, comment_id: int, body: str) -> dict | None:
             return None
         row = c.execute("SELECT id,body,created_at,updated_at FROM post_comments WHERE id=?",
                         (comment_id,)).fetchone()
+    _bump_shuffle_epoch()
     return dict(row)
 
 
 def delete_comment(sid: str, comment_id: int) -> bool:
     with _write_lock, conn() as c:
         cur = c.execute("DELETE FROM post_comments WHERE id=? AND sid=?", (comment_id, sid))
+    _bump_shuffle_epoch()
     return cur.rowcount == 1
 
 
@@ -559,6 +758,7 @@ def set_post_tags(sid: str, add=None, remove=None) -> list[str]:
                       [(sid, t, now) for t in adds])
         rows = c.execute("SELECT tag FROM post_tags WHERE sid=? ORDER BY created_at,tag",
                          (sid,)).fetchall()
+    _bump_shuffle_epoch()
     return [r[0] for r in rows]
 
 
@@ -601,6 +801,8 @@ def set_post_tags_bulk(sids: list[str], add=None, remove=None) -> dict:
                     "INSERT OR IGNORE INTO post_tags(sid,tag,created_at) VALUES(?,?,?)",
                     [(sid, t, now) for sid in good for t in adds])
         updated = len(good)
+    if good:
+        _bump_shuffle_epoch()
     return {"updated": updated, "skipped": skipped}
 
 
@@ -625,6 +827,149 @@ def list_tags() -> list[dict]:
             "SELECT pt.tag tag, COUNT(*) n FROM post_tags pt "
             "JOIN posts p ON p.sid = pt.sid GROUP BY pt.tag ORDER BY n DESC, pt.tag").fetchall()
     return [{"tag": r["tag"], "n": r["n"]} for r in rows]
+
+
+def search_live(q: str, q_scope: str = "all", limit: int = 15) -> dict:
+    """实时搜索：在 SQLite 中快速跨作者、标签、内容与评论多维度检索。
+
+    q_scope: all/author/tag/text/comment
+    """
+    from .queries import can_use_trigram, fts_phrase, like_contains, parse_search_query
+
+    scope, text = parse_search_query(q, q_scope)
+    if not text:
+        return {"ok": True, "authors": [], "tags": [], "content": [], "comments": []}
+
+    like = like_contains(text)
+    use_fts = can_use_trigram(text)
+    phrase = fts_phrase(text) if use_fts else ""
+
+    authors: list[dict] = []
+    tags: list[dict] = []
+    content: list[dict] = []
+    comments: list[dict] = []
+
+    try:
+        fetch_limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        fetch_limit = 15
+
+    with conn() as c:
+        if scope in ("all", "author"):
+            if use_fts:
+                rows = c.execute(
+                    "SELECT source, uid, MAX(author) AS author, MAX(avatar) AS avatar, COUNT(*) AS n "
+                    "FROM posts "
+                    "WHERE rowid IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?) AND uid != '' "
+                    "GROUP BY source, uid "
+                    "ORDER BY n DESC, MAX(created_at) DESC LIMIT ?",
+                    (f"{{author uid}} : {phrase}", fetch_limit),
+                ).fetchall()
+            else:
+                rows = c.execute(
+                    "SELECT source, uid, MAX(author) AS author, MAX(avatar) AS avatar, COUNT(*) AS n "
+                    "FROM posts "
+                    "WHERE (author LIKE ? ESCAPE '\\' OR uid LIKE ? ESCAPE '\\') AND uid != '' "
+                    "GROUP BY source, uid "
+                    "ORDER BY n DESC, MAX(created_at) DESC LIMIT ?",
+                    (like, like, fetch_limit),
+                ).fetchall()
+            authors = [
+                {
+                    "uid": author_key(r["source"], r["uid"]),
+                    "source_uid": r["uid"],
+                    "source": r["source"] or "weibo",
+                    "author": r["author"] or "",
+                    "avatar": r["avatar"] or "",
+                    "n": r["n"] or 0,
+                }
+                for r in rows
+            ]
+
+        if scope in ("all", "tag"):
+            rows = c.execute(
+                "SELECT tag, COUNT(*) AS n "
+                "FROM post_tags "
+                "WHERE tag LIKE ? ESCAPE '\\' "
+                "GROUP BY tag "
+                "ORDER BY n DESC LIMIT ?",
+                (like, fetch_limit),
+            ).fetchall()
+            tags = [{"tag": r["tag"], "n": r["n"] or 0} for r in rows]
+
+        if scope in ("all", "text"):
+            text_where = (
+                "p.rowid IN (SELECT rowid FROM posts_fts WHERE posts_fts MATCH ?)"
+                if use_fts
+                else "p.text LIKE ? ESCAPE '\\'"
+            )
+            text_arg = f"text : {phrase}" if use_fts else like
+            rows = c.execute(
+                "WITH hits AS ("
+                "SELECT p.sid, p.author, p.avatar, p.text, p.created_at "
+                "FROM posts p "
+                f"WHERE {text_where} "
+                "ORDER BY p.created_at DESC LIMIT ?"
+                ") "
+                "SELECT h.sid, h.author, h.avatar, h.text, h.created_at, pic.thumb, pic.file "
+                "FROM hits h "
+                "LEFT JOIN pics pic ON pic.id = (SELECT id FROM pics WHERE sid = h.sid ORDER BY position, id LIMIT 1) "
+                "ORDER BY h.created_at DESC",
+                (text_arg, fetch_limit),
+            ).fetchall()
+            content = [
+                {
+                    "sid": r["sid"],
+                    "author": r["author"] or "",
+                    "avatar": r["avatar"] or "",
+                    "text": r["text"] or "",
+                    "created_at": r["created_at"] or "",
+                    "thumb": r["thumb"] or r["file"] or "",
+                }
+                for r in rows
+            ]
+
+        if scope in ("all", "comment"):
+            cmt_where = (
+                "pc.id IN (SELECT rowid FROM post_comments_fts WHERE post_comments_fts MATCH ?)"
+                if use_fts
+                else "pc.body LIKE ? ESCAPE '\\'"
+            )
+            cmt_arg = f"body : {phrase}" if use_fts else like
+            rows = c.execute(
+                "WITH hits AS ("
+                "SELECT pc.id AS comment_id, pc.sid, pc.body, p.author, p.avatar, pc.created_at "
+                "FROM post_comments pc "
+                "JOIN posts p ON p.sid = pc.sid "
+                f"WHERE {cmt_where} "
+                "ORDER BY pc.created_at DESC LIMIT ?"
+                ") "
+                "SELECT h.comment_id, h.sid, h.body, h.author, h.avatar, h.created_at, pic.thumb, pic.file "
+                "FROM hits h "
+                "LEFT JOIN pics pic ON pic.id = (SELECT id FROM pics WHERE sid = h.sid ORDER BY position, id LIMIT 1) "
+                "ORDER BY h.created_at DESC",
+                (cmt_arg, fetch_limit),
+            ).fetchall()
+            comments = [
+                {
+                    "sid": r["sid"],
+                    "comment_id": r["comment_id"],
+                    "body": r["body"] or "",
+                    "author": r["author"] or "",
+                    "avatar": r["avatar"] or "",
+                    "created_at": r["created_at"] or "",
+                    "thumb": r["thumb"] or r["file"] or "",
+                }
+                for r in rows
+            ]
+
+    return {
+        "ok": True,
+        "authors": authors,
+        "tags": tags,
+        "content": content,
+        "comments": comments,
+    }
 
 
 def review_candidates(limit: int, window_days: int = 7) -> list[str]:
@@ -656,6 +1001,32 @@ def review_candidates(limit: int, window_days: int = 7) -> list[str]:
     return (a + b)[:limit]
 
 
+def _db_signature(c: sqlite3.Connection) -> tuple | None:
+    if c.in_transaction:
+        return None
+    p = config.DB_PATH
+    try:
+        st = os.stat(p)
+        db_sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    try:
+        wst = os.stat(f"{p}-wal")
+        wal_sig = (wst.st_mtime_ns, wst.st_size)
+    except OSError:
+        wal_sig = None
+    dv = c.execute("PRAGMA data_version").fetchone()[0]
+    prev_changes = getattr(_conn_local, "shuffle_changes", None)
+    prev_dv = getattr(_conn_local, "shuffle_dv", None)
+    if (prev_changes is not None and c.total_changes != prev_changes) or (
+        prev_dv is not None and dv != prev_dv
+    ):
+        _bump_shuffle_epoch()
+    _conn_local.shuffle_changes = c.total_changes
+    _conn_local.shuffle_dv = dv
+    return (_shuffle_epoch, str(p), db_sig, wal_sig)
+
+
 def shuffled_sids(where: str, args: list, seed: str) -> list[tuple[str, str]]:
     """随机档的虚拟全序：命中筛选的 sid 按 sha256(seed⊕sid) 升序排列。
 
@@ -666,10 +1037,24 @@ def shuffled_sids(where: str, args: list, seed: str) -> list[tuple[str, str]]:
     游标锚。随机档只影响展示序：回看选组、批量导出等业务序不受它牵动。
     """
     with conn() as c:
+        sig = _db_signature(c)
+        cache_key = (str(config.DB_PATH), where, tuple(args), seed)
+        if sig is not None:
+            with _shuffle_lock:
+                hit = _SHUFFLE_CACHE.get(cache_key)
+                if hit is not None and hit[0] == sig:
+                    _SHUFFLE_CACHE.move_to_end(cache_key)
+                    return list(hit[1])
         rows = c.execute(f"SELECT p.sid FROM posts p WHERE {where}", args).fetchall()
     keyed = [(hashlib.sha256(f"{seed}\x00{sid}".encode()).hexdigest(), sid)
              for (sid,) in rows]
     keyed.sort()
+    if sig is not None:
+        with _shuffle_lock:
+            _SHUFFLE_CACHE[cache_key] = (sig, list(keyed))
+            _SHUFFLE_CACHE.move_to_end(cache_key)
+            while len(_SHUFFLE_CACHE) > _SHUFFLE_CACHE_MAX:
+                _SHUFFLE_CACHE.popitem(last=False)
     return keyed
 
 
@@ -768,8 +1153,8 @@ def list_authors(group: str = "all", status: str = "all", source: str = "all") -
         where += " AND COALESCE(NULLIF(source,''),'weibo') = ?"
         args.append(source)
     if group != "all":
-        where += " AND (list_id = ? OR EXISTS(SELECT 1 FROM post_groups pg WHERE pg.sid=posts.sid AND pg.list_id=?))"
-        args += [group, group]
+        where += " AND EXISTS(SELECT 1 FROM post_groups pg WHERE pg.sid=posts.sid AND pg.list_id=?)"
+        args.append(group)
     if status == "all":
         n_expr, nargs = "COUNT(*)", []
     elif status == "favorites":
@@ -778,12 +1163,28 @@ def list_authors(group: str = "all", status: str = "all", source: str = "all") -
     else:
         n_expr, nargs = "SUM(CASE WHEN status = ? THEN 1 ELSE 0 END)", [status]
     with conn() as c:
-        rows = c.execute(
-            f"WITH ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY source,uid "
-            f"ORDER BY created_at DESC,fetched_at DESC,sid) rn FROM posts WHERE {where}) "
-            f"SELECT source,uid,MAX(CASE WHEN rn=1 THEN author END) author,"
-            f"MAX(CASE WHEN rn=1 THEN avatar END) avatar,MAX(created_at) last_at,{n_expr} n "
-            f"FROM ranked GROUP BY source,uid", args + nargs).fetchall()
+        if group == "all":
+            # 两段聚合：全表顺序 GROUP BY（+source,+uid 避开非覆盖随机寻址退化），
+            # 再按 idx_posts_src_uid_latest 为每作者寻址最新 1 帖拿 author/avatar。
+            rows = c.execute(
+                f"WITH agg AS (SELECT source,uid,MAX(created_at) last_at,{n_expr} n,"
+                f"(SELECT p2.sid FROM posts p2 WHERE p2.source=posts.source AND p2.uid=posts.uid "
+                f"ORDER BY p2.created_at DESC,p2.fetched_at DESC,p2.sid LIMIT 1) lsid "
+                f"FROM posts WHERE {where} GROUP BY +source,+uid) "
+                f"SELECT a.source,a.uid,p.author,p.avatar,a.last_at,a.n "
+                f"FROM agg a JOIN posts p ON p.sid=a.lsid",
+                nargs + args,
+            ).fetchall()
+        else:
+            rows = c.execute(
+                f"WITH ranked AS (SELECT source,uid,author,avatar,created_at,status,favorite,"
+                f"ROW_NUMBER() OVER(PARTITION BY source,uid ORDER BY created_at DESC,fetched_at DESC,sid) rn "
+                f"FROM posts WHERE {where}) "
+                f"SELECT source,uid,MAX(CASE WHEN rn=1 THEN author END) author,"
+                f"MAX(CASE WHEN rn=1 THEN avatar END) avatar,MAX(created_at) last_at,{n_expr} n "
+                f"FROM ranked GROUP BY source,uid",
+                args + nargs,
+            ).fetchall()
     return [{**dict(r), "source_uid": r["uid"], "uid": author_key(r["source"], r["uid"])} for r in rows]
 
 
@@ -823,8 +1224,59 @@ def x_handle_for_uid(uid: str) -> str:
     return row[0] if row else ""
 
 
+def _kiosk_group_context(c) -> tuple[set[str], list[dict], dict[tuple[str, str], set[str]], dict[str, list[str]]]:
+    """加载报刊亭博主大厅的分组上下文：活跃分组清单、按作者(source,uid)聚合的分组集合与 xg 成员映射。"""
+    group_rows = c.execute(
+        "SELECT list_id,name,active FROM groups ORDER BY added_at"
+    ).fetchall()
+    active_set: set[str] = set()
+    display_groups: list[dict] = []
+    for r in group_rows:
+        lid = str(r["list_id"])
+        if not r["active"]:
+            continue
+        active_set.add(lid)
+        if lid == "demo" or lid.startswith(("xu:", "wbu:")):
+            continue
+        src = "x" if lid.startswith(("x:", "xg:")) else "weibo"
+        display_groups.append({
+            "list_id": lid,
+            "name": r["name"],
+            "source": src,
+            "is_local": lid.startswith("xg:"),
+        })
+    display_set = {g["list_id"] for g in display_groups}
+
+    author_groups: dict[tuple[str, str], set[str]] = {}
+    if display_set:
+        for r in c.execute(
+            "SELECT DISTINCT p.source,p.uid,pg.list_id FROM post_groups pg "
+            "JOIN posts p ON p.sid=pg.sid WHERE p.uid != '' "
+            "UNION "
+            "SELECT DISTINCT source,uid,list_id FROM posts WHERE uid != '' AND COALESCE(list_id,'') != ''"
+        ):
+            lid = str(r["list_id"])
+            if lid in display_set:
+                src = "x" if r["source"] == "x" else "weibo"
+                author_groups.setdefault((src, r["uid"]), set()).add(lid)
+
+    member_xgs: dict[str, list[str]] = {}
+    for r in c.execute("SELECT list_id,member_id FROM group_members ORDER BY added_at"):
+        lid = str(r["list_id"])
+        if lid in display_set:
+            member_xgs.setdefault(str(r["member_id"]), []).append(lid)
+    return active_set, display_groups, author_groups, member_xgs
+
+
+def kiosk_meta() -> dict:
+    """报刊亭管理大厅外围元数据：当前可筛选与归属的活跃分组。"""
+    with conn() as c:
+        _, display_groups, _, _ = _kiosk_group_context(c)
+    return {"groups": display_groups}
+
+
 def kiosk_shelf() -> list[dict]:
-    """报刊亭书架：每位博主一本「杂志」——统计、更新节奏、封面/内页图与缓存签名。
+    """报刊亭书架：每位博主一本「杂志」——统计、节奏、封面/内页图、分组与关注状态。
 
     与 list_authors 同口径分作者（source,uid）；l30 按 SQLite 的 ISO 含时区解析。
     thumbs 取最新 4 帖的缩略图（/media/ 相对路径）；bio 只读 meta 缓存，本接口不出网。
@@ -832,39 +1284,61 @@ def kiosk_shelf() -> list[dict]:
     """
     with conn() as c:
         rows = c.execute(
-            "WITH ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY source,uid "
-            "ORDER BY created_at DESC,fetched_at DESC,sid) rn FROM posts WHERE uid != '') "
-            "SELECT source,uid,MAX(CASE WHEN rn=1 THEN author END) author,"
-            "MAX(CASE WHEN rn=1 THEN avatar END) avatar,"
-            "MAX(CASE WHEN rn=1 THEN COALESCE(NULLIF(handle,''),'') END) handle,"
-            "MAX(CASE WHEN rn=1 THEN text END) text,"
-            "MIN(created_at) first_at,MAX(created_at) last_at,COUNT(*) n,"
-            "COALESCE(SUM(status='kept'),0) kept,COALESCE(SUM(favorite),0) favorites,"
-            "COALESCE(SUM(datetime(created_at) >= datetime('now','-30 days')),0) l30 "
-            "FROM ranked GROUP BY source,uid").fetchall()
+            "WITH agg AS ("
+            "  SELECT source,uid,MIN(created_at) first_at,MAX(created_at) last_at,COUNT(*) n,"
+            "  COALESCE(SUM(status='kept'),0) kept,COALESCE(SUM(favorite),0) favorites,"
+            "  COALESCE(SUM(datetime(created_at) >= datetime('now','-30 days')),0) l30,"
+            "  (SELECT p2.sid FROM posts p2 WHERE p2.source=posts.source AND p2.uid=posts.uid "
+            "   ORDER BY p2.created_at DESC,p2.fetched_at DESC,p2.sid LIMIT 1) lsid "
+            "  FROM posts WHERE uid != '' GROUP BY +source,+uid"
+            ") "
+            "SELECT a.source,a.uid,p.author,p.avatar,"
+            "COALESCE(NULLIF(p.handle,''),'') handle,p.text,"
+            "a.first_at,a.last_at,a.n,a.kept,a.favorites,a.l30 "
+            "FROM agg a JOIN posts p ON p.sid=a.lsid"
+        ).fetchall()
         picks = c.execute(
-            "WITH ranked AS (SELECT source,uid,thumb,ROW_NUMBER() OVER("
-            "PARTITION BY source,uid ORDER BY created_at DESC,fetched_at DESC,sid) rn "
-            "FROM posts JOIN pics USING(sid) WHERE uid != '') "
-            "SELECT source,uid,thumb FROM ranked WHERE rn <= 4 "
-            "ORDER BY source,uid,rn").fetchall()
+            "SELECT p.source,p.uid,pc.thumb "
+            "FROM (SELECT DISTINCT source,uid FROM posts WHERE uid != '') a "
+            "JOIN posts p ON p.sid IN ("
+            "  SELECT p2.sid FROM posts p2 "
+            "  WHERE p2.source=a.source AND p2.uid=a.uid "
+            "    AND EXISTS(SELECT 1 FROM pics px WHERE px.sid=p2.sid AND px.thumb!='') "
+            "  ORDER BY p2.created_at DESC,p2.fetched_at DESC,p2.sid LIMIT 4"
+            ") "
+            "JOIN pics pc ON pc.sid=p.sid "
+            "WHERE pc.thumb != '' "
+            "ORDER BY p.source,p.uid,p.created_at DESC,p.fetched_at DESC,p.sid,pc.position,pc.id"
+        ).fetchall()
         bios = dict(c.execute("SELECT k,v FROM meta WHERE k LIKE 'author_bio:%'").fetchall())
+        active_set, display_groups, author_groups, member_xgs = _kiosk_group_context(c)
+    group_order = {g["list_id"]: idx for idx, g in enumerate(display_groups)}
     thumbs: dict[tuple[str, str], list[str]] = {}
     for r in picks:
-        if r["thumb"]:
-            thumbs.setdefault((r["source"], r["uid"]), []).append("/media/" + r["thumb"])
+        bucket = thumbs.setdefault((r["source"], r["uid"]), [])
+        if len(bucket) < 4:
+            bucket.append("/media/" + r["thumb"])
     shelf = []
     for r in rows:
+        src = "x" if r["source"] == "x" else "weibo"
         key = author_key(r["source"], r["uid"])
+        handle = r["handle"] or ""
+        follow_id = f"xu:{handle.lower()}" if (src == "x" and handle) else (f"wbu:{r['uid']}" if src == "weibo" else "")
+        followed = bool(follow_id and follow_id in active_set)
+        xg_groups = list(member_xgs.get(follow_id, [])) if follow_id.startswith("xu:") else []
+        gset = set(author_groups.get((src, r["uid"]), ())) | set(xg_groups)
+        groups = sorted(gset, key=lambda lid: group_order.get(lid, 9999))
         shelf.append({
-            "key": key, "source": "x" if r["source"] == "x" else "weibo", "uid": r["uid"],
-            "author": r["author"], "handle": r["handle"] or "",
+            "key": key, "source": src, "uid": r["uid"],
+            "author": r["author"], "handle": handle,
             "text": (r["text"] or "").strip(),
             "avatar": r["avatar"] if (r["avatar"] or "").startswith("/media/") else "",
             "thumbs": thumbs.get((r["source"], r["uid"]), []),
             "n": r["n"], "kept": r["kept"], "favorites": r["favorites"], "l30": r["l30"],
             "first_at": (r["first_at"] or "")[:10], "last_at": (r["last_at"] or "")[:10],
             "bio": bios.get(f"author_bio:{key}", ""),
+            "follow_id": follow_id, "followed": followed,
+            "groups": groups, "xg_groups": xg_groups,
         })
     shelf.sort(key=lambda d: d["last_at"], reverse=True)
     return shelf
@@ -873,8 +1347,8 @@ def kiosk_shelf() -> list[dict]:
 def stats_report() -> dict:
     """回看统计报告（/stats 页数据源）：总览、近 30 天趋势、Top 博主、最常点赞、回看累计。
 
-    全部纯本地聚合；日界取 substr(…,1,10)（库内时间戳统一东八区 ISO8601，与编年
-    聚合同一既定不变量）。Top 博主沿用 kiosk_shelf 的 ranked CTE 口径（source,uid）。
+    全部纯本地聚合；日界用 created_at >= day30 走 idx_posts_created / idx_review_events_action_created
+    范围扫描，Top 博主先 GROUP BY 选前 8 再回表取身份。
     """
     day30 = (datetime.now(config.NOW_TZ) - timedelta(days=30)).strftime("%Y-%m-%d")
     with conn() as c:
@@ -887,19 +1361,23 @@ def stats_report() -> dict:
         overview["tags"] = c.execute("SELECT COUNT(DISTINCT tag) FROM post_tags").fetchone()[0]
         daily = {r["d"]: {"d": r["d"], "n": r["n"], "likes": 0} for r in c.execute(
             "SELECT substr(created_at,1,10) d, COUNT(*) n FROM posts "
-            "WHERE substr(created_at,1,10) >= ? GROUP BY d", (day30,))}
+            "WHERE created_at >= ? GROUP BY d", (day30,))}
         for r in c.execute(
                 "SELECT substr(created_at,1,10) d, COUNT(*) n FROM review_events "
-                "WHERE action='reaffirm' AND substr(created_at,1,10) >= ? GROUP BY d", (day30,)):
+                "WHERE action='reaffirm' AND created_at >= ? GROUP BY d", (day30,)):
             daily.setdefault(r["d"], {"d": r["d"], "n": 0, "likes": 0})["likes"] = r["n"]
         top_authors = c.execute(
-            "WITH ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY source,uid "
-            "ORDER BY created_at DESC,fetched_at DESC,sid) rn FROM posts WHERE uid != '') "
-            "SELECT source,uid,MAX(CASE WHEN rn=1 THEN author END) author,"
-            "MAX(CASE WHEN rn=1 THEN avatar END) avatar,"
-            "COUNT(*) n,COALESCE(SUM(status='kept'),0) kept,COALESCE(SUM(favorite),0) favorites "
-            "FROM ranked GROUP BY source,uid "
-            "ORDER BY kept DESC, favorites DESC, n DESC LIMIT 8").fetchall()
+            "WITH top8 AS ("
+            "  SELECT source,uid,COUNT(*) n,COALESCE(SUM(status='kept'),0) kept,"
+            "  COALESCE(SUM(favorite),0) favorites FROM posts WHERE uid != '' "
+            "  GROUP BY +source,+uid ORDER BY kept DESC, favorites DESC, n DESC LIMIT 8"
+            ") "
+            "SELECT t.source,t.uid,p.author,p.avatar,t.n,t.kept,t.favorites "
+            "FROM top8 t JOIN posts p ON p.sid = ("
+            "  SELECT p2.sid FROM posts p2 WHERE p2.source=t.source AND p2.uid=t.uid "
+            "  ORDER BY p2.created_at DESC,p2.fetched_at DESC,p2.sid LIMIT 1"
+            ") ORDER BY t.kept DESC, t.favorites DESC, t.n DESC"
+        ).fetchall()
         top_posts = c.execute(
             "SELECT p.sid,p.author,p.avatar,p.keep_count,p.text,"
             " (SELECT thumb FROM pics WHERE sid=p.sid ORDER BY position,id LIMIT 1) thumb "
@@ -907,9 +1385,9 @@ def stats_report() -> dict:
             "ORDER BY p.keep_count DESC, p.created_at DESC LIMIT 9").fetchall()
         review = dict(c.execute(
             "SELECT COALESCE(SUM(action='shown'),0) shown,"
-            " COALESCE(SUM(action='reaffirm'),0) reaffirmed FROM review_events").fetchone())
-        review["active_days"] = c.execute(
-            "SELECT COUNT(DISTINCT substr(created_at,1,10)) FROM review_events").fetchone()[0]
+            " COALESCE(SUM(action='reaffirm'),0) reaffirmed,"
+            " COUNT(DISTINCT substr(created_at,1,10)) active_days "
+            "FROM review_events").fetchone())
     top = []
     for r in top_authors:
         top.append({
@@ -961,6 +1439,7 @@ def remove_group(list_id: str) -> None:
         if str(list_id).startswith("xg:"):
             c.execute("DELETE FROM group_members WHERE list_id=?", (list_id,))
             c.execute("DELETE FROM post_groups WHERE list_id=?", (list_id,))
+    _bump_shuffle_epoch()
 
 
 # ---------- X 本地分组（xg: 组与成员映射） ----------
@@ -997,6 +1476,7 @@ def add_group_member(list_id: str, member_id: str) -> None:
                   (list_id, member_id, now))
         c.execute("INSERT OR IGNORE INTO post_groups "
                   "SELECT p.sid, ? FROM posts p WHERE p.list_id=?", (list_id, member_id))
+    _bump_shuffle_epoch()
 
 
 def remove_group_member(list_id: str, member_id: str) -> None:

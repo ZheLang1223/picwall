@@ -8,8 +8,10 @@ Cookie 来源：Cookie 助手浏览器扩展读取 auth_token 后 POST 给
 输出契约：与 sources/x.py 的 normalize_tweet 输入一致
 （id/url/author{text,name,avatar}/text/created_at/images/via）。
 """
+import asyncio
 import html
 import json
+import re
 import secrets
 from datetime import datetime
 
@@ -75,6 +77,16 @@ FEATURES = {
 _X_DATE = "%a %b %d %H:%M:%S %z %Y"
 
 
+def _scrub_error(err: BaseException | str) -> str:
+    text = str(err)
+    text = re.sub(r"(https?|socks5h?)://[^:/@\s]+:[^@\s]+@", r"\1://***:***@", text, flags=re.IGNORECASE)
+    return re.sub(r"(https?|socks5h?)://[^/@\s]+@", r"\1://***@", text, flags=re.IGNORECASE)
+
+
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 class XApiError(Exception):
     """X 接口错误。kind: auth=登录态失效 / ratelimit=限流 / structure=接口变更 / network=网络"""
 
@@ -129,13 +141,16 @@ class XGraphQL:
                   "features": _json(FEATURES),
                   "fieldToggles": _json({"withAuxiliaryUserLabels": True})}
         data = await self._call(client, ENDPOINTS["user_by"], params)
-        result = ((data.get("data") or {}).get("user") or {}).get("result") or {}
+        result = _as_dict(_as_dict(_as_dict(data.get("data")).get("user")).get("result"))
         if not result:
             raise XApiError("structure", f"X 上找不到 @{handle}，请核对用户名")
-        core = result.get("core") or {}
-        legacy = result.get("legacy") or {}
+        core = _as_dict(result.get("core"))
+        legacy = _as_dict(result.get("legacy"))
         bio = html.unescape(legacy.get("description") or "")
-        for u in ((legacy.get("entities") or {}).get("description") or {}).get("urls") or []:
+        desc_urls = _as_dict(_as_dict(legacy.get("entities")).get("description")).get("urls") or []
+        for u in desc_urls:
+            if not isinstance(u, dict):
+                continue
             short, full = u.get("url") or "", u.get("expanded_url") or ""
             if short and full:
                 bio = bio.replace(short, full)
@@ -175,12 +190,16 @@ class XGraphQL:
 
     async def _call(self, client: httpx.AsyncClient, endpoint: str, params: dict) -> dict:
         r = await client.get(ROOT + "/i/api" + endpoint, params=params,
-                             headers=self.headers)
+                             headers=self.headers, follow_redirects=False)
         ct0 = r.cookies.get("ct0")
         if ct0:   # 随响应自更新 csrf（gallery-dl 同款自愈）
             self.csrf = ct0
             self.headers["x-csrf-token"] = ct0
             self.headers["cookie"] = f"auth_token={self.auth_token}; ct0={self.csrf}"
+        if r.is_redirect:
+            loc = (r.headers.get("location") or "").lower()
+            raise XApiError("auth" if "login" in loc or "flow" in loc else "network",
+                            "X 接口返回意外跳转，请稍后重试")
         if r.status_code == 401:
             raise XApiError("auth", "X 登录态失效，请重新发送 Cookie")
         if r.status_code == 404:
@@ -204,8 +223,8 @@ class XGraphQL:
             raise XApiError("structure", f"X 接口返回非 JSON（{r.status_code}）")
         if not isinstance(data, dict):
             raise XApiError("structure", "X 接口响应结构发生变化，请稍后重试")
-        errors = data.get("errors") or []
-        msgs = "; ".join(e.get("message", "") for e in errors)
+        errors = [e for e in (data.get("errors") or []) if isinstance(e, dict)]
+        msgs = "; ".join(str(e.get("message") or "") for e in errors)
         if any(e.get("code") in (32, 89, 135, 215) for e in errors) or "could not authenticate" in msgs.lower():
             raise XApiError("auth", "X 登录态失效，请重新发送 Cookie")
         if r.status_code == 403:
@@ -236,23 +255,25 @@ def _walk_tweets(data: dict, root: str = "list"):
             instructions = data["data"]["user"]["result"]["timeline"]["timeline"]["instructions"]
     except (KeyError, TypeError):
         raise XApiError("structure", "X 时间线响应结构变化，请对照 gallery-dl 更新解析")
+    if not isinstance(instructions, list):
+        raise XApiError("structure", "X 时间线响应结构变化，请对照 gallery-dl 更新解析")
     tweets, cursor = [], None
     for ins in instructions:
+        if not isinstance(ins, dict):
+            continue
         for entry in ins.get("entries") or ([ins.get("entry")] if ins.get("entry") else []):
             if not isinstance(entry, dict):
                 continue
-            entry_id = entry.get("entryId", "")
+            entry_id = str(entry.get("entryId") or "")
+            content = _as_dict(entry.get("content"))
             if entry_id.startswith("cursor-"):
-                cur = (entry.get("content", {}).get("value")
-                       or entry.get("content", {}).get("item", {}).get("value"))
+                cur = content.get("value") or _as_dict(content.get("item")).get("value")
                 if entry_id.startswith("cursor-bottom-") and cur:
                     cursor = cur
                 continue
-            content = entry.get("content") or {}
             if content.get("entryType") != "TimelineTimelineItem":
                 continue
-            result = ((content.get("itemContent") or {})
-                      .get("tweet_results") or {}).get("result") or {}
+            result = _as_dict(_as_dict(_as_dict(content.get("itemContent")).get("tweet_results")).get("result"))
             if result:
                 tweets.append(result)
     return tweets, cursor
@@ -260,13 +281,13 @@ def _walk_tweets(data: dict, root: str = "list"):
 
 def _inner_tweet(result: dict):
     """转推解包：有 retweeted_status_result 时返回（原帖, 转推者昵称）。"""
-    legacy = result.get("legacy") or {}
-    rt = legacy.get("retweeted_status_result", {}).get("result")
+    result = _as_dict(result)
+    legacy = _as_dict(result.get("legacy"))
+    rt = _as_dict(_as_dict(legacy.get("retweeted_status_result")).get("result"))
     if rt:
-        via = ((result.get("core", {}).get("user_results", {}).get("result", {})
-                .get("core", {}) or {}).get("screen_name")
-               or (result.get("core", {}).get("user_results", {}).get("result", {})
-                   .get("legacy", {}) or {}).get("screen_name") or "")
+        user_res = _as_dict(_as_dict(_as_dict(result.get("core")).get("user_results")).get("result"))
+        via = (_as_dict(user_res.get("core")).get("screen_name")
+               or _as_dict(user_res.get("legacy")).get("screen_name") or "")
         return rt, via
     return result, ""
 
@@ -278,8 +299,8 @@ def _video_from_media(m: dict) -> dict | None:
     只留 video/mp4 按码率降序取最高；海报 = 同实体的 media_url_https（pbs 静帧）。
     没有 mp4 变体的条目返回 None（跳过该视频，不影响同帖其他媒体）。
     """
-    info = m.get("video_info") or {}
-    variants = [v for v in info.get("variants") or [] if isinstance(v, dict)]
+    info = _as_dict(m.get("video_info"))
+    variants = [v for v in (info.get("variants") or []) if isinstance(v, dict)]
     mp4s = [v for v in variants
             if v.get("content_type") == "video/mp4" and v.get("url")]
     if not mp4s:
@@ -290,28 +311,31 @@ def _video_from_media(m: dict) -> dict | None:
         "poster": m.get("media_url_https") or "",
         "url": best["url"],   # 预选的最高码率 mp4；normalize 也可从 variants 自行取最优
         "variants": [{"url": v["url"], "bitrate": v.get("bitrate") or 0} for v in mp4s],
-        "aspect_ratio": [ar[0], ar[1]] if len(ar) >= 2 and ar[0] and ar[1] else [1, 1],
+        "aspect_ratio": [ar[0], ar[1]] if isinstance(ar, list) and len(ar) >= 2 and ar[0] and ar[1] else [1, 1],
         "duration_millis": info.get("duration_millis") or 0,
     }
 
 
 def _tweet_to_item(result: dict, via: str = "") -> dict | None:
     """GraphQL tweet result → 标准契约条目；无图无视频返回 None（与库内边界一致）。"""
-    legacy = result.get("legacy") or {}
+    result = _as_dict(result)
+    legacy = _as_dict(result.get("legacy"))
     tid = str(legacy.get("id_str") or "")
     if not tid:
         return None
-    user = (result.get("core", {}).get("user_results", {}).get("result", {}))
-    ucore = user.get("core") or {}
-    ulegacy = user.get("legacy") or {}
+    user = _as_dict(_as_dict(_as_dict(result.get("core")).get("user_results")).get("result"))
+    ucore = _as_dict(user.get("core"))
+    ulegacy = _as_dict(user.get("legacy"))
     handle = ucore.get("screen_name") or ulegacy.get("screen_name") or ""
     name = ucore.get("name") or ulegacy.get("name") or ""
     # 新版响应头像在 result.avatar.image_url；legacy.profile_image_url_https 作旧格式兜底
-    avatar = ((user.get("avatar") or {}).get("image_url")
+    avatar = (_as_dict(user.get("avatar")).get("image_url")
               or ulegacy.get("profile_image_url_https") or "").replace("_normal", "")
-    media = ((legacy.get("extended_entities") or {}).get("media") or [])
+    media = _as_dict(legacy.get("extended_entities")).get("media") or []
     images, videos = [], []
     for m in media:
+        if not isinstance(m, dict):
+            continue
         if m.get("type") == "photo":
             u = m.get("media_url_https")
             if u:
@@ -366,8 +390,6 @@ async def crawl_lists(client: httpx.AsyncClient, auth_token: str,
     返回 summary 列表 [{group, new_posts, new_pics, error}]；
     复用 /api/ingest/x 相同的标准化与入库路径，幂等（has_post 跳过）。
     """
-    import asyncio
-
     summaries = []
     rate_limited = False
     for idx, lst in enumerate(lists):
@@ -383,6 +405,7 @@ async def crawl_lists(client: httpx.AsyncClient, auth_token: str,
             if on_list:
                 on_list(idx, summary)
             continue
+        api = None
         try:
             api = XGraphQL(auth_token, ct0)
             items = []
@@ -390,12 +413,15 @@ async def crawl_lists(client: httpx.AsyncClient, auth_token: str,
                 items.append(item)
             await _ingest_items(client, items, x_source.group_list_id(raw), name, summary)
         except XApiError as e:
-            summary["error"] = str(e)
+            summary["error"] = _scrub_error(e)
             summary["error_kind"] = e.kind
             if e.kind == "ratelimit":
                 rate_limited = True
         except Exception as e:   # 网络等意外错误，保留现场继续下一组
-            summary["error"] = f"{type(e).__name__}: {e}"
+            summary["error"] = f"{type(e).__name__}: {_scrub_error(e)}"
+        finally:
+            if api is not None and api.csrf:
+                ct0 = api.csrf
         if on_list:
             on_list(idx, summary)
         await asyncio.sleep(1)
@@ -410,8 +436,6 @@ async def crawl_users(client: httpx.AsyncClient, auth_token: str,
     users = [{handle, name}]（handle 不带 @；name 形如 @luoluokun_）。
     回调与 summary 语义同 crawl_lists。
     """
-    import asyncio
-
     summaries = []
     rate_limited = False
     for idx, u in enumerate(users):
@@ -427,6 +451,7 @@ async def crawl_users(client: httpx.AsyncClient, auth_token: str,
             if on_user:
                 on_user(idx, summary)
             continue
+        api = None
         try:
             api = XGraphQL(auth_token, ct0)
             cache_key = f"x_user_rest_id:{handle.lower()}"
@@ -453,12 +478,15 @@ async def crawl_users(client: httpx.AsyncClient, auth_token: str,
                     raise
             await _ingest_items(client, items, x_source.group_user_id(handle), name, summary)
         except XApiError as e:
-            summary["error"] = str(e)
+            summary["error"] = _scrub_error(e)
             summary["error_kind"] = e.kind
             if e.kind == "ratelimit":
                 rate_limited = True
         except Exception as e:
-            summary["error"] = f"{type(e).__name__}: {e}"
+            summary["error"] = f"{type(e).__name__}: {_scrub_error(e)}"
+        finally:
+            if api is not None and api.csrf:
+                ct0 = api.csrf
         if on_user:
             on_user(idx, summary)
         await asyncio.sleep(1)
@@ -470,14 +498,51 @@ async def _ingest_items(client: httpx.AsyncClient, items: list[dict],
     """标准推文条目 → 入库（列表与用户两条抓取路径共用）；幂等，has_post 跳过。"""
     from .. import crawler  # 局部导入避免 crawler↔xapi 循环依赖
 
-    posts = x_source.normalize_tweets(items[:100])
-    avatar_cache: dict[str, str] = {}
-    for p in posts:
-        if (db.has_post(p["sid"]) and not crawler.needs_images(p["sid"])) or db.has_tombstone(p["sid"]):
-            continue
-        existed = db.has_post(p["sid"])
-        saved = await crawler._store_post(client, p, lid, avatar_cache)
-        summary["new_pics"] += saved
-        if saved:   # 一张图都没下成的帖没入库，不计新增（与微博侧口径一致）
-            summary["new_posts"] += int(not existed)
+    posts = x_source.normalize_tweets(items)
+    if posts:
+        unique = {}
+        for p in posts:
+            unique.setdefault(p["sid"], p)
+        sids = list(unique)
+        tombstones: set[str] = set()
+        existing: set[str] = set()
+        need_imgs: set[str] = set()
+        with db.conn() as c:
+            for i in range(0, len(sids), 400):
+                chunk = sids[i:i + 400]
+                qmarks = ",".join("?" * len(chunk))
+                tombstones.update(r[0] for r in c.execute(f"SELECT sid FROM tombstones WHERE sid IN ({qmarks})", chunk))
+                existing.update(r[0] for r in c.execute(f"SELECT sid FROM posts WHERE sid IN ({qmarks})", chunk))
+                need_imgs.update(r[0] for r in c.execute(f"SELECT sid FROM image_jobs WHERE sid IN ({qmarks})", chunk))
+        fresh = [
+            p for sid, p in unique.items()
+            if sid not in tombstones and (sid not in existing or sid in need_imgs)
+        ]
+        if fresh:
+            db.observe_posts(fresh, lid)
+            crawler.queue_posts(fresh, lid)
+            avatar_cache: dict[str, str] = {}
+            post_sem = asyncio.Semaphore(4)
+            dl_sem = asyncio.Semaphore(6)
+            avatar_locks: dict[str, asyncio.Lock] = {}
+            token = crawler._STORE_CTX.set({
+                "queued": {p["sid"] for p in fresh},
+                "observed": {p["sid"] for p in fresh},
+                "dl_sem": dl_sem,
+                "avatar_locks": avatar_locks,
+            })
+            try:
+                async def _store_one(p: dict) -> tuple[bool, int]:
+                    async with post_sem:
+                        existed = p["sid"] in existing
+                        saved = await crawler._store_post(client, p, lid, avatar_cache)
+                        return existed, saved
+
+                results = await asyncio.gather(*(_store_one(p) for p in fresh))
+            finally:
+                crawler._STORE_CTX.reset(token)
+            for existed, saved in results:
+                summary["new_pics"] += saved
+                if saved:   # 一张图都没下成的帖没入库，不计新增（与微博侧口径一致）
+                    summary["new_posts"] += int(not existed)
     db.add_group(lid, name)

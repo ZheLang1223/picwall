@@ -16,6 +16,10 @@ BASE = "https://weibo.com"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 _TZ8 = TZ8 = timezone(timedelta(hours=8))
+_DIGIT_ID_RE = re.compile(r"^\d{1,32}$")
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_TAG_BLOCK_RE = re.compile(r"<\s*(script|style)\b[^>]*>.*?<\s*/\s*\1\s*>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--.*?-->", re.DOTALL)
 
 
 class WeiboError(Exception):
@@ -42,10 +46,12 @@ def headers(cookie: str) -> dict:
     }
 
 
-async def _get_json(client: httpx.AsyncClient, cookie: str, url: str) -> dict:
-    r = await client.get(url, headers=headers(cookie), follow_redirects=False)
+async def _get_json(
+    client: httpx.AsyncClient, cookie: str, url: str, params: dict | None = None
+) -> dict:
+    r = await client.get(url, params=params, headers=headers(cookie), follow_redirects=False)
     loc = r.headers.get("location", "")
-    if r.status_code in (301, 302, 401, 432) or "passport" in loc:
+    if r.status_code in (301, 302, 303, 307, 308, 401, 432) or "passport" in loc.lower():
         raise CookieExpired(f"登录失效（HTTP {r.status_code}）")
     if r.status_code != 200:
         raise WeiboError(f"HTTP {r.status_code}")
@@ -63,8 +69,15 @@ async def _get_json(client: httpx.AsyncClient, cookie: str, url: str) -> dict:
 
 async def group_timeline(client: httpx.AsyncClient, cookie: str,
                          list_id: str, page: int = 1) -> dict:
-    url = f"{BASE}/ajax/feed/groupstimeline?list_id={list_id}&page={page}"
-    return await _get_json(client, cookie, url)
+    lid = str(list_id or "").strip()
+    if not _DIGIT_ID_RE.fullmatch(lid):
+        raise WeiboError("微博分组 ID 格式无效")
+    return await _get_json(
+        client,
+        cookie,
+        f"{BASE}/ajax/feed/groupstimeline",
+        params={"list_id": lid, "page": max(1, int(page))},
+    )
 
 
 async def all_groups(client: httpx.AsyncClient, cookie: str) -> list[dict]:
@@ -87,19 +100,22 @@ def parse_groups(data) -> list[dict]:
     """
     out: dict[str, str] = {}
 
-    def walk(node):
+    def walk(node, depth: int = 0):
+        if depth > 20 or len(out) >= 1000:
+            return
         if isinstance(node, dict):
             lid = node.get("list_id") or node.get("gid")
             name = node.get("group_name") or node.get("name") or node.get("title")
             if lid is not None and name:
                 sg = node.get("sysgroup")
-                if sg != 2:   # 系统聚合分组不支持 groupstimeline，过滤
-                    out[str(lid)] = str(name)
+                slid = str(lid).strip()
+                if sg != 2 and _SAFE_ID_RE.fullmatch(slid):   # 系统聚合分组不支持 groupstimeline，过滤
+                    out[slid] = str(name)
             for v in node.values():
-                walk(v)
+                walk(v, depth + 1)
         elif isinstance(node, list):
             for v in node:
-                walk(v)
+                walk(v, depth + 1)
 
     walk(data.get("data", data) if isinstance(data, dict) else data)
     return [{"list_id": k, "name": v} for k, v in out.items()]
@@ -107,10 +123,13 @@ def parse_groups(data) -> list[dict]:
 
 async def profile_info(client: httpx.AsyncClient, cookie: str, uid: str) -> dict:
     """作者基础信息（uid/screen_name/description/avatar）。校验用户存在。"""
-    data = await _get_json(client, cookie, f"{BASE}/ajax/profile/info?uid={uid}")
+    clean_uid = str(uid or "").strip()
+    if not _DIGIT_ID_RE.fullmatch(clean_uid):
+        raise WeiboError("微博博主 ID 格式无效")
+    data = await _get_json(client, cookie, f"{BASE}/ajax/profile/info", params={"uid": clean_uid})
     user = ((data.get("data") or {}).get("user") or {}) if isinstance(data, dict) else {}
     if not user or not user.get("id"):
-        raise WeiboError(f"未找到微博博主 {uid}")
+        raise WeiboError(f"未找到微博博主 {clean_uid}")
     return {
         "uid": str(user["id"]),
         "screen_name": str(user.get("screen_name") or ""),
@@ -131,8 +150,15 @@ async def profile_bio(client: httpx.AsyncClient, cookie: str, uid: str) -> str:
 async def user_timeline(client: httpx.AsyncClient, cookie: str,
                          uid: str, page: int = 1) -> dict:
     """拉取单博主主页时间线（全部微博）。"""
-    url = f"{BASE}/ajax/statuses/mymblog?uid={uid}&page={page}&feature=0"
-    return await _get_json(client, cookie, url)
+    clean_uid = str(uid or "").strip()
+    if not _DIGIT_ID_RE.fullmatch(clean_uid):
+        raise WeiboError("微博博主 ID 格式无效")
+    return await _get_json(
+        client,
+        cookie,
+        f"{BASE}/ajax/statuses/mymblog",
+        params={"uid": clean_uid, "page": max(1, int(page)), "feature": 0},
+    )
 
 
 def extract_statuses(data) -> list:
@@ -156,9 +182,14 @@ def extract_statuses(data) -> list:
 # ---------- 解析 ----------
 
 def strip_html(s: str) -> str:
-    s = re.sub(r"<br\s*/?>", " ", s or "")
+    s = _TAG_BLOCK_RE.sub("", s or "")
+    s = re.sub(r"<br\s*/?>", " ", s, flags=re.IGNORECASE)
     s = re.sub(r"<[^>]+>", "", s)
     s = html.unescape(s)
+    # 防止 &lt;script&gt; / &lt;img ...&gt; 实体解码后把未剥除的标签写入正文
+    s = _TAG_BLOCK_RE.sub("", s)
+    s = _HTML_TAG_RE.sub("", s)
+    s = re.sub(r"<\s*/?\s*script\b", "", s, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -205,9 +236,10 @@ def parse_time(s: str) -> str:
 
 
 def _https(url: str) -> str:
-    if not url:
+    if not isinstance(url, str) or not url:
         return ""
-    return "https:" + url if url.startswith("//") else url
+    u = "https:" + url.strip() if url.strip().startswith("//") else url.strip()
+    return u if u.lower().startswith(("http://", "https://")) else ""
 
 
 def _to_large(url: str) -> str:
@@ -277,15 +309,15 @@ def parse_mblog(item: dict) -> dict | None:
     if not pics:
         return None
     user = src.get("user") or {}
-    uid = str(user.get("id") or "")
-    sid = src.get("mblogid") or m.get("mblogid")
-    if not sid or not uid:
+    uid = str(user.get("id") or "").strip()
+    sid = str(src.get("mblogid") or m.get("mblogid") or "").strip()
+    if not sid or not uid or not _SAFE_ID_RE.fullmatch(sid) or not _SAFE_ID_RE.fullmatch(uid):
         return None
-    text = strip_html(src.get("text") or "")
+    text = strip_html(src.get("text") or "")[:50000]
     if rt:
-        reason = strip_html(m.get("text") or "")
+        reason = strip_html(m.get("text") or "")[:50000]
         via = ((m.get("user") or {}).get("screen_name") or "").strip()
-        text = f"{text}（@{via} 转发：{reason}）" if reason else text
+        text = f"{text}（@{via} 转发：{reason}）"[:50000] if reason else text
     return {
         "sid": str(sid),
         "source": "weibo",

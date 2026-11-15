@@ -101,12 +101,15 @@ class DeviceBoundaryTest(ApiTestBase):
         self.assertEqual(auth.exchange(auth.issue_code(),"test","another")["status"],429)
 
     async def test_chunked_ingest_has_a_body_budget(self):
+        tok = auth.exchange(auth.issue_code("collector"), "ext", "collector-test")["token"]
+
         async def chunks():
             for _ in range(3):
                 yield b"x" * (1024 * 1024)
         async with self.raw_client() as c:
             response = await c.post("/api/ingest/harvest", content=chunks(),
-                                    headers={"Origin":"https://weibo.com","Content-Type":"application/json"})
+                                    headers={"Origin":"https://weibo.com","Content-Type":"application/json",
+                                             "Authorization":f"Bearer {tok}"})
             self.assertEqual(response.status_code,413)
             self.assertIn("拆分",response.json()["detail"])
             self.assertEqual(response.headers["access-control-allow-origin"],"https://weibo.com")

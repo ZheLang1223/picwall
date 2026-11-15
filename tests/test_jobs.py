@@ -188,6 +188,9 @@ class DownloadZipJobTest(ApiTestBase):
             final = await self.terminal("download")
         self.assertEqual(final["state"], "complete")
         self.assertGreater(final["result"]["entries"], 0)
+        self.assertNotIn("file", final["result"])
+        zip_path = downloads.result_file(final["id"])
+        self.assertTrue(zip_path and os.path.exists(zip_path))
         self.assertEqual(final["progress"], {"done": final["result"]["entries"],
                                              "total": final["result"]["entries"]})
         async with self.client() as c:
@@ -198,7 +201,7 @@ class DownloadZipJobTest(ApiTestBase):
             self.assertTrue(any("demo0000" in n for n in names))
             # 交付完成后 BackgroundTask 已注销登记并删除临时文件
             self.assertIsNone(downloads.pop_result_file(final["id"]))
-            self.assertFalse(os.path.exists(final["result"]["file"]))
+            self.assertFalse(os.path.exists(zip_path))
 
     async def test_zip_file_rejects_unknown_job(self):
         async with self.client() as c:

@@ -65,7 +65,7 @@ def create(keep: int = 7, store: cloud.LocalBlobs | cloud.QuarkBlobs | None = No
                     except OSError:
                         shutil.copy2(src, dst)
             for source in (config.COOKIE_FILE, config.X_AUTH_FILE):
-                if source.is_file() and source.parent == config.DATA_DIR:
+                if source.is_file() and not source.is_symlink() and source.parent == config.DATA_DIR:
                     shutil.copy2(source, staging / source.name)
                     os.chmod(staging / source.name, 0o600)
         files = {}
@@ -95,14 +95,22 @@ def create(keep: int = 7, store: cloud.LocalBlobs | cloud.QuarkBlobs | None = No
         batch = root / (name + ".snapshot")
         unpublished = staging / "published"
         unpublished.mkdir()
-        (unpublished / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+        os.chmod(unpublished, 0o700)
+        manifest_path = unpublished / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+        os.chmod(manifest_path, 0o600)
         for rel in local_only:
             dst = unpublished / "local" / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(unpublished / "local", 0o700)
             shutil.copy2(staging / rel, dst)
             os.chmod(dst, 0o600)
         os.replace(unpublished, batch)
-        shutil.copy2(staging / "picwall.db", root / (name + ".db"))
+        db_dst = root / (name + ".db")
+        db_tmp = staging / "published.db"
+        shutil.copy2(staging / "picwall.db", db_tmp)
+        os.chmod(db_tmp, 0o600)
+        os.replace(db_tmp, db_dst)
     for old in sorted(root.glob("picwall-*.snapshot"))[:-keep]:
         shutil.rmtree(old)
         (root / (old.name.removesuffix(".snapshot") + ".db")).unlink(missing_ok=True)
@@ -119,8 +127,14 @@ def restore(batch: Path, target: Path, store: cloud.LocalBlobs | cloud.QuarkBlob
     if target.exists() and any(target.iterdir()):
         raise ValueError("恢复目标必须是空目录，禁止覆盖现有数据")
     manifest = json.loads((batch / "manifest.json").read_text())
+    target_resolved = target.resolve()
+    local_root = (batch / "local").resolve()
     for rel, entry in manifest["files"].items():
-        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+        rel_path = Path(rel)
+        if (not rel or rel_path.is_absolute() or "\\" in rel
+                or any(p in ("", ".", "..") for p in rel_path.parts)):
+            raise ValueError("备份清单含越界路径")
+        if not (target / rel_path).resolve().is_relative_to(target_resolved):
             raise ValueError("备份清单含越界路径")
         sha = entry["sha256"]
         if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
@@ -136,7 +150,7 @@ def restore(batch: Path, target: Path, store: cloud.LocalBlobs | cloud.QuarkBlob
             dst.parent.mkdir(parents=True, exist_ok=True)
             if rel in local_only:
                 src = batch / "local" / rel
-                if not src.is_file():
+                if src.is_symlink() or not src.is_file() or not src.resolve().is_relative_to(local_root):
                     raise ValueError(f"本地凭据缺失（快照目录不完整）：{rel}")
                 shutil.copy2(src, dst)
             else:

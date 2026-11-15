@@ -13,6 +13,8 @@ import os
 import re
 import shutil
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from PIL import Image
@@ -25,6 +27,37 @@ CARD_THUMB_W = 720   # 卡片缩略图宽度上限：墙列 ~380px 的 2 倍分�
 
 def sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()[:16]
+
+
+def resolve_pic(rel: str) -> Path:
+    """把媒体相对路径解析到 PICS_DIR 内，拒绝越界或符号链接。"""
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel:
+        raise ValueError("媒体路径无效")
+    parts = Path(rel).parts
+    if not parts or any(p in ("", ".", "..") for p in parts):
+        raise ValueError("媒体路径无效")
+    cur = config.PICS_DIR
+    for p in parts:
+        cur = cur / p
+        if cur.is_symlink():
+            raise ValueError("媒体路径无效")
+    base = config.PICS_DIR.resolve()
+    resolved = cur.resolve()
+    if resolved == base or not resolved.is_relative_to(base):
+        raise ValueError("媒体路径越界")
+    return resolved
+
+
+def _verify_image(data: bytes, limit_msg: str) -> tuple[int, int]:
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            w, hh = im.size
+            if w * hh > config.MAX_IMAGE_PIXELS:
+                raise ValueError(limit_msg)
+            im.verify()
+        return w, hh
+    except Image.DecompressionBombError as e:
+        raise ValueError(limit_msg) from e
 
 
 def ext_of(url: str, data: bytes) -> str:
@@ -53,43 +86,50 @@ def _write_thumb(im, dst: Path, quality: int):
         Path(tmp).unlink(missing_ok=True)
 
 
-@guarded
-def _make_thumb(src: Path, dst: Path, max_side: int = 640) -> bool:
+def _normalize_rgb(im):
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.split()[-1])
+        return bg
+    if im.mode != "RGB":
+        return im.convert("RGB")
+    return im
+
+
+def _render_thumb(src: Path, dst: Path, max_side: int = 640) -> bool:
     try:
         with Image.open(src) as im:
-            if im.mode in ("RGBA", "LA", "P"):
-                im = im.convert("RGBA")
-                bg = Image.new("RGB", im.size, (255, 255, 255))
-                bg.paste(im, mask=im.split()[-1])
-                im = bg
-            elif im.mode != "RGB":
-                im = im.convert("RGB")
-            im.thumbnail((max_side, max_side))
-            _write_thumb(im, dst, 82)
+            rgb = _normalize_rgb(im)
+            rgb.thumbnail((max_side, max_side))
+            _write_thumb(rgb, dst, 82)
         return True
     except Exception:
         return False
+
+
+def _render_wide_thumb(src: Path, dst: Path, target_w: int = CARD_THUMB_W) -> bool:
+    try:
+        with Image.open(src) as im:
+            rgb = _normalize_rgb(im)
+            if rgb.size[0] > target_w:
+                rgb = rgb.resize((target_w, round(rgb.size[1] * target_w / rgb.size[0])),
+                                 Image.LANCZOS)
+            _write_thumb(rgb, dst, 85)
+        return True
+    except Exception:
+        return False
+
+
+@guarded
+def _make_thumb(src: Path, dst: Path, max_side: int = 640) -> bool:
+    return _render_thumb(src, dst, max_side=max_side)
 
 
 @guarded
 def _make_wide_thumb(src: Path, dst: Path, target_w: int = CARD_THUMB_W) -> bool:
     """宽图缩略图：宽度压到 target_w、等比（高度不限），长条图不塌缩。"""
-    try:
-        with Image.open(src) as im:
-            if im.mode in ("RGBA", "LA", "P"):
-                im = im.convert("RGBA")
-                bg = Image.new("RGB", im.size, (255, 255, 255))
-                bg.paste(im, mask=im.split()[-1])
-                im = bg
-            elif im.mode != "RGB":
-                im = im.convert("RGB")
-            if im.size[0] > target_w:
-                im = im.resize((target_w, round(im.size[1] * target_w / im.size[0])),
-                               Image.LANCZOS)
-            _write_thumb(im, dst, 85)
-        return True
-    except Exception:
-        return False
+    return _render_wide_thumb(src, dst, target_w=target_w)
 
 
 @guarded
@@ -105,11 +145,7 @@ def save_image(data: bytes, url: str) -> tuple[str, int, int, str]:
     # 先验证再落盘，平台错误页/截断图片不会留下永久坏文件。
     if len(data) > config.MAX_IMAGE_BYTES:
         raise ValueError("图片超过下载体积上限")
-    with Image.open(io.BytesIO(data)) as im:
-        w, hh = im.size
-        if w * hh > config.MAX_IMAGE_PIXELS:
-            raise ValueError("图片超过像素上限，保留补抓任务")
-        im.verify()
+    w, hh = _verify_image(data, "图片超过像素上限，保留补抓任务")
     from . import db
     content_hash = hashlib.sha256(data).hexdigest()
     catalog = config.DB_PATH.parent == config.DATA_DIR and config.DB_PATH.is_file()
@@ -122,9 +158,12 @@ def save_image(data: bytes, url: str) -> tuple[str, int, int, str]:
     ext = ext_of(url, data)
     rel = f"{ym}/{h}{ext}"
     if existing:
-        candidate = config.PICS_DIR / existing["file"]
-        if candidate.is_file() and hashlib.sha256(candidate.read_bytes()).hexdigest() == content_hash:
-            rel = existing["file"]
+        try:
+            candidate = resolve_pic(existing["file"])
+            if candidate.is_file() and file_hash(candidate) == content_hash:
+                rel = existing["file"]
+        except ValueError:
+            pass
     path = config.PICS_DIR / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -155,15 +194,18 @@ def save_avatar(data: bytes, url: str) -> str:
     """头像落盘：优先 96px 小图（界面只画 22-34px，原图仅供回退），返回相对路径。"""
     if len(data) > config.MAX_IMAGE_BYTES:
         raise ValueError("头像超过体积上限")
-    with Image.open(io.BytesIO(data)) as im:
-        if im.width * im.height > config.MAX_IMAGE_PIXELS:
-            raise ValueError("头像超过像素上限")
-        im.verify()
+    _verify_image(data, "头像超过像素上限")
     rel = f"avatars/{sha1(data)}{ext_of(url, data)}"
     path = config.PICS_DIR / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        path.write_bytes(data)
+        fd, tmp = tempfile.mkstemp(prefix=".avatar-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
     t_rel = f"avatars/t_{sha1(data)}.jpg"
     if _make_thumb(path, config.PICS_DIR / t_rel, max_side=96):
         return t_rel
@@ -192,9 +234,12 @@ def save_video(data: bytes, url: str) -> str:
     h = sha1(data)
     rel = f"{ym}/{h}{ext_of(url, data)}"
     if existing:
-        candidate = config.PICS_DIR / existing["file"]
-        if candidate.is_file() and hashlib.sha256(candidate.read_bytes()).hexdigest() == content_hash:
-            rel = existing["file"]
+        try:
+            candidate = resolve_pic(existing["file"])
+            if candidate.is_file() and file_hash(candidate) == content_hash:
+                rel = existing["file"]
+        except ValueError:
+            pass
     path = config.PICS_DIR / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
@@ -213,25 +258,16 @@ def save_video(data: bytes, url: str) -> str:
     return rel
 
 
-@guarded
-def _export_one(rel: str, kept_day: str) -> str:
-    """一张图的文件和记录共用锁；整批检查不占住其他决定写入。"""
-    from . import db
-    src = config.PICS_DIR / rel
-    if not src.resolve().is_relative_to(config.PICS_DIR.resolve()):
-        raise ValueError("归档原图路径越界")
-    with db.conn() as c:
-        entry = c.execute("SELECT day,sha256 FROM archive_entries WHERE file=?", (rel,)).fetchone()
-    old_day = entry["day"] if entry else db.get_meta(f"exported:{rel}")
+def _export_item_file(rel: str, kept_day: str, old_day: str, expected: str) -> tuple[str, tuple]:
+    """无 DB 写锁执行单图校验/归档复制，返回 (状态, 归档记账元组)。"""
+    src = resolve_pic(rel)
     day = old_day or kept_day
     dst = config.EXPORT_DIR / day / src.name
     if not dst.resolve().is_relative_to(config.EXPORT_DIR.resolve()):
         raise ValueError("归档目标路径越界")
     tmp = None
-    content_hash = ""
     try:
         content_hash = file_hash(src) if src.is_file() else ""
-        expected = entry["sha256"] if entry else ""
         if expected and content_hash != expected:
             # 已知基准下的坏原图不能覆盖独立归档；有效副本可反向恢复原图。
             if dst.is_file() and file_hash(dst) == expected:
@@ -242,16 +278,13 @@ def _export_one(rel: str, kept_day: str) -> str:
                 if file_hash(Path(tmp)) != expected:
                     raise OSError("原图恢复内容校验失败")
                 os.replace(tmp, src)
-                _archive_record(rel, day, expected, src.stat().st_size, "complete")
-                return "restored"
-            _archive_record(rel, day, "", 0, "failed", "original_checksum")
-            return "failed"
+                return "restored", (rel, day, expected, src.stat().st_size, "complete", "")
+            return "failed", (rel, day, "", 0, "failed", "original_checksum")
         if not src.is_file():
             raise FileNotFoundError("原图缺失，请先补抓图片")
         size = src.stat().st_size
         if dst.is_file() and file_hash(dst) == content_hash:
-            _archive_record(rel, day, content_hash, size, "complete")
-            return "dup"
+            return "dup", (rel, day, content_hash, size, "complete", "")
         dst.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".picwall-", dir=dst.parent)
         os.close(fd)
@@ -259,28 +292,109 @@ def _export_one(rel: str, kept_day: str) -> str:
         if file_hash(Path(tmp)) != content_hash:
             raise OSError("归档复制内容校验失败")
         os.replace(tmp, dst)
-        _archive_record(rel, day, content_hash, size, "complete")
-        return "exported"
+        return "exported", (rel, day, content_hash, size, "complete", "")
     except OSError as e:
-        _archive_record(rel, day, "", 0, "failed", type(e).__name__)
-        return "failed"
+        return "failed", (rel, day, "", 0, "failed", type(e).__name__)
     finally:
         if tmp:
             Path(tmp).unlink(missing_ok=True)
 
 
+_archive_tls = threading.local()
+
+
+@contextmanager
+def _batched_archive_writes(entries=None, exported_meta=None, cancelled=None,
+                            progress=None, total: int = 0):
+    prev = getattr(_archive_tls, "ctx", None)
+    if prev is not None:
+        yield prev
+        return
+    ctx = {
+        "entries": entries,
+        "exported_meta": exported_meta if exported_meta is not None else {},
+        "batch": [],
+        "cancelled": cancelled,
+        "progress": progress,
+        "done": 0,
+        "total": total,
+    }
+    _archive_tls.ctx = ctx
+    try:
+        yield ctx
+    finally:
+        try:
+            _archive_records_batch(ctx["batch"])
+        finally:
+            ctx["batch"].clear()
+            _archive_tls.ctx = None
+
+
+@guarded
+def _export_one(rel: str, kept_day: str) -> str:
+    """一张图的文件和记录共用锁；整批检查不占住其他决定写入。"""
+    from . import db
+    ctx = getattr(_archive_tls, "ctx", None)
+    if ctx is not None and ctx["entries"] is not None:
+        entry = ctx["entries"].get(rel)
+        old_day = entry["day"] if entry else ctx["exported_meta"].get(rel, "")
+        expected = entry["sha256"] if entry else ""
+    else:
+        with db.conn() as c:
+            entry = c.execute("SELECT day,sha256 FROM archive_entries WHERE file=?", (rel,)).fetchone()
+        old_day = entry["day"] if entry else db.get_meta(f"exported:{rel}")
+        expected = entry["sha256"] if entry else ""
+    state, rec = _export_item_file(rel, kept_day, old_day, expected)
+    if ctx is not None:
+        ctx["batch"].append(rec)
+    else:
+        _archive_record(*rec)
+    return state
+
+
 def export_report(file_rels, kept_day: str) -> dict:
     """归档逐图报告：校验既有副本，临时文件写完再原子替换；失败可重试。"""
+    from . import db
+    unique_rels = list(dict.fromkeys(f for f in file_rels if f))
     result = {"exported": 0, "dup": 0, "restored_originals": 0, "failed": [], "to": f"data/export/{kept_day}/"}
-    for rel in dict.fromkeys(f for f in file_rels if f):
-        state = _export_one(rel, kept_day)
-        if state == "failed":
-            result["failed"].append(rel)
-        elif state == "restored":
-            result["restored_originals"] += 1
-            result["dup"] += 1
-        else:
-            result[state] += 1
+    if not unique_rels:
+        result["archive_complete"] = True
+        result["failed_count"] = 0
+        return result
+    with _batched_archive_writes() as ctx:
+        if ctx["entries"] is None:
+            qmarks = ",".join("?" * len(unique_rels))
+            meta_keys = [f"exported:{rel}" for rel in unique_rels]
+            with db.conn() as c:
+                ctx["entries"] = {
+                    r["file"]: {"day": r["day"], "sha256": r["sha256"]}
+                    for r in c.execute(
+                        f"SELECT file,day,sha256 FROM archive_entries WHERE file IN ({qmarks})",
+                        unique_rels,
+                    )
+                }
+                ctx["exported_meta"] = {
+                    r["k"].removeprefix("exported:"): r["v"]
+                    for r in c.execute(f"SELECT k,v FROM meta WHERE k IN ({qmarks})", meta_keys)
+                }
+        for rel in unique_rels:
+            if ctx["cancelled"] and ctx["cancelled"]():
+                raise InterruptedError()
+            state = _export_one(rel, kept_day)
+            if state == "failed":
+                result["failed"].append(rel)
+            elif state == "restored":
+                result["restored_originals"] += 1
+                result["dup"] += 1
+            else:
+                result[state] += 1
+            if len(ctx["batch"]) >= 128:
+                _archive_records_batch(ctx["batch"])
+                ctx["batch"].clear()
+            if ctx["progress"]:
+                ctx["done"] += 1
+                if ctx["done"] % 32 == 0 or ctx["done"] == ctx["total"]:
+                    ctx["progress"](ctx["done"], ctx["total"])
     result["archive_complete"] = not result["failed"]
     result["failed_count"] = len(result["failed"])
     return result
@@ -300,21 +414,33 @@ def file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _archive_record(rel, day, sha, size, state, error=""):
+def _archive_records_batch(records: list[tuple[str, str, str, int, str, str]]) -> None:
+    if not records:
+        return
     from datetime import datetime
 
     from . import db
-    with db._write_lock, db.conn() as c:
-        # 成功路径一次提交归档记录与两个兼容 meta 字段，减少逐图 fsync。
-        values = [(f"export_error:{rel}", error)]
+    now = datetime.now(config.NOW_TZ).isoformat()
+    meta_rows = []
+    entry_rows = []
+    for rel, day, sha, size, state, error in records:
+        meta_rows.append((f"export_error:{rel}", error))
         if state == "complete":
-            values.append((f"exported:{rel}", day))
-        c.executemany("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", values)
-        c.execute("INSERT INTO archive_entries VALUES(?,?,?,?,?,?,?) ON CONFLICT(file) "
-                  "DO UPDATE SET day=excluded.day,sha256=CASE WHEN excluded.sha256!='' THEN excluded.sha256 ELSE archive_entries.sha256 END,"
-                  "size=CASE WHEN excluded.size>0 THEN excluded.size ELSE archive_entries.size END,"
-                  "state=excluded.state,error=excluded.error,checked_at=excluded.checked_at",
-                  (rel, day, sha, size, state, error, datetime.now(config.NOW_TZ).isoformat()))
+            meta_rows.append((f"exported:{rel}", day))
+        entry_rows.append((rel, day, sha, size, state, error, now))
+    with db._write_lock, db.conn() as c:
+        c.executemany("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", meta_rows)
+        c.executemany(
+            "INSERT INTO archive_entries VALUES(?,?,?,?,?,?,?) ON CONFLICT(file) "
+            "DO UPDATE SET day=excluded.day,sha256=CASE WHEN excluded.sha256!='' THEN excluded.sha256 ELSE archive_entries.sha256 END,"
+            "size=CASE WHEN excluded.size>0 THEN excluded.size ELSE archive_entries.size END,"
+            "state=excluded.state,error=excluded.error,checked_at=excluded.checked_at",
+            entry_rows,
+        )
+
+
+def _archive_record(rel, day, sha, size, state, error=""):
+    _archive_records_batch([(rel, day, sha, size, state, error)])
 
 
 def archive_health(deep: bool = False) -> dict:
@@ -367,24 +493,31 @@ def retry_archive(cancelled=None, progress=None) -> dict:
             "SELECT pc.file,MIN(substr(p.kept_at,1,10)) day FROM pics pc "
             "JOIN posts p ON p.sid=pc.sid WHERE p.status='kept' AND pc.file!='' "
             "GROUP BY pc.file").fetchall()
-        history = c.execute("SELECT file,day FROM archive_entries").fetchall()
+        entries = {r["file"]: {"day": r["day"], "sha256": r["sha256"]}
+                   for r in c.execute("SELECT file,day,sha256 FROM archive_entries")}
+        exported_meta = {r["k"].removeprefix("exported:"): r["v"]
+                         for r in c.execute("SELECT k,v FROM meta WHERE k LIKE 'exported:%'")}
     work = {r["file"]: r["day"] for r in rows}
     # 同一个归档只检查一次；已不在保留列表里的历史副本仍独立检查和修复。
-    for r in history:
-        if r["file"] not in work and (config.PICS_DIR / r["file"]).is_file():
-            work[r["file"]] = r["day"]
+    for rel, entry in entries.items():
+        if rel not in work and (config.PICS_DIR / rel).is_file():
+            work[rel] = entry["day"]
+    by_day: dict[str, list[str]] = {}
+    today = datetime.now(config.NOW_TZ).strftime("%Y-%m-%d")
+    for rel, day in work.items():
+        by_day.setdefault(day or today, []).append(rel)
     summary = {"exported": 0, "dup": 0, "restored_originals": 0, "failed_count": 0}
     total = len(work)
     if progress:
         progress(0, total)
-    for index, (rel, day) in enumerate(work.items(), 1):
-        if cancelled and cancelled():
-            raise InterruptedError()
-        r = export_report([rel], day or datetime.now(config.NOW_TZ).strftime("%Y-%m-%d"))
-        for k in summary:
-            summary[k] += r[k]
-        if progress and (index % 32 == 0 or index == total):
-            progress(index, total)
+    with _batched_archive_writes(entries=entries, exported_meta=exported_meta,
+                                 cancelled=cancelled, progress=progress, total=total):
+        for day, rels in by_day.items():
+            report = export_report(rels, day)
+            summary["exported"] += report["exported"]
+            summary["dup"] += report["dup"]
+            summary["restored_originals"] += report["restored_originals"]
+            summary["failed_count"] += report["failed_count"]
     if cancelled and cancelled():
         raise InterruptedError()
     history = archive_health(deep=True)
@@ -398,10 +531,11 @@ def retry_archive(cancelled=None, progress=None) -> dict:
 @guarded
 def remove_pic_files(file_rel: str) -> bool:
     """清理硬删帖子的落盘图片：原图 + 同内容的缩略图（t_ 前缀、同目录同名）。"""
-    src = config.PICS_DIR / file_rel
+    src = resolve_pic(file_rel)
+    base = config.PICS_DIR.resolve()
     removed = False
     for p in {src, src.parent / f"t_{src.name}", src.parent / f"t_{src.stem}.jpg"}:
-        if not p.resolve().is_relative_to(config.PICS_DIR.resolve()):
+        if p.is_symlink() or not p.resolve().is_relative_to(base):
             raise ValueError("媒体清理路径越界")
         if p.is_file():
             p.unlink()
@@ -463,6 +597,7 @@ def format_notes(groups: list[tuple[str, list[dict]]], header: str) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
+@guarded
 def rebuild_day_notes(day: str) -> bool:
     """重建归档文件夹的 评论.txt（保留帖评论增改删、当日点赞时调用）。
 
@@ -471,14 +606,21 @@ def rebuild_day_notes(day: str) -> bool:
     返回是否落了文件。临时文件写完原子替换，失败不破坏旧文件。
     """
     from . import db
+    if not day or "/" in day or "\\" in day or day in (".", "..") or ".." in Path(day).parts:
+        raise ValueError("归档日期路径无效")
+    day_dir = config.EXPORT_DIR / day
+    if not day_dir.resolve().is_relative_to(config.EXPORT_DIR.resolve()):
+        raise ValueError("归档日期路径越界")
     with db.conn() as c:
         rows = c.execute(
             "SELECT p.sid, p.author, c.body, c.created_at "
             "FROM posts p JOIN post_comments c ON c.sid = p.sid "
             "WHERE p.status='kept' AND substr(p.kept_at,1,10)=? ORDER BY p.sid, c.id",
             (day,)).fetchall()
-    target = config.EXPORT_DIR / day / "评论.txt"
+    target = day_dir / "评论.txt"
     if not rows:
+        if target.is_symlink():
+            raise ValueError("归档批注路径无效")
         target.unlink(missing_ok=True)
         return False
     groups: dict[tuple[str, str], list[dict]] = {}
@@ -491,7 +633,13 @@ def rebuild_day_notes(day: str) -> bool:
         groups[key].append({"body": r["body"], "created_at": r["created_at"]})
     text = format_notes([(f"{day}_{a}_{s}", groups[(s, a)]) for s, a in order], day)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name("评论.txt.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(target)
+    if target.parent.is_symlink() or target.is_symlink():
+        raise ValueError("归档批注路径无效")
+    fd, tmp = tempfile.mkstemp(prefix=".评论-", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, target)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
     return True

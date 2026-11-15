@@ -22,6 +22,7 @@ GraphQL 又依赖高频漂移的 queryId —— 两者都不作为本轮实现�
 """
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 from ..media_fetch import permitted
 from .base import StructureError, validate_post
@@ -32,6 +33,9 @@ _GROUP_PREFIX = "x:"          # groups.list_id 里 X 列表的前缀（防与微
 _USER_PREFIX = "xu:"          # X 用户主页目标（xu:<handle 小写>）
 _LOCAL_GROUP_PREFIX = "xg:"   # 系统内自定义组（成员映射在 group_members，自身不是抓取目标）
 _TZ8 = timezone(timedelta(hours=8))
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9_]{1,15}$")
+_UID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_X_POST_HOSTS = frozenset({"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"})
 
 
 def is_x_group(list_id: str) -> bool:
@@ -58,7 +62,35 @@ def group_user_id(handle: str) -> str:
 def _https(url: str) -> str:
     if not isinstance(url, str) or not url:
         return ""
-    return "https:" + url if url.startswith("//") else url
+    u = url.strip()
+    return "https:" + u if u.startswith("//") else u
+
+
+def _http_url(url: str) -> str:
+    u = _https(url)
+    if not u:
+        return ""
+    try:
+        parsed = urlsplit(u)
+    except ValueError:
+        return ""
+    if parsed.scheme.lower() in ("http", "https") and parsed.hostname and not any(ord(c) <= 32 for c in u):
+        return u
+    return ""
+
+
+def _is_x_post_url(url: str) -> bool:
+    u = _http_url(url)
+    if not u:
+        return False
+    host = (urlsplit(u).hostname or "").lower()
+    return host in _X_POST_HOSTS
+
+
+def _is_video_url(url: str) -> bool:
+    if not url or not permitted(url):
+        return False
+    return (urlsplit(url).hostname or "").lower() == "video.twimg.com"
 
 
 def _orig(url: str) -> str:
@@ -82,13 +114,13 @@ def normalize_created_at(s: str) -> str:
 
 
 def _best_video_url(v: dict) -> str:
-    """视频条目 → 最高码率 mp4 变体 URL：优先采集端预选的 url，否则从 variants 挑。"""
+    """视频条目 → 最高码率 mp4 变体 URL：仅限 video.twimg.com，优先采集端预选 url，否则从 variants 挑。"""
     u = _https(str(v.get("url") or ""))
-    if u and permitted(u):
+    if _is_video_url(u):
         return u
     variants = [x for x in (v.get("variants") or []) if isinstance(x, dict)]
     allowed = [(_https(str(x.get("url") or "")), x.get("bitrate") or 0) for x in variants]
-    allowed = [(u, b) for u, b in allowed if u and permitted(u)]
+    allowed = [(cand, b) for cand, b in allowed if _is_video_url(cand)]
     return max(allowed, key=lambda t: t[1])[0] if allowed else ""
 
 
@@ -132,15 +164,24 @@ def normalize_tweet(t: dict, fetched_at: str | None = None) -> dict | None:
         return None
     author = t.get("author") if isinstance(t.get("author"), dict) else {}
     uid = str(author.get("id") or author.get("uid") or "").strip()
-    handle = str(author.get("handle") or author.get("uid") or "").strip()
-    name = str(author.get("name") or "").strip()
-    if not uid or not name:
+    raw_handle = str(author.get("handle") or author.get("uid") or "").lstrip("@").strip()
+    name = str(author.get("name") or "").strip()[:200]
+    if not uid or not name or not _UID_RE.fullmatch(uid):
         return None
+    if raw_handle:
+        if _HANDLE_RE.fullmatch(raw_handle):
+            handle = raw_handle
+        elif uid.isdigit() and not author.get("handle"):
+            handle = ""
+        else:
+            return None
+    else:
+        handle = ""
     pics = [{"pid": u, "full": _orig(u), "mid": u} for u in images] + video_pics
-    url = _https(t.get("url") or "")
-    if not url.lower().startswith(("http://", "https://")):
-        # 采集端来的链接只认 http(s)：伪协议（javascript: 等）回落到站内规范地址
-        url = f"https://x.com/{handle}/status/{tid}"
+    url = _http_url(t.get("url") or "")
+    if not _is_x_post_url(url):
+        # 只认 x.com / twitter.com http(s) 地址，其它外部域名或伪协议回落到站内规范地址
+        url = f"https://x.com/{handle or 'i'}/status/{tid}"
     p = {
         "sid": SID_PREFIX + tid,
         "source": SOURCE_ID,
@@ -148,13 +189,13 @@ def normalize_tweet(t: dict, fetched_at: str | None = None) -> dict | None:
         "handle": handle,
         "text_complete": not bool(t.get("truncated")),
         "author": name,
-        "avatar": _https(author.get("avatar") or ""),
-        "text": str(t.get("text") or "").strip(),
+        "avatar": _http_url(author.get("avatar") or ""),
+        "text": str(t.get("text") or "").strip()[:50000],
         "is_long": 0,
         "created_at": normalize_created_at(str(t.get("created_at") or "")),
         "fetched_at": fetched_at or datetime.now(_TZ8).isoformat(timespec="seconds"),
         "weibo_url": url,          # 历史列名，语义 = originalUrl
-        "via": str(t.get("via") or ""),
+        "via": str(t.get("via") or "")[:200],
         "pics": pics,
     }
     validate_post(p)
