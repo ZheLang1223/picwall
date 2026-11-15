@@ -34,6 +34,15 @@ export function createNotes({ $, api, toast, esc, commentBodyHTML, fmtCommentTim
       toast(e.message);
       if (reset)   // 首屏读取失败：等待态换成错误态（翻页失败不动已有行，仅 toast）
         $('#notes-list').innerHTML = `<div class="note-empty">批注读取失败：${esc(e.message)}</div>`;
+      if (!reset) {
+        N.hasMore = false;
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'note-empty note-retry';
+        retry.textContent = '加载失败，点此重试';
+        retry.onclick = () => { retry.remove(); N.hasMore = true; fetchBatch(false); };
+        $('#notes-list').appendChild(retry);
+      }
     }
     finally { N.loading = false; }
   }

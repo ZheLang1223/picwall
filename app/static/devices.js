@@ -14,20 +14,22 @@ export function initDevices({$,api,toast}) {
     if (role !== 'admin') return;
     try {
       const [result, current] = await Promise.all([api('/api/devices'),api('/api/device/session')]);
-      box.innerHTML = (localOwner ? '<p class="hint">当前为运行 PWALL 的本机，无需配对。</p>' : '') + result.devices.map(d => `<div class="grow"><span>${esc(d.name)} · ${esc({admin:'管理',editor:'分拣',viewer:'只读',collector:'采集'}[d.role])}${d.id === current.id ? '（当前）' : ''}</span><button data-device="${esc(d.id)}">取消配对</button></div>`).join('');
+      box.innerHTML = (localOwner ? '<p class="hint">当前为运行 PWALL 的本机，无需配对。</p>' : '') + result.devices.map(d => `<div class="grow"><span>${esc(d.name)} · ${esc({admin:'管理',editor:'分拣',viewer:'只读',collector:'采集'}[d.role])}${d.id === current.id ? '（当前）' : ''}</span><button type="button" data-device="${esc(d.id)}">取消配对</button></div>`).join('');
       box.querySelectorAll('[data-device]').forEach(b => b.onclick = async () => {
+        if (b.disabled) return; b.disabled = true;
         try {
           await api('/api/devices/' + encodeURIComponent(b.dataset.device), 'DELETE');
           if (b.dataset.device === current.id) location.reload();
           else b.closest('.grow').remove();
-        } catch(e) { toast(e.message); }
+        } catch(e) { b.disabled = false; toast(e.message); }
       });
     } catch(e) { console.error('设备列表渲染失败:', e); box.textContent = '设备列表加载失败：' + e.message; }
   }
   const logout = $('#device-logout');
   if (logout) logout.onclick = async () => {
+    if (logout.disabled) return; logout.disabled = true;
     try { await api('/api/device/session','DELETE'); location.reload(); }
-    catch(e) { toast(e.message); }
+    catch(e) { logout.disabled = false; toast(e.message); }
   };
   return { render };
 }

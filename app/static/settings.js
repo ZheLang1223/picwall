@@ -170,11 +170,11 @@ let lastMembersByGroup = {};
 function membersRowHtml(gid, byGroup = lastMembersByGroup) {
   const list = byGroup[gid] || [];
   const chips = list.map((m) =>
-    `<span class="gm-chip">${esc(m.name)}<button data-gmrm="${esc(gid)}|${esc(m.member_id)}" aria-label="移出 ${esc(m.name)}">✕</button></span>`).join('');
+    `<span class="gm-chip">${esc(m.name)}<button type="button" data-gmrm="${esc(gid)}|${esc(m.member_id)}" aria-label="移出 ${esc(m.name)}">✕</button></span>`).join('');
   return `<div class="gm-row" data-gmrow="${esc(gid)}">
     <div class="gm-chips">${chips || '<span class="hint">还没有成员，输入 @handle 添加</span>'}</div>
     <div class="gm-add"><input placeholder="添加成员：@handle" maxlength="16" autocomplete="off" spellcheck="false"
-      data-gmadd="${esc(gid)}"><button data-gmok="${esc(gid)}">加入</button></div>
+      data-gmadd="${esc(gid)}"><button type="button" data-gmok="${esc(gid)}">加入</button></div>
     <div class="hint gm-hint">成员须是上方已添加的 X 用户；加入即回填历史帖。</div>
   </div>`;
 }
@@ -183,21 +183,24 @@ function bindMembersRow(scope) {
   if (!scope) return;
   scope.querySelectorAll('[data-gmrm]').forEach((b) => b.onclick = async () => {
     const [gid, mid] = b.dataset.gmrm.split('|');
+    if (b.disabled) return; b.disabled = true;
     try {
       const r = await api(`/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(mid)}`, 'DELETE');
       toast(r.msg || '已移出');
       renderMyGroups();
-    } catch (e) { toast(e.message); }
+    } catch (e) { b.disabled = false; toast(e.message); }
   });
   const addMember = async (gid) => {
     const inp = scope.querySelector(`[data-gmadd="${CSS.escape(gid)}"]`);
+    const okBtn = scope.querySelector(`[data-gmok="${CSS.escape(gid)}"]`);
     const v = inp.value.trim().replace(/^@/, '');
     if (!v) { inp.focus(); return; }
+    if (okBtn?.disabled) return; if (okBtn) okBtn.disabled = true;
     try {
       const r = await api(`/api/groups/${encodeURIComponent(gid)}/members`, 'POST', { member: v });
       toast(r.msg || '已加入');
       renderMyGroups();
-    } catch (e) { toast(e.message); }
+    } catch (e) { if (okBtn) okBtn.disabled = false; toast(e.message); }
   };
   scope.querySelectorAll('[data-gmok]').forEach((b) => b.onclick = () => addMember(b.dataset.gmok));
   scope.querySelectorAll('[data-gmadd]').forEach((inp) => {
@@ -255,7 +258,7 @@ async function renderMyGroups() {
       <span class="gstat">${g.active
         ? `待 ${g.pending || 0} · 留 ${g.kept || 0} · 删 ${g.discarded || 0}`
         : '已移除'}</span>
-      ${g.active ? `${isXg ? `<button data-gmtoggle="${esc(g.list_id)}" aria-expanded="${openXGroups.has(g.list_id)}">${openXGroups.has(g.list_id) ? '收起' : '成员'}</button>` : ''}<button data-bf="${esc(g.list_id)}" title="回补近期内容">回补</button><button data-rm="${esc(g.list_id)}">移除</button>` : ''}
+      ${g.active ? `${isXg ? `<button type="button" data-gmtoggle="${esc(g.list_id)}" aria-expanded="${openXGroups.has(g.list_id)}">${openXGroups.has(g.list_id) ? '收起' : '成员'}</button>` : ''}<button type="button" data-bf="${esc(g.list_id)}" title="回补近期内容">回补</button><button type="button" data-rm="${esc(g.list_id)}">移除</button>` : ''}
     </div>${membersRow}`;
   }).join('') ||
     '<div class="hint" style="padding:6px 2px">还没有分组，点下方「拉取分组」从微博账号导入。</div>';
@@ -279,12 +282,13 @@ async function renderMyGroups() {
     finally { b.disabled = false; }
   });
   box.querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
+    if (b.disabled) return; b.disabled = true;
     try {
       await api('/api/groups/' + encodeURIComponent(b.dataset.rm), 'DELETE');
       openXGroups.delete(b.dataset.rm);
       toast('已移除（已抓的图保留在库里）');
       renderMyGroups();
-    } catch (e) { toast(e.message); }
+    } catch (e) { b.disabled = false; toast(e.message); }
   });
 }
 
@@ -460,7 +464,7 @@ function resetPairCode() {
 $('#pair-role').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-v]');
   if (!b) return;
-  $('#pair-role').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  $('#pair-role').querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
 });
 $('#pair-code-gen').onclick = async () => {
   if (!S.isAdmin) return;

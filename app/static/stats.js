@@ -92,7 +92,7 @@ function paintReview(r) {
   ].join('');
 }
 
-(async () => {
+async function loadStats() {
   try {
     const r = await fetch('/api/stats');
     const j = await r.json();
@@ -103,6 +103,10 @@ function paintReview(r) {
     paintTop(j.top_posts || []);
     paintReview(j.review);
   } catch (e) {
-    $('#st-overview').innerHTML = '<div class="st-empty" style="grid-column:1/-1">统计暂时取不到，稍后再试。</div>';
+    $('#st-overview').innerHTML = '<div class="st-empty" style="grid-column:1/-1">统计暂时取不到，稍后再试。 <button type="button" class="st-retry">重试</button></div>';
+    $('#st-chart-wrap').innerHTML = '';
+    $('#st-overview .st-retry').onclick = () => { $('#st-overview').innerHTML = ''; loadStats(); };
   }
-})();
+}
+
+loadStats();

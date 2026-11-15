@@ -592,7 +592,7 @@ if (typeof document !== 'undefined') {
     } catch (err) { ksToast(err.message); }
   });
 
-  (async () => {
+  async function loadShelf() {
     try {
       const r = await fetch('/api/authors/kiosk');
       const j = await r.json();
@@ -602,8 +602,9 @@ if (typeof document !== 'undefined') {
       S.role = j.role || 'viewer';
       paint();
     } catch (e) {
-      $('#ks-wall').innerHTML =
-        '<div class="ks-counter-empty" style="grid-column:1/-1;">书架暂时取不到（/api/authors/kiosk 失败），稍后刷新再试</div>';
+      $('#ks-wall').innerHTML = '<div class="ks-counter-empty" style="grid-column:1/-1;">书架暂时取不到，稍后再试。 <button type="button" class="ks-retry">重试</button></div>';
+      $('#ks-wall .ks-retry').onclick = () => { $('#ks-wall').innerHTML = ''; loadShelf(); };
     }
-  })();
+  }
+  loadShelf();
 }

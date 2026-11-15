@@ -147,7 +147,12 @@ function renderBanner() {
     if (btn) btn.disabled = ['queued','running'].includes(st.jobs?.[kind]?.state);
   }
   $('#banner').querySelectorAll('[data-retry-job]').forEach(btn => {
-    btn.onclick = () => maintenanceJobs.start(btn.dataset.retryJob);
+    btn.onclick = async () => {
+      if (btn.disabled) return;   // 请求中防重复提交
+      btn.disabled = true;
+      await maintenanceJobs.start(btn.dataset.retryJob);
+      renderBanner();
+    };
   });
   $('#lnk-cookie') && ($('#lnk-cookie').onclick = (e) => { e.preventDefault(); settings.openConnections('weibo'); });
   $('#lnk-x-cookie') && ($('#lnk-x-cookie').onclick = (e) => { e.preventDefault(); settings.openConnections('x'); });
@@ -334,6 +339,7 @@ async function load(reset) {
   const started = Date.now();
   S.loading = true;
   renderViewButton();
+  if (!reset) { const more = $('#btn-more'); more.disabled = true; more.textContent = '加载中…'; more.setAttribute('aria-busy', 'true'); }
   if (reset) {
     syncUrl(); S.cursor = null; S.hasMore = true; S.offset = 0;
     S.posts = []; S.images = []; feed.innerHTML = ''; feedCols = [];
@@ -394,6 +400,7 @@ async function load(reset) {
 
 function updateMore() {
   const more = $('#btn-more');
+  more.disabled = false; more.removeAttribute('aria-busy');
   $('.more').classList.toggle('is-empty', !S.loadError && !S.total);   // 空态给足留白
   if (S.loadError) {
     more.hidden = false;
@@ -464,9 +471,9 @@ const IMG_FALLBACK = 'data:image/svg+xml,' + encodeURIComponent(
    多选模式下点击走勾选分支；样式重置见 style.css 的 button.avatar */
 const avatarButton = (p) => {
   const av = avatarSrc(p.avatar);
-  return `<button class="avatar av-link" data-uid="${esc(p.uid)}" title="查看 ${esc(p.author)} 的全部帖子"`
+  return `<button type="button" class="avatar av-link" data-uid="${esc(p.uid)}" title="查看 ${esc(p.author)} 的全部帖子"`
     + ` aria-label="查看 ${esc(p.author)} 的全部帖子">${av
-      ? `<img src="${esc(av)}" alt="" decoding="async">` : esc(p.author[0] || '微')}</button>`;
+      ? `<img src="${esc(av)}" alt="" loading="lazy" decoding="async">` : esc(p.author[0] || '微')}</button>`;
 };
 
 /* 帖子的「今日已赞」态：last_confirm_at（建账/+1 时间戳）落在东八区今天即为真 */
@@ -482,6 +489,7 @@ function renderCard(p) {
   // 收藏走琥珀描边（.card.fav），不再摆收藏 chip；保留态维持 accent 描边
   el.className = 'card' + (p.status === 'kept' ? ' kept' : '') + (p.favorite ? ' fav' : '');
   el.dataset.sid = p.sid;
+  el.tabIndex = 0;   // 键盘可聚焦：Tab 到卡片后 Enter 打开（与点击同路径）
   // XHS 式卡：首图原始比例（竖图钳到 3:4 防霸屏、全景钳到 21:9 防细条），其余图进大图/详情看
   const first = (p.pics || [])[0];
   const n = (p.pics || []).length;
@@ -578,7 +586,7 @@ const CARET_SVG = '<svg class="caret" width="12" height="12" viewBox="0 0 24 24"
 const faAvatar = (a, size = 22) => {
   const av = avatarSrc(a.avatar);
   return av
-    ? `<img class="avatar" src="${esc(av)}" alt="" width="${size}" height="${size}" decoding="async">`
+    ? `<img class="avatar" src="${esc(av)}" alt="" loading="lazy" width="${size}" height="${size}" decoding="async">`
     : `<span class="avatar">${esc((a.author || '微')[0])}</span>`;
 };
 
@@ -860,6 +868,14 @@ feed.addEventListener('click', (e) => {
   }
   const card = e.target.closest('.card');
   if (card) openDetail(card.dataset.sid);
+});
+// 卡片键盘入口：聚焦卡片本身（不是卡内按钮）时 Enter = 点击卡片，复用点击分支（详情 / 纯图大图 / 多选勾选）
+feed.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+  const card = e.target;
+  if (!(card instanceof Element) || !card.matches('#feed .card')) return;
+  e.preventDefault();
+  (card.querySelector('.pics') || card).click();
 });
 
 /* ---------- 大图浏览 ---------- */
@@ -1300,7 +1316,10 @@ async function refreshDetail() {
     if (detailSid !== sid || $('#detail').hidden) return;
     const { front } = detailCards();
     if (front && front.classList.contains('is-front')) renderDetailInto(front, r.post, true);
-  } catch (e) { closeDetail(); }
+  } catch (e) {
+    if (e && e.status === 404) closeDetail();
+    else toast('刷新详情失败：' + e.message);
+  }
 }
 
 // 渲染整带：前卡用传入数据；次位卡从列表缓存取「下一张」，图 eager 立即加载——
@@ -1363,7 +1382,7 @@ function renderDetailInto(card, p, eager) {
   if (n > 1) {
     dots.hidden = false;
     dots.innerHTML = p.pics.map((_, i) =>
-      `<button class="dt-dot${i ? '' : ' on'}" aria-label="第 ${i + 1} 张"></button>`).join('');
+      `<button type="button" class="dt-dot${i ? '' : ' on'}" aria-label="第 ${i + 1} 张" aria-current="${i ? 'false' : 'true'}"></button>`).join('');
   } else { dots.hidden = true; dots.innerHTML = ''; }
   card.querySelector('.dt-ig.prev').hidden = card.querySelector('.dt-ig.next').hidden = n <= 1;
   card.dataset.img = '0';
@@ -1430,14 +1449,14 @@ function renderDetailTags(card, p) {
       if (done) return;
       done = true;
       const v = inp.value.trim();
-      if (!v) { renderDetailTags(card, p); return; }   // 空值 = 取消，回原样
+      if (!v) { renderDetailTags(card, p); if (document.activeElement === document.body) card.querySelector('.dt-tag-add')?.focus(); return; }   // 空值 = 取消，回原样
       const r = await toggleTag(p.sid, [v], []);
       if (r) refreshTags();
     };
     inp.addEventListener('keydown', (e) => {
       e.stopPropagation();   // 输入键不进全局快捷键；Esc 只收输入框不关详情
       if (e.key === 'Enter') commit();
-      else if (e.key === 'Escape') { done = true; renderDetailTags(card, p); }
+      else if (e.key === 'Escape') { done = true; renderDetailTags(card, p); card.querySelector('.dt-tag-add')?.focus(); }
     });
     inp.addEventListener('blur', () => commit());
   };
@@ -1520,12 +1539,15 @@ function bindCommentRow(card, row) {
       }, 3000);
       return;
     }
+    if (btn.disabled) return;   // 请求中防重复提交
+    btn.disabled = true;
     try {
       await api(`/api/posts/${detailSid}/comments/${cid}`, 'DELETE');
       card._comments = (card._comments || []).filter((c) => c.id !== cid);
       renderDetailComments(card, card._comments);
       syncCommentCount(card);
     } catch (e) { toast(e.message); }
+    finally { btn.disabled = false; }
   };
   row.querySelector('.c-edit').onclick = () => {
     const bodyEl = row.querySelector('.c-body');
@@ -1598,7 +1620,10 @@ function showStageImage(card, i) {
   const cur = Math.max(0, Math.min(i, figs.length - 1));
   figs.forEach((f, k) => { f.hidden = k !== cur; });
   card.dataset.img = String(cur);
-  card.querySelectorAll('.dt-dot').forEach((d, k) => d.classList.toggle('on', k === cur));
+  card.querySelectorAll('.dt-dot').forEach((d, k) => {
+    d.classList.toggle('on', k === cur);
+    d.setAttribute('aria-current', String(k === cur));
+  });
 }
 
 /* ---------- 引用批注：选中正文一段 → 浮出「引用批注」→ 输入框带出 > 引用块 ---------- */
@@ -1970,7 +1995,12 @@ function togglePick(sid) {
   updateSelN();
 }
 
-function updateSelN() { $('#sel-n').textContent = S.selected.size; }
+function updateSelN() {
+  const n = S.selected.size;
+  $('#sel-n').textContent = n;
+  // 未勾选时动作钮置灰（全选/退出始终可用）
+  ['#sel-keep', '#sel-drop', '#sel-tags', '#sel-download'].forEach((q) => { $(q).disabled = n === 0; });
+}
 
 $('#sel-cancel').onclick = () => setSelectMode(false);
 $('#sel-all').onclick = () => {
@@ -2011,13 +2041,14 @@ function renderTagsChoices() {
   // 本次手输的新标签（不在 tagList 里）也要能显示成选中 chip
   const fresh = [...bulkTagPicked].filter((t) => !(S.tagList || []).some((x) => x.tag === t));
   const chips = (S.tagList || []).map((t) =>
-    `<button class="fchip ${bulkTagPicked.has(t.tag) ? 'on' : ''}" data-tag="${esc(t.tag)}">${esc(t.tag)}<span class="fcount">${t.n}</span></button>`)
-    .concat(fresh.map((t) => `<button class="fchip on" data-tag="${esc(t)}">${esc(t)}</button>`));
+    `<button type="button" class="fchip ${bulkTagPicked.has(t.tag) ? 'on' : ''}" aria-pressed="${bulkTagPicked.has(t.tag)}" data-tag="${esc(t.tag)}">${esc(t.tag)}<span class="fcount">${t.n}</span></button>`)
+    .concat(fresh.map((t) => `<button type="button" class="fchip on" aria-pressed="true" data-tag="${esc(t)}">${esc(t)}</button>`));
   box.innerHTML = chips.join('') || '<span class="f-empty">还没有标签——在下方输入一个新标签名</span>';
   box.querySelectorAll('.fchip').forEach((b) => b.onclick = () => {
     const t = b.dataset.tag;
     if (bulkTagPicked.has(t)) bulkTagPicked.delete(t); else bulkTagPicked.add(t);
     renderTagsChoices();
+    [...box.querySelectorAll('.fchip')].find((x) => x.dataset.tag === t)?.focus();
   });
 }
 
@@ -2045,6 +2076,9 @@ $('#tag-new').addEventListener('keydown', (e) => {
 $('#tags-apply').onclick = async () => {
   const add = [...bulkTagPicked];
   if (!add.length) { toast('先勾选或输入要加的标签'); return; }
+  const applyBtn = $('#tags-apply');
+  if (applyBtn.disabled) return;
+  applyBtn.disabled = true;
   const sids = [...S.selected];
   try {
     const r = await enqueueMutation(() => api('/api/posts/bulk-tags', 'POST', {sids, add}));
@@ -2058,7 +2092,7 @@ $('#tags-apply').onclick = async () => {
     }
     setSelectMode(false);
     refreshTags();
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message); } finally { applyBtn.disabled = false; }
 };
 /* ---------- 抓取(过程面板挂设置窗口「自动抓取」分区) ---------- */
 
@@ -2094,6 +2128,9 @@ async function renderPurgeModal() {
 }
 
 $('#btn-purge-run').onclick = async () => {
+  const runBtn = $('#btn-purge-run');
+  if (runBtn.disabled) return;
+  runBtn.disabled = true;
   const days = S.st?.purge?.days || 3;
   try {
     const r = await api(`/api/purge?days=${days}`, 'POST');
@@ -2101,7 +2138,7 @@ $('#btn-purge-run').onclick = async () => {
     await loadStatus();
     renderPurgeModal();
     load(true);   // 「不要」视图行数变化
-  } catch (e) { toast(e.message); }
+  } catch (e) { runBtn.disabled = false; toast(e.message); }
 };
 
 async function startCrawl() {
@@ -3414,7 +3451,7 @@ function initSpotlightSearch() {
   }
 }
 
-loadStatus().then(() => load(true)).catch((e) => toast('加载失败：' + e.message));
+loadStatus().catch((e) => toast('状态加载失败：' + e.message)).then(() => load(true));
 refreshTags();   // 标签清单首载（失败静默，筛选行给引导文案）
 initSpotlightSearch();
 renderActiveSearchChip();

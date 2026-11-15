@@ -155,7 +155,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
       R.posts.push(...fresh);
       S.images.push(...fresh.flatMap(p => (p.pics || []).map(pc => ({ p, pc, url: '/media/' + pc.file }))));
       return true;
-    } catch (e) { toast(e.message); return false; }
+    } catch (e) { toast(e.message); return null; }   // null = load failed (already toasted); false = really no more
     finally { R.loadingMore = false; }
   }
 
@@ -165,6 +165,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     if (j < 0) { toast('已经是第一张'); return; }
     if (j >= R.posts.length) {
       const added = await fetchMore();
+      if (added === null) return;   // load failed: error toast already shown
       if (!added) { toast('已经是最后一张'); return; }
     }
     R.idx = j;

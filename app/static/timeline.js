@@ -299,6 +299,7 @@ export function createTimeline(deps) {
         if (!S.hasMore) break;
         load(false);
         await settle();
+        if (S.loadError) { toast('装载失败，请稍后重试'); return; }
       }
       sec = sections.get(day);
       if (!sec) { toast(`${dayLabel(day)} 在当前筛选下没有帖子`); return; }

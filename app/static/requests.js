@@ -16,7 +16,9 @@ export async function api(path, method = 'GET', body, options = {}) {
     if (!res.ok) {
       // FastAPI 校验错误的 detail 是对象数组，直接进 Error 会显示 [object Object]
       const detail = typeof data.detail === 'string' ? data.detail : '';
-      throw new Error(detail || data.msg || `HTTP ${res.status}`);
+      const err = new Error(detail || data.msg || `HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
     }
     return data;
   } catch(e) {
