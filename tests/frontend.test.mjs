@@ -1750,3 +1750,14 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('筛选面板关闭回归焦点：hadFocus 捕获 + 焦点还给可见打开按钮', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const start = source.indexOf('function closeViewPanel()');
+  const end = source.indexOf('function toggleViewPanel()');
+  assert.ok(start !== -1 && end !== -1 && start < end, 'app.js 应存在 closeViewPanel 与 toggleViewPanel');
+  const body = source.slice(start, end);
+  assert.ok(body.includes('panel.contains(document.activeElement)'), '关面板前应捕获焦点是否在面板内');
+  assert.ok(body.includes('focus({preventScroll:true})'), '面板关闭后应把焦点还给实际可见的打开按钮');
+});
