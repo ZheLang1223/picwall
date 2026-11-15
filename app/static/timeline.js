@@ -439,6 +439,9 @@ export function createTimeline(deps) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target;
       if (t && t.closest && t.closest('input, textarea, select, [contenteditable]')) return;
+      if (e.repeat) return;
+      if (document.querySelector('.modal:not([hidden])')) return;
+      if (canSwitch && !canSwitch()) { toast('先退出浮层，再切换布局'); return; }
       setLayout(!active());
     });
   }

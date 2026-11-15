@@ -1750,3 +1750,14 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('编年 V 键：按住不连切、弹窗打开不背后切换、浮层双向拦截', async()=>{
+ const fs=await import('node:fs/promises');
+ const tl=await fs.readFile(new URL('../app/static/timeline.js',import.meta.url),'utf8');
+ const bindKeys=tl.match(/function bindKeys\(\)[\s\S]*?\n  \}/);
+ assert.ok(bindKeys, 'bindKeys 应存在');
+ const src=bindKeys[0];
+ assert.ok(src.includes('e.repeat'), 'V 键应忽略按键自动重复（按住不连切）');
+ assert.ok(src.includes(".modal:not([hidden])"), '弹窗打开时 V 不应在背后切换布局');
+ assert.ok(src.includes('canSwitch && !canSwitch()'), '浮层打开时 V 应双向拦截并提示先退出浮层');
+});
