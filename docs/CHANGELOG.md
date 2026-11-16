@@ -138,3 +138,4 @@ date: 2026-10-12
 - 2026-11-16 04:22：悬浮球菜单键盘可达性：Esc 关闭后焦点回到悬浮球按钮，Tab 移出菜单自动收起，菜单项 type=button（fix/fab-menu-keyboard）
 - 2026-11-16 05:18：关闭详情后键盘焦点回到墙上对应卡片，不再掉回页面顶部（fix/detail-close-focus）
 - 2026-11-16 06:21：按 Esc 关闭筛选面板后键盘焦点回到筛选按钮，不再掉回页面顶部（fix/view-panel-close-focus）
+- 2026-11-16 07:29：搜索面板里用 Tab 选中的实时结果按回车/空格即可打开，不再没反应（fix/spotlight-result-keyboard）
