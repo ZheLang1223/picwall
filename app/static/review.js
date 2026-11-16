@@ -12,7 +12,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
                                cancelHide, animatedHide,
                                safeUrl, trapTab, setDetailSid,
                                showStageImage, openLB }) {
-  const R = { active: false, posts: [], idx: 0, stashImages: null, loadingMore: false,
+  const R = { active: false, posts: [], idx: 0, stashImages: null, loadingMore: false, opening: false,
               arrow: {key: null, t: 0} };
 
   // 回看帖不在当前 feed 列表里时，直接改 feed 卡片的徽章；在列表里则同步数据对象
@@ -57,13 +57,16 @@ export function createReview({ S, $, api, toast, enqueueMutation,
   }
 
   async function open() {
-    if (R.active || S.readOnly) return;
+    if (R.active || R.opening || S.readOnly) return;
+    R.opening = true;   // 请求在途时挡住连点；close() 清掉即视为取消
     const pill = $('#review-progress');   // 等待反馈：请求回来前先亮进度 pill，成功后由 render() 接管文案
     pill.hidden = false;
     pill.textContent = '回看加载中…';
     let data;
     try { data = await api('/api/review/next?limit=' + reviewN()); }
-    catch (e) { pill.hidden = true; toast(e.message); return; }
+    catch (e) { if (R.opening) { pill.hidden = true; toast(e.message); } R.opening = false; return; }
+    if (!R.opening || R.active) { R.opening = false; pill.hidden = true; return; }   // 加载中已被关闭：取消打开
+    R.opening = false;
     const posts = data.posts || [];
     if (!posts.length) { pill.hidden = true; toast('还没有保留的图'); return; }
     R.active = true; R.posts = posts; R.idx = 0;
@@ -87,6 +90,11 @@ export function createReview({ S, $, api, toast, enqueueMutation,
   }
 
   function close() {
+    if (R.opening && !R.active) {   // 打开请求尚在途：取消
+      R.opening = false;
+      $('#review-progress').hidden = true;
+      return;
+    }
     if (!R.active) return;
     R.active = false;
     R.posts = [];
@@ -164,7 +172,9 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     const j = R.idx + d;
     if (j < 0) { toast('已经是第一张'); return; }
     if (j >= R.posts.length) {
+      if (R.loadingMore) return;   // 下一组还在加载：静默等待，不误报到底
       const added = await fetchMore();
+      if (!R.active) return;   // 加载期间已退出回看
       if (added === null) return;   // load failed: error toast already shown
       if (!added) { toast('已经是最后一张'); return; }
     }

@@ -1750,3 +1750,14 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('回看防连点：打开请求在途时挡重复打开，续取中翻页静默且退出后不再渲染', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/review.js', import.meta.url), 'utf8');
+  assert.ok(src.includes('R.opening'), 'open() 应以 R.opening 挡住在途重复打开');
+  const start = src.indexOf('async function nav(');
+  const end = src.indexOf('async function favorite(', start);
+  const navSrc = src.slice(start, end);
+  assert.ok(navSrc.includes('if (R.loadingMore) return'), '续取中再翻页应静默返回');
+  assert.ok(navSrc.includes('if (!R.active) return'), 'fetchMore 之后应检查回看是否已退出');
+});
