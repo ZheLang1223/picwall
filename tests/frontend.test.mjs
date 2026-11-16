@@ -1773,6 +1773,8 @@ test('顶栏与批注关闭按钮均为 type=button', async () => {
   assert.ok(html.includes('<button type="button" id="btn-settings"'), '#btn-settings 应为 type=button');
   assert.ok(html.includes('<button type="button" id="f-reset"'), '#f-reset 应为 type=button');
   assert.ok(html.includes('<button type="button" id="notes-close"'), '#notes-close 应为 type=button');
+});
+
 test('编年 V 键：按住不连切、弹窗打开不背后切换、浮层双向拦截', async()=>{
  const fs=await import('node:fs/promises');
  const tl=await fs.readFile(new URL('../app/static/timeline.js',import.meta.url),'utf8');
@@ -1782,6 +1784,8 @@ test('编年 V 键：按住不连切、弹窗打开不背后切换、浮层双�
  assert.ok(src.includes('e.repeat'), 'V 键应忽略按键自动重复（按住不连切）');
  assert.ok(src.includes(".modal:not([hidden])"), '弹窗打开时 V 不应在背后切换布局');
  assert.ok(src.includes('canSwitch && !canSwitch()'), '浮层打开时 V 应双向拦截并提示先退出浮层');
+});
+
 test('报刊亭合上杂志后焦点回到打开的那本封面', async () => {
   const fs = await import('node:fs/promises');
   const kiosk = await fs.readFile(new URL('../app/static/kiosk.js', import.meta.url), 'utf8');
@@ -1793,18 +1797,24 @@ test('报刊亭合上杂志后焦点回到打开的那本封面', async () => {
   assert.ok(kiosk.includes("e.key === 'Escape' && S.open >= 0 && !e.defaultPrevented")
     && kiosk.includes('closeSpread({ refocus: true })'),
     'Escape 关闭应强制回焦到封面且不吞已阻止的默认行为');
+});
+
 test('悬浮球菜单键盘可达性：菜单项 type=button、Esc 关闭焦点回球、Tab 移出自动收起', async () => {
   const fs = await import('node:fs/promises');
   const fabSrc = await fs.readFile(new URL('../app/static/fab.js', import.meta.url), 'utf8');
   assert.ok(fabSrc.includes("b.type = 'button'"), '生成的菜单项按钮应显式 type=button');
   assert.ok(fabSrc.includes('btn.focus()'), 'Esc 关闭后焦点应还给悬浮球按钮（不掉回 body）');
   assert.ok(fabSrc.includes("addEventListener('focusout'"), '键盘 Tab 移出打开的菜单应自动收起');
+});
+
 test('关闭详情焦点归还墙卡：closeDetail 关闭后把键盘焦点还给当前查看的卡片', async () => {
   const fs = await import('node:fs/promises');
   const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
   const body = appSrc.slice(appSrc.indexOf('function closeDetail()'), appSrc.indexOf('async function refreshDetail'));
   assert.ok(body.includes('CSS.escape(sid)'), '墙卡选择器应对 sid 做 CSS.escape 转义');
   assert.ok(body.includes('focus({preventScroll:true})'), '焦点应回到墙上对应卡片且不滚动页面');
+});
+
 test('筛选面板关闭回归焦点：hadFocus 捕获 + 焦点还给可见打开按钮', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
