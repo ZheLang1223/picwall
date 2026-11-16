@@ -3240,6 +3240,14 @@ function initSpotlightSearch() {
       const item = e.target.closest('.spotlight-result-item');
       if (item) selectSpotlightItem(item);
     });
+    liveResults.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const item = e.target.closest('.spotlight-result-item');
+      if (!item) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selectSpotlightItem(item);
+    });
   }
 
   if (inp) {

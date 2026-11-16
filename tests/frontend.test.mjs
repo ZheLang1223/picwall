@@ -1254,6 +1254,17 @@ test('实时检索与分类UI区分契约：聚光灯实时联想、四维视觉
   assert.ok(css.includes('.active-search-badge.cat-author') && css.includes('.active-search-badge.cat-tag'), '活跃检索徽章应具备各分类专属背景与文本颜色');
 });
 
+test('聚光灯实时结果键盘可达契约：Tab 聚焦的结果项按 Enter/空格应触发选择', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const start = appSrc.indexOf('function initSpotlightSearch()');
+  const end = appSrc.indexOf('if (inp) {', start);
+  assert.ok(start !== -1 && end !== -1, 'app.js 应包含 initSpotlightSearch 与输入框初始化段');
+  const slice = appSrc.slice(start, end);
+  assert.ok(slice.includes("liveResults.addEventListener('keydown'"), '实时结果容器应监听 keydown，使 Tab 聚焦的结果项可按 Enter/空格触发');
+  assert.ok(slice.includes('selectSpotlightItem(item)'), '键盘触发应复用 selectSpotlightItem 选择逻辑');
+});
+
 test('Wave1 安全加固：settings 组 ID 转义、kiosk/view-state 转义与协议约束、markTerm 防实体破坏', async () => {
   const fs = await import('node:fs/promises');
   const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
