@@ -28,6 +28,8 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
               stash: [], lastDecided: null, zoom: false, zoomSlot: 0, zoomIdx: 0,
               prefetched: new Set(), inflight: 0,
               picIdx: [0, 0, 0, 0], lastRotate: [0, 0, 0, 0], rotateTimer: 0 };
+  /* 打开四格的那个控件：关闭后把焦点还给它（role=dialog 焦点进出） */
+  let quadOpener = null;
 
   const slotEl = (i) => $('#quad .q-slot[data-slot="' + i + '"]');
   const zoomEl = () => $('#quad .q-zoom');
@@ -162,12 +164,15 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
 
   /* ---------- 会话 ---------- */
   async function open() {
+    const ae = (typeof document !== 'undefined') ? document.activeElement : null;
     if (Q.active || S.readOnly) return;
     if ((S.st?.counts?.pending || 0) === 0) { toast('新增已筛完 ✓'); return; }
     if (S.status !== 'pending') { switchStatusView('pending'); await load(true); }
     else if (!S.posts.length) await load(true);
     if (!S.posts.some(p => p.status === 'pending')) { toast('没有待处理的新增'); return; }
     Q.active = true;
+    quadOpener = (ae && typeof Element !== 'undefined' && ae instanceof Element
+                  && ae !== document.body) ? ae : null;
     quadKept = 0; quadDropped = 0;
     Q.slots = [null, null, null, null];
     Q.focus = 0; Q.stash = []; Q.lastDecided = null;
@@ -178,6 +183,7 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
     cancelHide(quad);
     quad.hidden = false;
     renderAll();
+    $('#quad .q-close')?.focus?.({ preventScroll: true });
     startRotate();
     hintOnce();
   }
@@ -215,6 +221,14 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
     Q.slots = [null, null, null, null];
     Q.lastDecided = null;
     animatedHide($('#quad'));
+    if (typeof document !== 'undefined' && quadOpener && quadOpener.isConnected) {
+      const cur = document.activeElement;
+      const q = $('#quad');
+      if (!cur || cur === document.body || (q && q.contains(cur))) {
+        quadOpener.focus?.({ preventScroll: true });
+      }
+    }
+    quadOpener = null;
     const lb = $('#lightbox');
     if (lb.hidden || lb.classList.contains('closing')) {
       if (typeof document !== 'undefined' && document.body) document.body.style.overflow = '';
