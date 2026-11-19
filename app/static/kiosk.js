@@ -592,9 +592,14 @@ if (typeof document !== 'undefined') {
     } catch (err) { ksToast(err.message); }
   });
 
+  let shelfLoading = false;
   async function loadShelf() {
+    if (shelfLoading) return;
+    shelfLoading = true;
+    $('#ks-wall').innerHTML = '<div class="ks-counter-empty" style="grid-column:1/-1;">书架加载中…</div>';
     try {
       const r = await fetch('/api/authors/kiosk');
+      if (!r.ok) throw new Error("HTTP " + r.status);
       const j = await r.json();
       if (!j?.ok) throw new Error('bad payload');
       S.shelf = j.shelf || [];
@@ -603,7 +608,9 @@ if (typeof document !== 'undefined') {
       paint();
     } catch (e) {
       $('#ks-wall').innerHTML = '<div class="ks-counter-empty" style="grid-column:1/-1;">书架暂时取不到，稍后再试。 <button type="button" class="ks-retry">重试</button></div>';
-      $('#ks-wall .ks-retry').onclick = () => { $('#ks-wall').innerHTML = ''; loadShelf(); };
+      $('#ks-wall .ks-retry').onclick = (ev) => { ev.currentTarget.disabled = true; loadShelf(); };
+    } finally {
+      shelfLoading = false;
     }
   }
   loadShelf();

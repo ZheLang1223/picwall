@@ -1750,3 +1750,18 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('kiosk 书架加载契约：加载占位、非 2xx 进失败态、重入守卫与重试自禁用', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const kioskSrc = await read('../app/static/kiosk.js');
+
+  assert.ok(kioskSrc.includes('书架加载中…'),
+    'kiosk 书架加载期间应渲染加载占位而非空白（重试路径同样先落占位）');
+  assert.ok(kioskSrc.includes('if (!r.ok) throw new Error("HTTP " + r.status);') && kioskSrc.includes('const j = await r.json();'),
+    'kiosk 书架加载非 2xx 响应应在 r.json() 前抛错进失败态');
+  assert.ok(kioskSrc.includes('if (shelfLoading) return;') && kioskSrc.includes('shelfLoading = true') && kioskSrc.includes('} finally {\n      shelfLoading = false;'),
+    'kiosk loadShelf 应有重入守卫并在 finally 复位');
+  assert.ok(kioskSrc.includes("$('#ks-wall .ks-retry').onclick = (ev) => { ev.currentTarget.disabled = true; loadShelf(); };"),
+    'kiosk 重试按钮点击应先自禁用再重载防连点');
+});
