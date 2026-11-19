@@ -1750,3 +1750,21 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('全局键让位契约：Shift+Q/W 快筛与 Shift+F 视图面板必须经 overlayOpen 挡在浮层外', async () => {
+  const fs = await import('node:fs/promises');
+  const app = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+
+  // 一个 helper 统一判定「有全屏浮层开着」（大图/详情/放映/批注/四格）：
+  // Shift+Q/W 进快筛与 Shift+F 呼出面板这两个墙级分支都必须先过它，
+  // 否则会在放映/大图等浮层底下偷开快筛或把面板盖到浮层顶上
+  const fn = app.match(/function overlayOpen\(\) \{[\s\S]*?\n\}/);
+  assert.ok(fn, '浮层判定 helper overlayOpen 应存在');
+  assert.ok(['#lightbox', '#detail', '#slideshow', '#notes-view', '#quad']
+      .every((id) => fn[0].includes(id)),
+    'overlayOpen 应覆盖大图/详情/放映/批注/四格全部浮层');
+  assert.ok(app.includes("!overlayOpen() && (e.key === 'Q' || e.key === 'q' || e.key === 'W' || e.key === 'w')"),
+    'Shift+Q/W 进快筛应被 overlayOpen 挡住：浮层开着不再穿透开快筛');
+  assert.ok(app.includes("!overlayOpen() && (e.key === 'F' || e.key === 'f')"),
+    'Shift+F 呼出视图面板应被 overlayOpen 挡住：放映/大图不再被面板盖顶');
+});

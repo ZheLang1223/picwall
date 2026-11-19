@@ -1051,6 +1051,15 @@ function currentCard() {
   return best;
 }
 
+// 任意全屏浮层（大图/详情/放映/批注流/四格）是否开着：墙级全局键（快筛、视图面板）
+// 在浮层开着时一律让位——下方委托链接手，不再穿透到浮层底下另起一套视图
+function overlayOpen() {
+  return !$('#lightbox').hidden || !$('#detail').hidden
+    || (!$('#slideshow').hidden && slideshow.active())
+    || (!$('#notes-view').hidden && notes.active())
+    || (!$('#quad').hidden && quad.active());
+}
+
 document.addEventListener('keydown', (e) => {
   // Cmd+K / Ctrl+K 唤起或切换聚光灯搜索
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
@@ -1123,13 +1132,14 @@ document.addEventListener('keydown', (e) => {
       return;
     }
   }
-  // Shift+Q / Shift+W 进入快筛（桌面=四格会话）：组合键避开浏览器与既有单键体系；输入态已被上面拦下
-  if (e.shiftKey && !e.repeat && (e.key === 'Q' || e.key === 'q' || e.key === 'W' || e.key === 'w')) {
+  // Shift+Q / Shift+W 进入快筛（桌面=四格会话）：组合键避开浏览器与既有单键体系；输入态已被上面拦下。
+  // 放映/大图/详情/批注/四格开着时让位：不在浮层底下偷开快筛
+  if (e.shiftKey && !e.repeat && !overlayOpen() && (e.key === 'Q' || e.key === 'q' || e.key === 'W' || e.key === 'w')) {
     startQuickTriage();
     return;
   }
-  // Shift+F 呼出筛选面板：单键 F 仍归详情/大图的「保留」
-  if (e.shiftKey && !e.repeat && (e.key === 'F' || e.key === 'f')) {
+  // Shift+F 呼出筛选面板：单键 F 仍归详情/大图的「保留」；浮层开着同样让位，不再盖顶
+  if (e.shiftKey && !e.repeat && !overlayOpen() && (e.key === 'F' || e.key === 'f')) {
     e.preventDefault();
     toggleViewPanel();
     return;
