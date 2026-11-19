@@ -1750,3 +1750,12 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('放映对话框焦点进出：打开移入 ✕、关闭还给打开者', async()=>{
+ const fs=await import('node:fs/promises');
+ const ss=await fs.readFile(new URL('../app/static/slideshow.js',import.meta.url),'utf8');
+ assert.ok(ss.includes('ssOpener'), '放映应记住打开它的控件');
+ assert.ok(ss.includes("#ss-close')?.focus"), '放映打开时焦点应移入 ✕ 关闭钮');
+ const closeFn=ss.slice(ss.indexOf('function close()'), ss.indexOf('function finish()'));
+ assert.ok(closeFn.includes('ssOpener.focus'), '放映关闭后焦点应回到打开者');
+});

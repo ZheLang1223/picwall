@@ -42,6 +42,8 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
                limit: 30, viewed: new Set(), dwell: 0, idle: 0 };
   const LOOKAHEAD = 6;   // 剩余不足此数就预取下一批
   let ssFront = 0, ssToken = 0;   // 交叉淡入淡出：可见层指针 + 过期渲染令牌
+  /* 打开放映的那个控件：关闭后把焦点还给它（role=dialog 焦点进出） */
+  let ssOpener = null;
 
   async function fetchBatch() {
     if (SL.loading || !SL.hasMore) return;
@@ -183,19 +185,23 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
   }
 
   async function open() {
+    const ae = (typeof document !== 'undefined') ? document.activeElement : null;
     if (SL.active || S.readOnly) return;
     SL.limit = ssPrefs(window.pwGetPrefs ? window.pwGetPrefs() : {}).limit;
     SL.viewed = new Set();
     await fetchBatch();
     if (!SL.images.length) { toast('当前筛选没有图片'); return; }
     SL.active = true; SL.idx = 0; SL.paused = false;
+    ssOpener = (ae && typeof Element !== 'undefined' && ae instanceof Element
+                && ae !== document.body) ? ae : null;
     $('#ss-state').hidden = true;
     cancelHide($('#slideshow'));
     $('#slideshow').hidden = false;
-    document.body.style.overflow = 'hidden';
+    if (typeof document !== 'undefined' && document.body) document.body.style.overflow = 'hidden';
     render();
     schedule();
     wake();
+    $('#ss-close')?.focus?.({ preventScroll: true });
     try {   // 首次放映说一次计次规则：纯欣赏模式里的隐式写账不该全靠猜
       if (!localStorage.getItem('pw_sshint')) {
         localStorage.setItem('pw_sshint', '1');
@@ -215,8 +221,18 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
     $('#slideshow').classList.remove('is-idle');
     $('#ss-progress').classList.remove('run', 'frozen');
     animatedHide($('#slideshow'));
+    if (typeof document !== 'undefined' && ssOpener && ssOpener.isConnected) {
+      const cur = document.activeElement;
+      const ss = $('#slideshow');
+      if (!cur || cur === document.body || (ss && ss.contains(cur))) {
+        ssOpener.focus?.({ preventScroll: true });
+      }
+    }
+    ssOpener = null;
     const lb = $('#lightbox');
-    if (lb.hidden || lb.classList.contains('closing')) document.body.style.overflow = '';
+    if (lb.hidden || lb.classList.contains('closing')) {
+      if (typeof document !== 'undefined' && document.body) document.body.style.overflow = '';
+    }
   }
 
   function finish() {
