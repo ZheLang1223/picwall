@@ -1750,3 +1750,29 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('统计室加载/失败态：五区先给「加载中…」、r.ok 校验、失败降级与重试防重入', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [statsSrc, statsHtml] = await Promise.all([
+    read('../app/static/stats.js'),
+    read('../app/templates/stats.html'),
+  ]);
+  // 进 fetch 前（含重试）五个区块都渲染「加载中…」空态，不再整片空白
+  assert.ok(statsSrc.includes('加载中…'), '加载占位文案应存在');
+  assert.ok(statsSrc.includes("for (const id of ['st-overview', 'st-chart-wrap', 'st-authors', 'st-top', 'st-review']) $('#' + id).innerHTML = ST_WAIT"),
+    '加载中占位应覆盖全部五个区块');
+  // fetch 结果必须检查 r.ok，非 2xx 直接进失败态（不再盲目解析 JSON）
+  assert.ok(statsSrc.includes("if (!r.ok) throw new Error('HTTP ' + r.status)"), 'fetch 结果应检查 r.ok');
+  // 失败态：总账给错误 + 单个重试钮，其余四区降级「暂不可用」空态（不再永久空白/被清空）
+  assert.ok(statsSrc.includes('st-retry'), '失败态总账应有重试按钮');
+  assert.ok(statsSrc.includes('暂不可用'), '其余四区失败应降级为「暂不可用」空态');
+  assert.ok(!statsSrc.includes("$('#st-chart-wrap').innerHTML = '';"), '失败态不得把图表区清成空白');
+  // 防重入：在途旗忽略重复触发，重试点击先禁用按钮
+  assert.ok(statsSrc.includes('if (stLoading) return;') && statsSrc.includes('stLoading = false'),
+    'loadStats 应有在途防重入守卫');
+  assert.ok(statsSrc.includes('ev.currentTarget.disabled = true; loadStats()'), '重试点击应先禁用按钮再发起重试');
+  // 成功空数据归还模板自带空态（paintChart 空日早退后不留「加载中」）
+  assert.ok(statsHtml.includes('<div class="st-empty">还没有数据。</div>') && statsSrc.includes('chartEmpty'),
+    '成功空数据应归还模板自带空态');
+});

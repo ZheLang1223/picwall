@@ -92,20 +92,35 @@ function paintReview(r) {
   ].join('');
 }
 
+/* 加载/失败态：进 fetch 前五区先给「加载中…」（重试同样生效）；失败时总账给重试钮、
+   其余四区降级「暂不可用」。stLoading 在途旗 + 重试钮点击即禁用，连点不叠加请求 */
+const ST_WAIT = '<div class="st-empty" style="grid-column:1/-1">加载中…</div>';
+const ST_NA = '<div class="st-empty" style="grid-column:1/-1">暂不可用</div>';
+const chartEmpty = $('#st-chart-wrap').innerHTML;   // 模板自带空态：paintChart 空日早退依赖它
+
+let stLoading = false;
 async function loadStats() {
+  if (stLoading) return;   // 在途忽略重复触发
+  stLoading = true;
+  for (const id of ['st-overview', 'st-chart-wrap', 'st-authors', 'st-top', 'st-review']) $('#' + id).innerHTML = ST_WAIT;
   try {
     const r = await fetch('/api/stats');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     if (!j?.ok) throw new Error('bad payload');
+    const daily = j.daily || [];
+    if (!daily.length) $('#st-chart-wrap').innerHTML = chartEmpty;   // 归还模板空态，paintChart 空日早退后不留「加载中」
     paintOverview(j.overview);
-    paintChart(j.daily || []);
+    paintChart(daily);
     paintAuthors(j.top_authors || []);
     paintTop(j.top_posts || []);
     paintReview(j.review);
   } catch (e) {
     $('#st-overview').innerHTML = '<div class="st-empty" style="grid-column:1/-1">统计暂时取不到，稍后再试。 <button type="button" class="st-retry">重试</button></div>';
-    $('#st-chart-wrap').innerHTML = '';
-    $('#st-overview .st-retry').onclick = () => { $('#st-overview').innerHTML = ''; loadStats(); };
+    for (const id of ['st-chart-wrap', 'st-authors', 'st-top', 'st-review']) $('#' + id).innerHTML = ST_NA;
+    $('#st-overview .st-retry').onclick = (ev) => { ev.currentTarget.disabled = true; loadStats(); };
+  } finally {
+    stLoading = false;
   }
 }
 
