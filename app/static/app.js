@@ -2232,10 +2232,10 @@ function cancelHide(el) {
   el.classList.remove('closing');
 }
 
-let modalReturnFocus = null;
 function openModal(id) {
-  modalReturnFocus = document.activeElement;
   const m = $('#' + id);
+  // 仅在弹窗此前未打开时记录触发元素：重复打开会把 activeElement 变成弹窗内部控件，覆盖后关窗回焦到隐藏元素
+  if (m.hidden || m.classList.contains('closing')) m._returnFocus = document.activeElement;
   cancelHide(m);
   m.hidden = false;
   document.body.style.overflow = 'hidden';
@@ -2243,7 +2243,8 @@ function openModal(id) {
   f && f.focus();
 }
 function closeModal(id) {
-  animatedHide($('#' + id));
+  const m = $('#' + id);
+  animatedHide(m);
   if (id === 'modal-settings') settings.closePane?.();   // 停分区级定时器(如抓取轮询)
   if (id === 'modal-spotlight-search' && typeof railSync === 'function') railSync();
   const anyModalOpen = Array.from(document.querySelectorAll('.modal')).some((m) => !m.hidden && !m.classList.contains('closing') && m.id !== id);
@@ -2252,12 +2253,16 @@ function closeModal(id) {
   if (!anyModalOpen && !lbOpen && !dtOpen) {
     document.body.style.overflow = '';
   }
+  const modalReturnFocus = m._returnFocus;
+  m._returnFocus = null;
   if (modalReturnFocus) {
     // 防止移动端点击 #f-search 唤起后，关窗 refocus 导致死循环反复打开聚光灯
-    if (modalReturnFocus.id !== 'f-search' && !modalReturnFocus.closest?.('#f-search, .searchwrap')) {
-      modalReturnFocus.focus();
+    // 目标已断开、为 body 或处于隐藏/关闭中容器内时不再回焦
+    if (modalReturnFocus.id !== 'f-search' && !modalReturnFocus.closest?.('#f-search, .searchwrap')
+        && modalReturnFocus.isConnected && modalReturnFocus !== document.body
+        && !modalReturnFocus.closest?.('[hidden], .closing')) {
+      modalReturnFocus.focus({ preventScroll: true });
     }
-    modalReturnFocus = null;
   }
 }
 document.querySelectorAll('.mclose, [data-close]').forEach((b) =>

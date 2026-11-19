@@ -1750,3 +1750,19 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('弹窗回焦契约：触发元素按弹窗各自记录，重复打开不覆盖、顶层关窗不吞底层回焦且仅在目标仍有效时聚焦', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+
+  const openBody = appSrc.slice(appSrc.indexOf('function openModal'), appSrc.indexOf('function closeModal'));
+  const closeBody = appSrc.slice(appSrc.indexOf('function closeModal'), appSrc.indexOf("document.querySelectorAll('.mclose, [data-close]')"));
+  assert.ok(appSrc.includes('_returnFocus'), '弹窗触发元素应记录在弹窗元素自身的 _returnFocus 上而非单个全局变量');
+  assert.ok(!openBody.includes('modalReturnFocus') && openBody.includes('m._returnFocus = document.activeElement'),
+    'openModal 不应无条件覆盖旧全局回焦目标（重复打开会把目标覆盖成弹窗内部元素）');
+  assert.ok(openBody.includes("m.hidden || m.classList.contains('closing')"),
+    'openModal 应仅在弹窗此前未打开时记录触发元素');
+  assert.ok(closeBody.includes("m._returnFocus = null"), 'closeModal 应读取并清空该弹窗自己的 _returnFocus');
+  assert.ok(closeBody.includes('isConnected') && closeBody.includes("closest?.('[hidden], .closing')"),
+    'closeModal 应仅在目标已连接且不在隐藏/关闭中容器内时回焦');
+});
