@@ -1750,3 +1750,17 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('一键拉取失败不清空分组列表：错误走 toast、已加报数并重渲染、finally 复位、防连点', async()=>{
+ const fs=await import('node:fs/promises');
+ const settingsJs=await fs.readFile(new URL('../app/static/settings.js',import.meta.url),'utf8');
+ const i=settingsJs.indexOf("$('#btn-discover').onclick");
+ const h=settingsJs.slice(i, settingsJs.indexOf('/* ---------- 连接状态', i));
+ assert.ok(h.includes('if (btn.disabled) return;'), '一键拉取应防连点（拉取中忽略重复触发）');
+ assert.ok(!h.includes('.innerHTML'), '一键拉取失败不应覆写 #my-groups（保住已有分组列表）');
+ assert.ok(h.includes(': err.message);'), '一键拉取失败应以 toast 报错而非清列表');
+ assert.ok(h.includes('个分组后出错：'), '中途失败应报出已加分组数量');
+ assert.ok(h.includes('if (added) await renderMyGroups()'), '中途失败后应重渲染让已加分组立即可见');
+ assert.ok(h.includes('} finally {') && h.includes("btn.textContent = '拉取分组'") && h.includes("list.classList.remove('off')"),
+   '按钮/列表复位应收进 finally 保证任何失败路径都恢复');
+});

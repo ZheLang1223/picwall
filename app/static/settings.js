@@ -354,12 +354,13 @@ $('#btn-add-xuser').onclick = async () => {
 $('#btn-discover').onclick = async () => {
   const btn = $('#btn-discover');
   const list = $('#my-groups');
+  if (btn.disabled) return;   // 防连点：上一次拉取还在进行
   btn.disabled = true;
   btn.textContent = '正在拉取…';
   list.classList.add('off');
+  let added = 0;   // 提到 try 外：中途失败时 catch 要报已加数量并刷新列表
   try {
     const r = await api('/api/groups/discover', 'POST');
-    let added = 0;
     for (const c of r.candidates) {
       if (c.added) continue;
       await api('/api/groups', 'POST', { list_id: c.list_id, name: c.name });
@@ -368,11 +369,14 @@ $('#btn-discover').onclick = async () => {
     toast(added ? `已添加 ${added} 个分组，首次抓取会自动回补近 30 天` : '没有新分组可加');
     await renderMyGroups();
   } catch (err) {
-    list.innerHTML = `<div class="hint" style="padding:6px 2px">${esc(err.message)}</div>`;
+    // 失败只弹提示不清列表；已加的要报数并刷新出来，别让用户以为白拉了
+    toast(added ? `已添加 ${added} 个分组后出错：${err.message}` : err.message);
+    if (added) await renderMyGroups();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '拉取分组';
+    list.classList.remove('off');
   }
-  btn.disabled = false;
-  btn.textContent = '拉取分组';
-  list.classList.remove('off');
 };
 
 /* ---------- 连接状态（原 Cookie 弹窗：微博 / X 双平台凭据） ---------- */
