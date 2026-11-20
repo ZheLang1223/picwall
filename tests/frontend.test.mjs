@@ -11,7 +11,7 @@ import {captureGroupText, captureTitle, emptyState} from '../app/static/content-
 import {createQuad, pickNext, nextFocus} from '../app/static/quad.js';
 import {createTimeline, dayOf, dayLabel, monthLabel, planRows} from '../app/static/timeline.js';
 import {createLightbox} from '../app/static/lightbox.js';
-import {enterFilters, statsLine, profileSpan, profileUrl, skinFromPrefs, SKINS} from '../app/static/author-view.js';
+import {enterFilters, statsLine, profileSpan, profileUrl, skinFromPrefs, SKINS, createAuthorView} from '../app/static/author-view.js';
 const s={status:'all',group:'all',author:'all',range:'all',source:'all',hasCmts:'all',searchText:''};
 const p={sid:'a',uid:'u1',list_id:'g1',status:'kept',favorite:true,text:'hello',via:'',created_at:'2026-10-01T00:00:00+08:00'};
 test('部分采集和翻页上限均不被表达为全部成功',()=>{
@@ -879,6 +879,78 @@ test('博主皮肤偏好：author-skin 多值优先，老档 author-film 折算�
  assert.equal(skinFromPrefs({'author-film':'1'}),'film','老档布尔折算胶片');
  assert.equal(skinFromPrefs({'author-film':''}),'','老档关闭即卡片');
  assert.equal(skinFromPrefs({'author-film':'1','author-skin':'blueprint'}),'blueprint','新键优先于老档');
+});
+
+test('博主条重画不丢焦点不丢签名：皮肤钮焦点还原、微博 bio 进 title 持久、关闭钮 type=button', async()=>{
+ const oldDocument=globalThis.document,oldWindow=globalThis.window;
+ const focusLog=[]; let renderId=0; let html='';
+ const makeEl=()=>({hidden:true,style:{},dataset:{},attrs:{},
+  classList:{_s:new Set(),add(...c){for(const x of c)this._s.add(x);},
+             remove(...c){for(const x of c)this._s.delete(x);},
+             toggle(c,v){if(v===undefined)v=!this._s.has(c);if(v)this._s.add(c);else this._s.delete(c);return v;},
+             contains(c){return this._s.has(c);}},
+  setAttribute(k,v){this.attrs[k]=v;},removeAttribute(k){delete this.attrs[k];},
+  addEventListener(t,fn){this._on=this._on||{};this._on[t]=fn;},
+  focus(){focusLog.push(this);},
+  closest:()=>null,querySelector:()=>null,querySelectorAll:()=>[],contains:()=>false});
+ const el=makeEl(); el.hidden=false; el._kids=new Set();
+ el.contains=(n)=>n!=null&&(n===el||el._kids.has(n));
+ Object.defineProperty(el,'innerHTML',{get:()=>html,set:(v)=>{html=v;el._kids.clear();renderId++;}});
+ el.querySelector=(sel)=>{   // 极简桩：按选择器从当前 HTML 串合成节点并记入本代 _kids
+  if(sel.startsWith('.av-stbtn[data-st="')){
+   const st=sel.slice('.av-stbtn[data-st="'.length,-2);
+   if(!html.includes(`data-st="${st}"`))return null;
+   const n=makeEl();n._render=renderId;n.dataset.st=st;
+   n.closest=(s)=>s==='.av-stbtn'?n:null;el._kids.add(n);return n;
+  }
+  if(sel==='.av-close'){
+   if(!html.includes('class="av-close"'))return null;
+   const n=makeEl();n._render=renderId;
+   n.closest=(s)=>s==='.av-close'?n:null;el._kids.add(n);return n;
+  }
+  if(sel==='.av-id' && html.includes('class="av-id"')){
+   const n=makeEl();el._kids.add(n);return n;
+  }
+  return null;
+ };
+ const feed=makeEl();
+ const $=(sel)=>sel==='#feed'?feed:sel==='#author-view'?el:null;
+ const api=async(path)=>{
+  if(path.endsWith('/profile'))return {author:'微博甲',n:3,kept:1,favorites:0,comments:0,first_at:'',last_at:'',avatar:''};
+  if(path.endsWith('/bio'))return {bio:'热爱生活'};
+  return {};
+ };
+ const prefs={};
+ globalThis.document={querySelector:()=>null,activeElement:null};
+ globalThis.window={addEventListener(){},pwGetPrefs:()=>prefs,pwSetPref:(k,v)=>{prefs[k]=v;}};
+ try {
+  const state={...s,author:'wb123',posts:[{...p,uid:'wb123',author:'卡片名'}]};
+  const view=createAuthorView({S:state,$,api,esc:(x)=>String(x),avatarSrc:(x)=>x,
+   icons:{external:'',x:''},load:async()=>{},reflow:()=>{},chronoActive:()=>false});
+  view.init();
+  await new Promise(r=>setImmediate(r));   // profile + bio 两段 fetch 落地
+  assert.ok(html.includes('title="微博甲 · 热爱生活"'),'微博签名应由 paint 渲染进 .av-id 的 title');
+  assert.ok(html.includes('<button type="button" class="av-close"'),'关闭钮应有 type="button"');
+  // 键盘流：焦点在胶片钮上切皮肤，重画后焦点应回到新渲染的同档钮，不跌回 body
+  const filmBtn=el.querySelector('.av-stbtn[data-st="film"]');
+  assert.ok(filmBtn);
+  document.activeElement=filmBtn;
+  el._on.click({target:filmBtn});          // init() 里绑的皮肤钮点击 → paint()
+  assert.equal(focusLog.length,1,'重画应还原焦点一次');
+  const nb=focusLog[0];
+  assert.ok(nb!==filmBtn,'应聚焦重画后的新节点，不是已销毁的旧节点');
+  assert.equal(nb.dataset.st,'film');
+  assert.equal(nb._render,renderId,'聚焦的应是当前这轮渲染的按钮');
+  assert.ok(html.includes('title="微博甲 · 热爱生活"'),'换肤重画后 bio title 不丢');
+  assert.ok(html.includes('aria-pressed="true"'),'重画按压态应保留');
+  // 关闭钮焦点同样跨重画还原；签名在后续任意 paint（sync/load(true)）里仍存活
+  const closeBtn=el.querySelector('.av-close');
+  document.activeElement=closeBtn;
+  view.sync();                             // 同人只重画，不重取档案
+  assert.equal(focusLog.length,2,'关闭钮焦点也应跨重画还原');
+  assert.ok(focusLog[1]!==closeBtn && focusLog[1]._render===renderId,'还原的应是新渲染的关闭钮');
+  assert.ok(html.includes('title="微博甲 · 热爱生活"'),'bio title 应在后续重画中持久存活');
+ } finally {globalThis.document=oldDocument;globalThis.window=oldWindow;}
 });
 
 test('优化闭环：快捷键速查、批量下载智能分卷、四格轮播进度与触屏快筛契约', async () => {

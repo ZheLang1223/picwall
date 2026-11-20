@@ -62,6 +62,7 @@ export function createAuthorView(deps) {
   let snapshot = null;        // 进入前的筛选域（退出时还原；视图内换人不覆盖）
   let hints = new Map();      // key → {author,avatar}（卡片带过来的即时身份）
   let cache = new Map();      // key → profile 全量档案（即时渲染，后台总再刷一遍）
+  let bios = new Map();       // key → 微博签名（paint 统一渲染进 .av-id 的 title，重画不丢）
   let seq = 0;
   let currentKey = '';
 
@@ -106,14 +107,21 @@ export function createAuthorView(deps) {
     const avatar = avatarSrc(prof?.avatar || hint?.avatar || '');
     const ext = profileUrl(prof);
     const skin = skinNow();
+    const bio = bios.get(S.author);
     const stBtn = (v, label, title) =>
       `<button type="button" class="av-stbtn${skin === v ? ' on' : ''}" data-st="${v}"
                 aria-pressed="${String(skin === v)}" title="${title}">${label}</button>`;
     $('#feed')?.setAttribute('data-skin-author', name);   // 皮肤墙头（片头/展头/图签）用
+    /* 重画是整块换血，会把焦点里的钮砸掉（键盘用户切皮肤 → 焦点跌回 body）：
+       先记下焦点身份（皮肤钮按 data-st、关闭钮按类名），重画完还给同一颗钮。 */
+    const af = document.activeElement;
+    const focusIn = !!(af && el.contains(af));
+    const stKey = focusIn ? af.closest?.('.av-stbtn')?.dataset.st : undefined;
+    const wasClose = focusIn && stKey === undefined ? !!af.closest?.('.av-close') : false;
     el.innerHTML = `
       ${avatar ? `<img class="avatar" src="${esc(avatar)}" alt="" decoding="async">`
                : `<span class="avatar">${esc(name[0] || '微')}</span>`}
-      <div class="av-id"><b>${esc(name)}</b>
+      <div class="av-id"${bio ? ` title="${esc(`${name} · ${bio}`)}"` : ''}><b>${esc(name)}</b>
         <span class="av-sub">${prof ? esc(statsLine(prof)) : ''}</span></div>
       <div class="av-style" role="group" aria-label="博主视图样式">
         ${stBtn('', '卡片', '卡片墙样式')}
@@ -123,8 +131,12 @@ export function createAuthorView(deps) {
       </div>
       ${ext ? `<a class="av-ext" href="${esc(ext)}" target="_blank" rel="noopener noreferrer"
                   title="打开原主页" aria-label="打开原主页">${icons.external}</a>` : ''}
-      <button class="av-close" title="退出博主视图" aria-label="退出博主视图">${icons.x}</button>`;
+      <button type="button" class="av-close" title="退出博主视图" aria-label="退出博主视图">${icons.x}</button>`;
     el.hidden = false;
+    const refocus = stKey !== undefined
+      ? el.querySelector(`.av-stbtn[data-st="${stKey}"]`)
+      : (wasClose ? el.querySelector('.av-close') : null);
+    refocus?.focus?.();
     syncSticky();
   }
 
@@ -137,12 +149,12 @@ export function createAuthorView(deps) {
       cache.set(key, r);
       paint();
     } catch (e) { /* 拿不到统计就只显示名字（404 = 帖已全清），不打断浏览 */ }
-    if (!key.includes(':')) {   // 微博作者补签名：进 title，与墙头胶囊同款待遇
+    if (!key.includes(':')) {   // 微博作者补签名：title 由 paint 从 bios 统一渲染，重画不丢
       try {
         const r = await api(`/api/authors/${encodeURIComponent(key)}/bio`);
         if (my !== seq || S.author !== key || !r?.bio) return;
-        el.querySelector('.av-id')
-          ?.setAttribute('title', `${cache.get(key)?.author || key} · ${r.bio}`);
+        bios.set(key, r.bio);
+        paint();
       } catch (e) { /* 同上，静默降级 */ }
     }
   }
