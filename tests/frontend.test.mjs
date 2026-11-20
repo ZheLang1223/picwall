@@ -1750,3 +1750,23 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('放映过期批次：会话令牌丢弃迟到响应，open 防重入不再误报空片单', async () => {
+  const fs = await import('node:fs/promises');
+  const ss = await fs.readFile(new URL('../app/static/slideshow.js', import.meta.url), 'utf8');
+  // 会话令牌：close/open 换场各 +1，fetchBatch await 前捕获、回来后校验
+  assert.ok(ss.includes('let ssSession = 0;'), '放映应有会话令牌');
+  assert.ok((ss.match(/ssSession\+\+/g) || []).length >= 2, 'open 与 close 都应换场递增会话令牌');
+  assert.ok(ss.includes('const my = ssSession;') && ss.includes('if (ssSession !== my) return false;'),
+    'fetchBatch 应在 await 前捕获令牌，过期的迟到批次静默丢弃（不 push、不动游标/hasMore、不 toast）');
+  assert.ok(ss.includes('finally { if (ssSession === my) SL.loading = false; }'),
+    '过期批次的 finally 不应碰新会话的 SL.loading');
+  assert.ok(ss.includes('SL.loading = false;   // 在途预取一并作废'),
+    'close() 应显式复位 SL.loading，归还给下一场放映');
+  // opening 门：首屏拉取在途时连点入口直接忽略，成功/空片单/失败各退出路径都复位
+  assert.ok(ss.includes('if (SL.active || S.readOnly || SL.opening) return;')
+    && ss.includes('SL.opening = true;') && ss.includes('} finally { SL.opening = false; }'),
+    'open() 应有 opening 防重入门并在所有退出路径复位');
+  assert.ok(ss.includes('const ok = await fetchBatch();') && ss.includes('if (!ok) return;'),
+    '首屏拉取失败已 toast 错因时，open 不应再叠报「当前筛选没有图片」');
+});

@@ -37,15 +37,17 @@ export function expandPosts(posts, prefs = {}) {
 
 export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, trapTab,
                                   animatedHide, cancelHide, commentBodyHTML }) {
-  const SL = { active: false, images: [], idx: 0, cursor: null, hasMore: true,
-               loading: false, timer: 0, paused: false,
+  const SL = { active: false, opening: false, images: [], idx: 0, cursor: null,
+               hasMore: true, loading: false, timer: 0, paused: false,
                limit: 30, viewed: new Set(), dwell: 0, idle: 0 };
   const LOOKAHEAD = 6;   // 剩余不足此数就预取下一批
   let ssFront = 0, ssToken = 0;   // 交叉淡入淡出：可见层指针 + 过期渲染令牌
+  let ssSession = 0;   // 放映会话令牌：open/close 换场各 +1，过期的在途批次静默丢弃
 
   async function fetchBatch() {
-    if (SL.loading || !SL.hasMore) return;
+    if (SL.loading || !SL.hasMore) return false;
     SL.loading = true;
+    const my = ssSession;   // await 期间换场（close/open）即视为过期
     try {
       const q = new URLSearchParams({status: S.status, group: S.group, author: S.author,
         range: S.range, q: S.searchText,
@@ -56,14 +58,16 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
       else if (S.sort) q.set('sort', S.sort);
       if (SL.cursor) q.set('cursor', SL.cursor);
       const r = await api('/api/posts?' + q);
+      if (ssSession !== my) return false;   // 迟到的旧批次：不 push、不动游标/hasMore、不 toast、不碰 loading
       const batch = expandPosts(r.posts || [],
         ssPrefs(window.pwGetPrefs ? window.pwGetPrefs() : {}));
       const room = Math.max(0, SL.limit - SL.images.length);
       SL.images.push(...batch.slice(0, room));
       if (batch.length > room) SL.hasMore = false;   // 片单装满即封顶：停预取，播完收场
       else { SL.cursor = r.next_cursor || null; SL.hasMore = !!r.has_more; }
-    } catch (e) { toast(e.message); }
-    finally { SL.loading = false; }
+      return true;
+    } catch (e) { if (ssSession === my) toast(e.message); return false; }
+    finally { if (ssSession === my) SL.loading = false; }   // 过期批次的 loading 留给 close() 复位
   }
 
   function maybeFetch() {
@@ -183,34 +187,41 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
   }
 
   async function open() {
-    if (SL.active || S.readOnly) return;
-    SL.limit = ssPrefs(window.pwGetPrefs ? window.pwGetPrefs() : {}).limit;
-    SL.viewed = new Set();
-    await fetchBatch();
-    if (!SL.images.length) { toast('当前筛选没有图片'); return; }
-    SL.active = true; SL.idx = 0; SL.paused = false;
-    $('#ss-state').hidden = true;
-    cancelHide($('#slideshow'));
-    $('#slideshow').hidden = false;
-    document.body.style.overflow = 'hidden';
-    render();
-    schedule();
-    wake();
-    try {   // 首次放映说一次计次规则：纯欣赏模式里的隐式写账不该全靠猜
-      if (!localStorage.getItem('pw_sshint')) {
-        localStorage.setItem('pw_sshint', '1');
-        toast('停留满 2 秒（或暂停/收藏）的保留帖会自动计一次「点赞」');
-      }
-    } catch (e) { /* 存不了就不再弹 */ }
+    if (SL.active || S.readOnly || SL.opening) return;   // 首屏拉取在途时忽略连点，防误报空片单
+    ssSession++;   // 新一场放映：上一场的在途批次就地作废
+    SL.opening = true;
+    try {
+      SL.limit = ssPrefs(window.pwGetPrefs ? window.pwGetPrefs() : {}).limit;
+      SL.viewed = new Set();
+      const ok = await fetchBatch();
+      if (!ok) return;   // 拉取失败已 toast 过错因，不再叠报「当前筛选没有图片」
+      if (!SL.images.length) { toast('当前筛选没有图片'); return; }
+      SL.active = true; SL.idx = 0; SL.paused = false;
+      $('#ss-state').hidden = true;
+      cancelHide($('#slideshow'));
+      $('#slideshow').hidden = false;
+      document.body.style.overflow = 'hidden';
+      render();
+      schedule();
+      wake();
+      try {   // 首次放映说一次计次规则：纯欣赏模式里的隐式写账不该全靠猜
+        if (!localStorage.getItem('pw_sshint')) {
+          localStorage.setItem('pw_sshint', '1');
+          toast('停留满 2 秒（或暂停/收藏）的保留帖会自动计一次「点赞」');
+        }
+      } catch (e) { /* 存不了就不再弹 */ }
+    } finally { SL.opening = false; }
   }
 
   function close() {
     if (!SL.active) return;
+    ssSession++;   // 换场作废在途批次：迟到的旧响应不得污染下一场放映
     SL.active = false;
     clearTimeout(SL.timer); SL.timer = 0;
     clearTimeout(SL.dwell); SL.dwell = 0;
     clearTimeout(SL.idle); SL.idle = 0;
     SL.images = []; SL.idx = 0; SL.cursor = null; SL.hasMore = true; SL.paused = false;
+    SL.loading = false;   // 在途预取一并作废，loading 归还给下一场
     SL.viewed = new Set();
     $('#slideshow').classList.remove('is-idle');
     $('#ss-progress').classList.remove('run', 'frozen');
