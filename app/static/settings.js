@@ -309,6 +309,7 @@ $('#btn-add-xgroup').onclick = async () => {
   finally { btn.disabled = false; }
 };
 $('#xgroup-input').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return; // 中文输入法组词回车选字，不当作提交
   if (e.key === 'Enter') { e.preventDefault(); $('#btn-add-xgroup').click(); }
 });
 
@@ -349,6 +350,16 @@ $('#btn-add-xuser').onclick = async () => {
   } catch (e) { toast(e.message); }
   finally { btn.disabled = false; btn.textContent = '添加 X 用户'; }
 };
+
+// 两输入框不在 form 内，Enter 默认无动作：回车代点添加钮（输入法组词回车不触发）
+$('#wbuser-input').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter') { e.preventDefault(); $('#btn-add-wbuser').click(); }
+});
+$('#xuser-input').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter') { e.preventDefault(); $('#btn-add-xuser').click(); }
+});
 
 // 一键拉取：后台拉微博全部分组并自动加入，过程列表与按钮不可点，无需手动查 ID
 $('#btn-discover').onclick = async () => {

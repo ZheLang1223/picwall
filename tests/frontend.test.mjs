@@ -1750,3 +1750,15 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('设置输入框回车提交契约：三输入回车代点添加钮且输入法组词回车不触发', async () => {
+  const fs = await import('node:fs/promises');
+  const settingsJs = await fs.readFile(new URL('../app/static/settings.js', import.meta.url), 'utf8');
+
+  for (const [inp, btn] of [['#wbuser-input', '#btn-add-wbuser'], ['#xuser-input', '#btn-add-xuser'], ['#xgroup-input', '#btn-add-xgroup']]) {
+    assert.ok(settingsJs.includes(`${inp}').addEventListener('keydown'`), `${inp} 应绑定 keydown 回车提交`);
+    assert.ok(settingsJs.includes(`${btn}').click()`), `${inp} 回车应代点 ${btn}`);
+  }
+  assert.ok((settingsJs.match(/isComposing \|\| e\.keyCode === 229/g) || []).length >= 3,
+    '三处回车提交都应带输入法组词守卫（isComposing / keyCode 229）');
+});
