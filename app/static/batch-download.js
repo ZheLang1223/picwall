@@ -1,7 +1,7 @@
 /* 下载预览与打包发送同一筛选参数；异步返回只更新当前选择。
    面板常驻设置窗口的「批量下载」分区,openBatch 由分区激活钩子调用,只重置状态并刷新。 */
 export function initBatch({S, $, api, toast}) {
-  const B = {scope:'kept',sub:'all',checked:new Set(),data:null,version:0,select:''};
+  const B = {scope:'kept',sub:'all',checked:new Set(),data:null,version:0,select:'',packing:0,refreshing:false};
   function params(filtered=true) {
     const q = new URLSearchParams({scope:B.scope, thumb:$('#b-thumb').checked ? 1 : 0,
       subfolder:$('#b-subfolder').checked ? 1 : 0});
@@ -10,12 +10,14 @@ export function initBatch({S, $, api, toast}) {
     return q;
   }
   /* 打包改走任务框架：POST 登记 job → 轮询 /api/jobs/download → complete 后 iframe 领 zip。
-     go 为触发按钮（打包期间与 #b-go 一起禁用）；v 锁定面板版本，refresh 重算期间不再抢写状态文案。 */
+     go 为触发按钮（打包期间与 #b-go 一起禁用）；v 锁定面板版本，refresh 重算期间不再抢写状态文案。
+     packing/refreshing 双闸：任一打包在途或当前版本重算未定时 #b-go 保持禁用，收尾互不抢写按钮态。 */
   async function zipViaJob(q, label, btn) {
     const go = $('#b-go');
     const v = B.version;
     go.disabled = true;
     if (btn) btn.disabled = true;
+    B.packing++;
     $('#b-total').textContent = label || '正在打包…';
     try {
       const job = (await api('/api/download/zip?' + q.toString(), 'POST')).job;
@@ -45,8 +47,9 @@ export function initBatch({S, $, api, toast}) {
       if (v === B.version) $('#b-total').textContent = e.message;
       toast(e.message);
     } finally {
+      B.packing--;
       if (btn) btn.disabled = false;
-      go.disabled = !B.data?.pics || !!B.data?.over_limit;
+      go.disabled = B.packing > 0 || B.refreshing || !B.data?.pics || !!B.data?.over_limit;
     }
   }
   function renderChunks(rawList, isAuthor) {
@@ -129,6 +132,7 @@ export function initBatch({S, $, api, toast}) {
 
   async function refresh(rebuild=false) {
     const v = ++B.version;
+    B.refreshing = true;
     $('#b-go').disabled = true;
     $('#b-total').textContent = '正在计算可下载的图片…';
     const chunksBox = $('#b-chunks');
@@ -143,7 +147,7 @@ export function initBatch({S, $, api, toast}) {
         (data.quality?.thumbnail ? '；下载缩略图' : '') +
         (data.missing ? `；${data.missing} 张图片文件缺失，请先补抓` : '') +
         (data.over_limit ? '。单包最多 500 帖，请按博主或日期分批选择。' : '');
-      $('#b-go').disabled = !data.pics || data.over_limit;
+      $('#b-go').disabled = B.packing > 0 || !data.pics || data.over_limit;
       if (rebuild || data.over_limit) {
         const all = await api('/api/download/options?' + params(false));
         if (v !== B.version) return;
@@ -166,6 +170,7 @@ export function initBatch({S, $, api, toast}) {
         }
       }
     } catch (e) { if (v === B.version) { $('#b-total').textContent = e.message; toast(e.message); } }
+    finally { if (v === B.version) B.refreshing = false; }
   }
   function openBatch() {
     B.scope = S.selected.size ? 'selected' : S.status === 'favorites' ? 'favorites' : 'kept';
@@ -195,7 +200,7 @@ export function initBatch({S, $, api, toast}) {
     refresh(true);
   });
   $('#b-go').onclick = () => {
-    if ($('#b-go').disabled) return;
+    if ($('#b-go').disabled || B.packing) return;
     zipViaJob(params(), '正在打包…');
   };
   return {openBatch};

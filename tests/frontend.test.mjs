@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('批量下载按钮态契约：打包在途与重算未定时 #b-go 保持禁用且点击无效', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const batch = await read('../app/static/batch-download.js');
+
+  // 双闸状态位：packing 计数任一 zipViaJob 在途；refreshing 只由当前版本 refresh 置位与清除
+  assert.ok(batch.includes('packing:0,refreshing:false'), '批量下载状态应声明 packing 与 refreshing 双闸状态位');
+  assert.ok(batch.includes('B.packing++') && batch.includes('B.packing--'),
+    'zipViaJob 进出应对 packing 计数配对增减，finally 里先减再算按钮态');
+  assert.ok(batch.includes('B.refreshing = true;') && batch.includes('finally { if (v === B.version) B.refreshing = false; }'),
+    'refresh 应在入口置 refreshing 且仅在当前版本收尾（成功或失败）时清除');
+
+  // 两个竞态窗口都不得重新启用 #b-go：refresh 写按钮态时看 packing；zipViaJob 收尾时看 packing/refreshing
+  assert.ok(batch.includes("$('#b-go').disabled = B.packing > 0 || !data.pics || data.over_limit;"),
+    'refresh 重算完成时若打包仍在途应保持 #b-go 禁用');
+  assert.ok(batch.includes('go.disabled = B.packing > 0 || B.refreshing || !B.data?.pics || !!B.data?.over_limit;'),
+    'zipViaJob 收尾时若重算未完或仍有打包在途应保持 #b-go 禁用');
+
+  // 打包在途点击 #b-go 直接无效
+  assert.ok(batch.includes("if ($('#b-go').disabled || B.packing) return;"),
+    '打包在途时点击 #b-go 应直接返回不开第二个打包任务');
+});
