@@ -215,6 +215,17 @@ test('编年跳转遇到加载失败应停止重试', async()=>{
    'gotoDay 翻页遇加载失败应立即停止并提示，不再重试 60 次刷屏');
 });
 
+test('编年跳转过期作废：gotoDay 取号翻页，旧轮静默退出不再抢屏', async()=>{
+ const fs=await import('node:fs/promises');
+ const tl=await fs.readFile(new URL('../app/static/timeline.js',import.meta.url),'utf8');
+ assert.ok(tl.includes('let gotoSeq = 0'), 'gotoSeq 取号计数器应存在');
+ assert.ok(tl.includes('const my = ++gotoSeq'), 'gotoDay 应先取令牌再进入翻页循环');
+ const fn=tl.match(/async function gotoDay[\s\S]*?\n  \}/);
+ assert.ok(fn && /await settle\(\);\s*\n\s*if \(my !== gotoSeq \|\| !active\(\)\) return;/.test(fn[0]),
+   'gotoDay 每次 await 后应校验令牌与编年态，过期轮静默返回');
+ assert.ok(tl.includes('++gotoSeq;   // 退出编年'), 'setLayout 离开编年应作废挂起的跳转循环');
+});
+
 test('交互五项：点卡开详情、纯图点图跨帖看图、悬浮球纯图入口与四格子浮窗、换视图清筛选', async()=>{
  const fs=await import('node:fs/promises');
  const root=new URL('../app/static/',import.meta.url);

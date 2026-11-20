@@ -61,6 +61,7 @@ export function createTimeline(deps) {
   let geoMap = new Map();          // day → geo 条目 O(1) 索引
   let totalH = 0;
   let outlineSeq = 0;
+  let gotoSeq = 0;                 // gotoDay 取号：新跳转/退出编年让旧翻页循环静默作废
   let needOutline = false;
   let syncTimer = 0;
   let ruler = null;
@@ -289,6 +290,7 @@ export function createTimeline(deps) {
 
   async function gotoDay(day) {
     if (!active()) return;
+    const my = ++gotoSeq;   // 取号：期间再有新跳转或退出编年（号变了）则本轮静默作废
     let sec = sections.get(day);
     if (!sec) {
       if (!S.hasMore) { toast('已经翻到最早了'); return; }
@@ -296,14 +298,21 @@ export function createTimeline(deps) {
       let guard = 0;
       while (!sections.has(day) && S.hasMore && guard++ < 60) {
         await settle();
+        if (my !== gotoSeq || !active()) return;
         if (!S.hasMore) break;
         load(false);
         await settle();
+        if (my !== gotoSeq || !active()) return;
         if (S.loadError) { toast('装载失败，请稍后重试'); return; }
       }
       sec = sections.get(day);
-      if (!sec) { toast(`${dayLabel(day)} 在当前筛选下没有帖子`); return; }
+      if (!sec) {
+        if (my !== gotoSeq || !active()) return;   // 旧轮不再弹「没有帖子」
+        toast(`${dayLabel(day)} 在当前筛选下没有帖子`);
+        return;
+      }
     }
+    if (my !== gotoSeq || !active()) return;   // 滚动前再核号，旧轮不抢屏
     const topbar = document.querySelector('.topbar');
     const y = sec.getBoundingClientRect().top + window.scrollY
       - (topbar?.offsetHeight || 41) - 6;
@@ -416,6 +425,7 @@ export function createTimeline(deps) {
     } else {
       disconnectObserver();
       ++outlineSeq;
+      ++gotoSeq;   // 退出编年：挂起的 gotoDay 翻页循环随之作废
       geo = []; geoMap = new Map(); outline = new Map(); totalH = 0;
       lastCurTop = -1; lastCurH = -1;
     }
