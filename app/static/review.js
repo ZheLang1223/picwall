@@ -12,7 +12,7 @@ export function createReview({ S, $, api, toast, enqueueMutation,
                                cancelHide, animatedHide,
                                safeUrl, trapTab, setDetailSid,
                                showStageImage, openLB }) {
-  const R = { active: false, posts: [], idx: 0, stashImages: null, loadingMore: false,
+  const R = { active: false, opening: false, posts: [], idx: 0, stashImages: null, loadingMore: false,
               arrow: {key: null, t: 0} };
 
   // 回看帖不在当前 feed 列表里时，直接改 feed 卡片的徽章；在列表里则同步数据对象
@@ -57,33 +57,36 @@ export function createReview({ S, $, api, toast, enqueueMutation,
   }
 
   async function open() {
-    if (R.active || S.readOnly) return;
-    const pill = $('#review-progress');   // 等待反馈：请求回来前先亮进度 pill，成功后由 render() 接管文案
-    pill.hidden = false;
-    pill.textContent = '回看加载中…';
-    let data;
-    try { data = await api('/api/review/next?limit=' + reviewN()); }
-    catch (e) { pill.hidden = true; toast(e.message); return; }
-    const posts = data.posts || [];
-    if (!posts.length) { pill.hidden = true; toast('还没有保留的图'); return; }
-    R.active = true; R.posts = posts; R.idx = 0;
-    // 大图浏览换到本组范围（关闭时还原 feed 的图清单）
-    R.stashImages = S.images;
-    S.images = posts.flatMap(p => (p.pics || []).map(pc => ({ p, pc, url: '/media/' + pc.file })));
-    $('#detail').dataset.mode = 'review';
-    render();
-    cancelHide($('#detail'));
-    $('#detail').hidden = false;
-    document.body.classList.add('has-detail');
-    $('#detail').scrollTop = 0;
-    document.body.style.overflow = 'hidden';
-    $('#detail .detail-card.is-front').focus({ preventScroll: true });
-    try {   // F 不再前进：键位虽已对齐普通，但老肌肉记忆值得一次性提示
-      if (!localStorage.getItem('pw_reviewhint')) {
-        localStorage.setItem('pw_reviewhint', '1');
-        toast('回看与普通浏览同一套键位：F/D 点赞±1 · ←→ 双击 / PgUp·Dn 翻帖 · Esc 退出');
-      }
-    } catch (e) { /* 存不了就不再弹 */ }
+    if (R.active || R.opening || S.readOnly) return;   // 防重入：请求在途（R.active 要 await 后才置位）的二次触发直接忽略
+    R.opening = true;
+    try {
+      const pill = $('#review-progress');   // 等待反馈：请求回来前先亮进度 pill，成功后由 render() 接管文案
+      pill.hidden = false;
+      pill.textContent = '回看加载中…';
+      let data;
+      try { data = await api('/api/review/next?limit=' + reviewN()); }
+      catch (e) { pill.hidden = true; toast(e.message); return; }
+      const posts = data.posts || [];
+      if (!posts.length) { pill.hidden = true; toast('还没有保留的图'); return; }
+      R.active = true; R.posts = posts; R.idx = 0;
+      // 大图浏览换到本组范围（关闭时还原 feed 的图清单）
+      R.stashImages = S.images;
+      S.images = posts.flatMap(p => (p.pics || []).map(pc => ({ p, pc, url: '/media/' + pc.file })));
+      $('#detail').dataset.mode = 'review';
+      render();
+      cancelHide($('#detail'));
+      $('#detail').hidden = false;
+      document.body.classList.add('has-detail');
+      $('#detail').scrollTop = 0;
+      document.body.style.overflow = 'hidden';
+      $('#detail .detail-card.is-front').focus({ preventScroll: true });
+      try {   // F 不再前进：键位虽已对齐普通，但老肌肉记忆值得一次性提示
+        if (!localStorage.getItem('pw_reviewhint')) {
+          localStorage.setItem('pw_reviewhint', '1');
+          toast('回看与普通浏览同一套键位：F/D 点赞±1 · ←→ 双击 / PgUp·Dn 翻帖 · Esc 退出');
+        }
+      } catch (e) { /* 存不了就不再弹 */ }
+    } finally { R.opening = false; }   // 失败/空组也落旗标：否则出错一次后回看从此打不开；在途 close() 走 !R.active 早退不受影响
   }
 
   function close() {

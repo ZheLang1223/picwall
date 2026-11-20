@@ -1750,3 +1750,18 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('回看 open() 防重入：R.opening 在途旗标 await 前置位、finally 兜底复位，连点不再双发请求', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const reviewSrc = await read('../app/static/review.js');
+
+  assert.ok(reviewSrc.includes('opening: false'), 'R 应初始化 opening 旗标');
+  assert.ok(reviewSrc.includes('if (R.active || R.opening || S.readOnly) return;'),
+    'open() 守卫应扩为 R.active||R.opening||S.readOnly（R.active 要 await 后才置位，在途二次触发必须靠 opening 拦）');
+  const setFlag = reviewSrc.indexOf('R.opening = true;');
+  const awaited = reviewSrc.indexOf("await api('/api/review/next");
+  assert.ok(setFlag >= 0 && awaited > setFlag, 'R.opening = true 应先于 review/next 请求发出（覆盖整个 await 窗口）');
+  assert.ok(reviewSrc.includes('} finally { R.opening = false; }'),
+    'finally 必须复位 opening：请求失败与空组提前 return 也落旗，否则出错一次后回看从此打不开');
+});
