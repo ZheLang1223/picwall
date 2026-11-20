@@ -24,7 +24,7 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
                              mark, toggleFavorite, getLastDrop, undoLastMark,
                              load, openLB, openLinkForSid, switchStatusView,
                              animatedHide, cancelHide }) {
-  const Q = { active: false, slots: [null, null, null, null], focus: 0,
+  const Q = { active: false, opening: false, slots: [null, null, null, null], focus: 0,
               stash: [], lastDecided: null, zoom: false, zoomSlot: 0, zoomIdx: 0,
               prefetched: new Set(), inflight: 0,
               picIdx: [0, 0, 0, 0], lastRotate: [0, 0, 0, 0], rotateTimer: 0 };
@@ -162,24 +162,29 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
 
   /* ---------- 会话 ---------- */
   async function open() {
-    if (Q.active || S.readOnly) return;
+    if (Q.active || Q.opening || S.readOnly) return;   // opening：首屏 load(true) 在途即拒新开，防连按 Shift+Q 双开会话
     if ((S.st?.counts?.pending || 0) === 0) { toast('新增已筛完 ✓'); return; }
-    if (S.status !== 'pending') { switchStatusView('pending'); await load(true); }
-    else if (!S.posts.length) await load(true);
-    if (!S.posts.some(p => p.status === 'pending')) { toast('没有待处理的新增'); return; }
-    Q.active = true;
-    quadKept = 0; quadDropped = 0;
-    Q.slots = [null, null, null, null];
-    Q.focus = 0; Q.stash = []; Q.lastDecided = null;
-    Q.zoom = false; zoomEl().hidden = true;
-    Q.prefetched = new Set(); Q.inflight = 0;
-    if (typeof document !== 'undefined' && document.body) document.body.style.overflow = 'hidden';
-    const quad = $('#quad');
-    cancelHide(quad);
-    quad.hidden = false;
-    renderAll();
-    startRotate();
-    hintOnce();
+    Q.opening = true;   // 先占位再等 await；finally 兜底复位，覆盖「没有待处理」早退与 load 抛错
+    try {
+      if (S.status !== 'pending') { switchStatusView('pending'); await load(true); }
+      else if (!S.posts.length) await load(true);
+      if (!S.posts.some(p => p.status === 'pending')) { toast('没有待处理的新增'); return; }
+      Q.active = true;
+      quadKept = 0; quadDropped = 0;
+      Q.slots = [null, null, null, null];
+      Q.focus = 0; Q.stash = []; Q.lastDecided = null;
+      Q.zoom = false; zoomEl().hidden = true;
+      Q.prefetched = new Set(); Q.inflight = 0;
+      if (typeof document !== 'undefined' && document.body) document.body.style.overflow = 'hidden';
+      const quad = $('#quad');
+      cancelHide(quad);
+      quad.hidden = false;
+      renderAll();
+      startRotate();
+      hintOnce();
+    } finally {
+      Q.opening = false;
+    }
   }
 
   /* 多图槽位自动轮换：聚焦格 3s/步（裁决要盯着看），非聚焦格 1.2s/步（预览要快）；

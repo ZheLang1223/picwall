@@ -1750,3 +1750,18 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('四格快筛 open() 重入防护契约：Q.opening 占位 + finally 复位，防连按 Shift+Q 双开会话', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const quadSrc = await read('../app/static/quad.js');
+
+  assert.ok(quadSrc.includes('active: false, opening: false'),
+    'Q 定义处应初始化 opening 标志');
+  assert.ok(quadSrc.includes('if (Q.active || Q.opening || S.readOnly) return;'),
+    'open() 入口应同时拒绝 active / opening / 只读三种态的重入');
+  assert.ok(quadSrc.includes('Q.opening = true;'),
+    '首个 await load(true) 之前应先置 opening 占位');
+  assert.ok(quadSrc.includes('} finally {\n      Q.opening = false;\n    }'),
+    'finally 必须复位 opening，覆盖「没有待处理的新增」早退与 load 抛错路径');
+});
