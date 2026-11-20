@@ -3,16 +3,20 @@
 export function createNotes({ $, api, toast, esc, commentBodyHTML, fmtCommentTime,
                               openDetail, animatedHide, cancelHide }) {
   const N = { active: false, cursor: null, hasMore: true, loading: false };
+  let gen = 0;              // 会话代数：每次 open() 推进，旧代在途回答整包作废
+  let loadingGen = 0;       // 占用 N.loading 的代数——同代才去重，旧会话在途不拦新会话的 reset
   let returnFocus = null;   // dialog 焦点还原：打开时记来处，关闭时还回去
 
   async function fetchBatch(reset) {
-    if (N.loading) return;
+    if (N.loading && loadingGen === gen) return;   // 只去重同代请求；跨代放行（重开不被旧请求卡死）
     if (!reset && !N.hasMore) return;
-    N.loading = true;
+    const myGen = gen;
+    N.loading = true; loadingGen = myGen;
     try {
       const q = new URLSearchParams({ limit: 100 });
       if (!reset && N.cursor) q.set('cursor', N.cursor);
       const r = await api('/api/comments?' + q);
+      if (myGen !== gen || !N.active) return;   // 已关闭或重开后的迟到回答：不写 DOM、不动 cursor/hasMore
       const list = $('#notes-list');
       if (reset) list.innerHTML = '';
       for (const it of r.items || []) {
@@ -31,9 +35,18 @@ export function createNotes({ $, api, toast, esc, commentBodyHTML, fmtCommentTim
       if (reset && !(r.items || []).length)
         list.innerHTML = '<p class="note-empty">还没有批注——在详情里给图写第一条。</p>';
     } catch (e) {
+      if (myGen !== gen || !N.active) return;   // 过期失败静默丢弃，不污染新会话
       toast(e.message);
-      if (reset)   // 首屏读取失败：等待态换成错误态（翻页失败不动已有行，仅 toast）
-        $('#notes-list').innerHTML = `<div class="note-empty">批注读取失败：${esc(e.message)}</div>`;
+      if (reset) {   // 首屏读取失败：等待态换成错误态 + 重试按钮（翻页失败不动已有行，仅 toast）
+        const list = $('#notes-list');
+        list.innerHTML = `<div class="note-empty">批注读取失败：${esc(e.message)}</div>`;
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'note-empty note-retry';
+        retry.textContent = '加载失败，点此重试';
+        retry.onclick = () => { retry.remove(); fetchBatch(true); };
+        list.appendChild(retry);
+      }
       if (!reset) {
         N.hasMore = false;
         const retry = document.createElement('button');
@@ -44,12 +57,13 @@ export function createNotes({ $, api, toast, esc, commentBodyHTML, fmtCommentTim
         $('#notes-list').appendChild(retry);
       }
     }
-    finally { N.loading = false; }
+    finally { if (myGen === gen) N.loading = false; }   // 只清自己这一代的 loading
   }
 
   async function open() {
     if (N.active) return;
     N.active = true;
+    ++gen;   // 新会话代数：重开即作废旧代在途回答，reset 不再被旧 loading 拦截
     N.cursor = null; N.hasMore = true;
     cancelHide($('#notes-view'));
     $('#notes-view').hidden = false;

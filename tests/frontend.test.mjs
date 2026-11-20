@@ -1750,3 +1750,32 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('批注流重开竞态契约：gen 会话计数器作废旧代回答、loading 按代记账与首屏失败重试按钮', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const notesSrc = await read('../app/static/notes.js');
+
+  // ① 会话计数器：open() ++gen 推进代数，fetchBatch 开局捕获当次 myGen
+  assert.ok(notesSrc.includes('let gen = 0') && notesSrc.includes('++gen')
+    && notesSrc.includes('const myGen = gen;'),
+    '批注流应有会话计数器 gen（open() 推进）且 fetchBatch 捕获当次 gen');
+
+  // ② 过期回答整包作废：await 回来后 gen 变了或已关闭（!N.active）→ 不写 DOM、不动 cursor/hasMore，成功与失败两路都要守
+  assert.ok((notesSrc.match(/if \(myGen !== gen \|\| !N\.active\) return;/g) || []).length >= 2,
+    'fetchBatch 的成功与失败路径都应在 await 后先作废过期回答');
+
+  // ③ loading 按代记账：只有同代请求才被 N.loading 去重（旧会话在途不拦新会话 reset），finally 只清自己那一代
+  assert.ok(notesSrc.includes('if (N.loading && loadingGen === gen) return;')
+    && notesSrc.includes('N.loading = true; loadingGen = myGen;')
+    && notesSrc.includes('if (myGen === gen) N.loading = false;'),
+    'N.loading 应按代记账：跨代放行 reset，finally 只清自己代的 loading');
+
+  // ④ 首屏（reset）失败态应给重试按钮（与翻页失败重试同款 type/class/文案），点击重跑 fetchBatch(true)
+  assert.ok((notesSrc.match(/note-retry/g) || []).length >= 2
+    && notesSrc.includes("retry.type = 'button'")
+    && notesSrc.includes("retry.className = 'note-empty note-retry'")
+    && notesSrc.includes("retry.textContent = '加载失败，点此重试'")
+    && notesSrc.includes('retry.remove(); fetchBatch(true);'),
+    '首屏读取失败应渲染重试按钮（加载失败，点此重试）并重跑 fetchBatch(true)');
+});
