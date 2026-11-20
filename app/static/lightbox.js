@@ -50,6 +50,9 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
   function closeLB() {
     cancelPreloads();
     clearTimeout(imageClickTimer); imageClickTimer = 0;
+    // 关箱同款「停播清源」：#lightbox 隐藏后 <video> 不会自停，声音会漏到浮层外
+    const vid=$('#lb-video');
+    if (vid && vid.getAttribute('src')) { vid.pause?.(); vid.removeAttribute('src'); vid.load?.(); vid.poster=''; }
     animatedHide($('#lightbox'));
     document.body.style.overflow=$('#detail').hidden ? '' : 'hidden';
     scopeSid=null;anchor=null;filmKey=null;filmStart=0;filmEnd=0;activeThumb=null;

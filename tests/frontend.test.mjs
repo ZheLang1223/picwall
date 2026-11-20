@@ -1490,6 +1490,81 @@ test('Wave2 性能优化 F-P1：Lightbox 胶片窗口化渲染（最多 41 张�
   }
 });
 
+test('大图关闭即停播清源：closeLB 暂停并清空 #lb-video 的 src/海报，图片态关箱不触发 load', async () => {
+  const prevDoc = globalThis.document;
+  let pauseCalls = 0, loadCalls = 0;
+  const vidAttrs = new Map();
+  const vid = {
+    hidden: true,
+    poster: '',
+    pause: () => { pauseCalls += 1; },
+    load: () => { loadCalls += 1; },
+    setAttribute: (k, v) => vidAttrs.set(k, String(v)),
+    getAttribute: (k) => vidAttrs.get(k) ?? null,
+    removeAttribute: (k) => vidAttrs.delete(k),
+  };
+  Object.defineProperty(vid, 'src', {
+    get() { return vidAttrs.get('src') ?? ''; },
+    set(v) { vidAttrs.set('src', String(v)); },
+  });
+  const els = {
+    '#lightbox': { hidden: true, style: {}, addEventListener: () => {} },
+    '#detail': { hidden: true },
+    '#lb-film': { hidden: true, addEventListener: () => {} },
+    '#lb-img': { hidden: true, style: {}, alt: '', src: '', onload: null, onerror: null,
+      setAttribute: () => {}, getAttribute: () => null },
+    '.lb-stage': { classList: { add: () => {}, remove: () => {}, toggle: () => {} }, scrollTop: 0 },
+    '#lb-prev': { disabled: false, setAttribute: () => {}, focus: () => {}, onclick: null },
+    '#lb-next': { disabled: false, setAttribute: () => {}, focus: () => {}, onclick: null },
+    '#lb-video': vid,
+  };
+  globalThis.document = { activeElement: null, body: { style: {} } };
+  let lb;
+  try {
+    const images = [
+      { p: { sid: 's1', author: 'a1' }, pc: { file: 'v1.mp4', kind: 'video', thumb: 'v1.jpg' }, url: '/media/v1.mp4' },
+      { p: { sid: 's1', author: 'a1' }, pc: { file: 'p1.jpg', kind: 'img', w: 800, h: 600 }, url: '/media/p1.jpg' },
+    ];
+    lb = createLightbox({
+      S: { images },
+      $: (sel) => els[sel] ?? null,
+      animatedHide: (el) => { el.hidden = true; },
+      cancelHide: () => {},
+      resetZoom: () => {},
+      crossPosts: () => false,
+    });
+    lb.openLB(0);
+    assert.equal(vid.hidden, false);
+    assert.equal(vid.getAttribute('src'), '/media/v1.mp4');
+    assert.equal(vid.poster, '/media/v1.jpg');
+
+    // 关箱停播清源：声音不再漏到已隐藏的浮层外
+    lb.closeLB();
+    assert.equal(pauseCalls, 1, '关箱应暂停播放');
+    assert.equal(loadCalls, 1, '关箱应触发 load() 清源');
+    assert.equal(vid.getAttribute('src'), null, '关箱应移除 src');
+    assert.equal(vid.poster, '', '关箱应清掉海报');
+    assert.equal(els['#lightbox'].hidden, true);
+
+    // 清源后重开同视频：src/海报重新挂上，从头加载
+    lb.openLB(0);
+    assert.equal(vid.getAttribute('src'), '/media/v1.mp4');
+    assert.equal(vid.poster, '/media/v1.jpg');
+
+    // 切到图片：既有路径停播清源；图片态关箱不得再触发 pause/load
+    lb.lbNav(1);
+    assert.equal(vid.hidden, true);
+    assert.equal(pauseCalls, 2);
+    assert.equal(loadCalls, 2);
+    lb.closeLB();
+    assert.equal(pauseCalls, 2, '无 src 时关箱不应再 pause/load');
+    assert.equal(loadCalls, 2);
+  } finally {
+    lb?.closeLB?.();
+    globalThis.document = prevDoc;
+  }
+});
+
 test('Wave2 性能优化 F-P3：mark 与 keep_count 重排增量维护 S.images，不触发整墙 rebuildImages', async () => {
   const prevCss = globalThis.CSS;
   const prevDoc = globalThis.document;
