@@ -1,8 +1,9 @@
 const $ = (s) => document.querySelector(s);
 /* 栈式 toast：#toast 是容器，条目（.toast-item）独立计时、互不顶替——
    快筛连裁时带「撤销」的条目在其 6s 反悔窗口内不会被后续状态消息顶掉。
-   同屏上限 3 条，超容先逐出最旧的**无动作**条目（全是带动作的才逐最旧）。
-   persistent 条目带 ✕ 手动关闭（无动作也能关掉）；悬停暂停计时、移出续跑。 */
+   同屏上限 3 条，超容逐出顺序：最旧无动作普通条 → 最旧普通条 → 最后才轮到常驻条。
+   persistent 条目带 ✕ 手动关闭（无动作也能关掉），永不武装倒计时（悬停/失焦也不行）；
+   普通条悬停或 Tab 聚焦暂停计时、移出/焦点离开整条才续跑。 */
 const MAX_ITEMS = 3;
 
 function makeItem(msg, action, options) {
@@ -30,10 +31,17 @@ function makeItem(msg, action, options) {
     item.appendChild(x);
   }
   item._hasAction = hasAction;
+  item._persistent = !!options.persistent;
   // 带撤销的 toast 停留更久（Gmail 式：给足反悔时间）
   item._delay = options.duration || (hasAction ? 6000 : 2800);
-  item.addEventListener('mouseenter', () => pauseItem(item));
-  item.addEventListener('mouseleave', () => armItem(item));
+  if (!item._persistent) {   // 常驻条永不武装倒计时：只经 ✕/动作/超容逐出离场
+    item.addEventListener('mouseenter', () => pauseItem(item));
+    item.addEventListener('mouseleave', () => armItem(item));
+    item.addEventListener('focusin', () => pauseItem(item));   // 键盘 Tab 进条内同样暂停
+    item.addEventListener('focusout', (e) => {   // 焦点移到条内按钮不算离开
+      if (!item.contains(e.relatedTarget)) armItem(item);
+    });
+  }
   return item;
 }
 
@@ -56,10 +64,12 @@ function pauseItem(item) {   // 悬停暂停：记住剩余时长，移出后续
   item._delay = Math.max(800, (item._deadline || 0) - Date.now());
 }
 
-function evictOverflow(container) {   // 超容逐出：优先无动作的最旧条目
+function evictOverflow(container) {   // 超容逐出：普通条先让位，常驻条最后才轮到
   while (container.children.length > MAX_ITEMS) {
     const items = [...container.children];
-    const victim = items.find((el) => !el._hasAction) || items[0];
+    const victim = items.find((el) => !el._persistent && !el._hasAction)
+      || items.find((el) => !el._persistent)
+      || items[0];
     removeItem(victim);
   }
 }

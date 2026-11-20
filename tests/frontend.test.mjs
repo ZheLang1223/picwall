@@ -11,6 +11,7 @@ import {captureGroupText, captureTitle, emptyState} from '../app/static/content-
 import {createQuad, pickNext, nextFocus} from '../app/static/quad.js';
 import {createTimeline, dayOf, dayLabel, monthLabel, planRows} from '../app/static/timeline.js';
 import {createLightbox} from '../app/static/lightbox.js';
+import {toast} from '../app/static/notifications.js';
 import {enterFilters, statsLine, profileSpan, profileUrl, skinFromPrefs, SKINS} from '../app/static/author-view.js';
 const s={status:'all',group:'all',author:'all',range:'all',source:'all',hasCmts:'all',searchText:''};
 const p={sid:'a',uid:'u1',list_id:'g1',status:'kept',favorite:true,text:'hello',via:'',created_at:'2026-10-01T00:00:00+08:00'};
@@ -1749,4 +1750,85 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
   assert.ok(indexHtml.includes('id="ss-state" class="ss-state" role="status" aria-live="polite"')
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
+});
+
+/* ---------- 栈式 toast（notifications.js） ---------- */
+test('常驻 toast 悬停不续跑不消失、超容最后才逐出、普通条聚焦暂停移焦续跑', () => {
+  const makeEl = (tag) => ({
+    tagName: (tag || 'div').toUpperCase(), className: '', textContent: '',
+    children: [], listeners: {},
+    classList: { add() {}, remove() {}, contains: () => false },
+    appendChild(c) {
+      this.children.push(c);
+      c.remove = () => { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); };
+    },
+    contains(n) { return n === this || this.children.includes(n); },
+    addEventListener(t, fn) { this.listeners[t] = fn; },
+    setAttribute() {},
+  });
+  const fire = (el, type, ev = {}) => el.listeners[type] && el.listeners[type](ev);
+  const box = { current: makeEl('div') };
+  const pend = [];   // 人为定时器：只登记不触发，flush() 手动冲刷
+  const oldDoc = globalThis.document, oldRAF = globalThis.requestAnimationFrame;
+  const oldST = globalThis.setTimeout, oldCT = globalThis.clearTimeout;
+  globalThis.document = {
+    querySelector: (sel) => (sel === '#toast' ? box.current : null),
+    createElement: makeEl,
+  };
+  globalThis.requestAnimationFrame = (fn) => fn();
+  globalThis.setTimeout = (fn) => { pend.push(fn); return pend.length; };
+  globalThis.clearTimeout = (id) => { if (id) pend[id - 1] = null; };
+  const flush = () => { for (const fn of [...pend]) if (fn) fn(); };
+  const texts = (el) => el.children.map((c) => c.children[0].textContent);
+  try {
+    // 1) 常驻错误条：悬停再移出不得武装倒计时，冲刷定时器也不消失（只能 ✕/动作/超容离场）
+    toast('后台任务可能仍在进行', null, { persistent: true });
+    const persist = box.current.children[0];
+    assert.equal(box.current.children.length, 1);
+    fire(persist, 'mouseenter');
+    fire(persist, 'mouseleave');
+    flush();
+    assert.ok(box.current.children.includes(persist), '常驻条悬停移出后不得被自动武装的倒计时移除');
+    assert.equal(pend.filter(Boolean).length, 0, '常驻条任何时刻都不应有倒计时在跑');
+
+    // 2) 超容逐出：最旧无动作普通条 → 最旧普通条 → 最后才轮到常驻条
+    toast('一'); toast('二'); toast('三');   // 1 常驻 + 3 普通 = 4 → 逐 1
+    assert.equal(box.current.children.length, 3);
+    assert.ok(box.current.children.includes(persist), '常驻错误条不得被普通状态条顶掉');
+    assert.deepEqual(texts(box.current), ['后台任务可能仍在进行', '二', '三'], '逐出的应是最旧的普通条「一」');
+    box.current = makeEl('div');
+    toast('P', null, { persistent: true });
+    toast('甲', { label: '撤销', fn: () => {} });
+    toast('乙', { label: '撤销', fn: () => {} });
+    toast('丙', { label: '撤销', fn: () => {} });   // 无「无动作普通条」→ 逐最旧带动作普通条
+    assert.deepEqual(texts(box.current), ['P', '乙', '丙'], '其次逐出最旧的带动作普通条，常驻条仍保留');
+    box.current = makeEl('div');
+    toast('P1', null, { persistent: true });
+    toast('P2', null, { persistent: true });
+    toast('P3', null, { persistent: true });
+    toast('P4', null, { persistent: true });   // 全是常驻才逐最旧
+    assert.deepEqual(texts(box.current), ['P2', 'P3', 'P4'], '全是常驻条才逐出最旧的常驻条');
+
+    // 3) 普通条键盘可达：focusin 像悬停一样暂停，焦点离开整条（focusout）才续跑
+    flush();   // 清掉前面普通条遗留的倒计时
+    box.current = makeEl('div');
+    toast('已丢弃', { label: '撤销', fn: () => {} });
+    const t3 = box.current.children[0];
+    fire(t3, 'focusin');
+    flush();
+    assert.ok(box.current.children.includes(t3), 'Tab 聚焦期间倒计时应暂停，冲刷定时器不得移除');
+    fire(t3, 'focusout', { relatedTarget: t3.children[1] });   // 焦点移到条内「撤销」按钮
+    flush();
+    assert.ok(box.current.children.includes(t3), '条内焦点转移不算离开，不得续跑');
+    assert.equal(pend.filter(Boolean).length, 0);
+    fire(t3, 'focusout', { relatedTarget: null });   // 焦点离开整条：续跑
+    assert.equal(pend.filter(Boolean).length, 1, '焦点离开整条应重新武装倒计时');
+    flush();
+    assert.ok(!box.current.children.includes(t3), '续跑后倒计时到期应移除');
+  } finally {
+    globalThis.document = oldDoc;
+    globalThis.requestAnimationFrame = oldRAF;
+    globalThis.setTimeout = oldST;
+    globalThis.clearTimeout = oldCT;
+  }
 });
