@@ -2108,22 +2108,43 @@ function crawlPaneEnter() {
 
 /* ---------- 清理已删除：预览 + 手动触发（自动清理每天 04:10 另有定时） ---------- */
 
+let purgePagingSeq = 0;   // 翻页途中弹窗被重开/重渲时作废旧结果（简单序号防竞态）
 async function renderPurgeModal() {
+  const seq = ++purgePagingSeq;
   const st = S.st || await loadStatus();
+  if (seq !== purgePagingSeq) return;
   const p = st.purge || { days: 3, due: 0, discarded: 0 };
   $('#purge-days').textContent = p.days;
   $('#purge-summary').textContent =
     `当前「不要」共 ${p.discarded} 帖，其中 ${p.due} 帖到期会清理；${p.protected || 0} 帖因收藏受保护。取消收藏后重新计时。`;
   $('#purge-n').textContent = p.due;
   $('#btn-purge-run').disabled = !p.due;
-  const data = await api('/api/posts?status=discarded&group=all&author=all'
-    + '&range=all&offset=0&limit=200');
+  // /api/posts 按 created_at 降序且单页封顶 200，「不要」帖超一页时最老（往往正到期）
+  // 的帖根本不在首页里：用 next_cursor/has_more 翻页凑齐全量再筛到期（25 页硬上限）
   const cutoff = Date.now() - p.days * 86400e3;
-  const due = data.posts
-    .filter((x) => !x.favorite && x.discarded_at && new Date(x.discarded_at).getTime() < cutoff);
+  const query = 'status=discarded&group=all&author=all&range=all&limit=200';
+  const due = [];
+  try {
+    let url = `/api/posts?${query}&offset=0`;
+    for (let page = 0; page < 25 && url; page++) {
+      const data = await api(url);
+      if (seq !== purgePagingSeq) return;   // 已被新一次渲染接替，弃写
+      for (const x of data.posts) {
+        if (!x.favorite && x.discarded_at && new Date(x.discarded_at).getTime() < cutoff) due.push(x);
+      }
+      url = data.has_more && data.next_cursor
+        ? `/api/posts?${query}&cursor=${encodeURIComponent(data.next_cursor)}` : '';
+    }
+  } catch (e) {
+    if (seq !== purgePagingSeq) return;
+    $('#purge-list').innerHTML = '<p class="hint">列表加载失败，请稍后重试</p>';
+    return;   // 计数与运行按钮保持按 status 计算的值不动
+  }
+  if (seq !== purgePagingSeq) return;
   $('#purge-list').innerHTML = due.slice(0, 200).map((x) =>
     `<div class="prow"><span>${esc(x.author)}</span>`
     + `<span class="pwhen">${fmtDate(x.discarded_at)}</span></div>`).join('')
+    + (due.length > 200 ? `<p class="hint">…另有 ${due.length - 200} 帖未列出</p>` : '')
     || '<p class="hint">没有已到期的帖子。</p>';
 }
 

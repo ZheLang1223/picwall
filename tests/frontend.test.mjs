@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('清理预览翻页契约：renderPurgeModal 以 next_cursor/has_more 翻齐 discarded 全量再筛到期', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const appSrc = await read('../app/static/app.js');
+  const body = appSrc.slice(appSrc.indexOf('async function renderPurgeModal()'),
+    appSrc.indexOf("$('#btn-purge-run').onclick"));
+
+  // 翻页驱动：25 页硬上限；has_more 且有 next_cursor 才续翻，后续页只带 cursor 不带 offset
+  assert.ok(body.includes('for (let page = 0; page < 25'), '翻页应有 25 页硬上限兜底');
+  assert.ok(body.includes('data.has_more') && body.includes('data.next_cursor'),
+    '应以响应的 has_more/next_cursor 驱动翻页');
+  assert.ok(body.includes('`/api/posts?${query}&cursor=${encodeURIComponent(data.next_cursor)}`'),
+    '后续页应以 cursor= 传游标（encodeURIComponent 包裹）且不再带 offset');
+  // 筛选口径与列表渲染保持原样：非收藏 + discarded_at 早于 cutoff，前 200 行 + 超出提示
+  assert.ok(body.includes('!x.favorite && x.discarded_at'), '到期筛选口径不得改动');
+  assert.ok(body.includes('due.slice(0, 200)') && body.includes('另有 ${due.length - 200} 帖未列出'),
+    '仍列前 200 行，超出一律以「…另有 N 帖未列出」提示');
+  // 竞态与失败兜底：序号计数器作废翻页途中的旧渲染；拉取失败给重试提示且不动计数/运行按钮
+  assert.ok(body.includes('purgePagingSeq') && (body.match(/seq !== purgePagingSeq/g) || []).length >= 3,
+    '每个 await 后都应作废已被接替的旧渲染');
+  assert.ok(body.includes('列表加载失败，请稍后重试'), '拉取失败应兜底提示可重试');
+});
