@@ -4,7 +4,6 @@ const $ = (s, el = document) => (el || document).querySelector(s);
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* 头像路径映射：与相册 avatarSrc 同规则（avatars/ 相对路径走 /media/，外部仅放行 http(s)） */
 const avatarSrc = (url) => {
@@ -31,7 +30,8 @@ function paintOverview(o) {
 }
 
 /* 近 30 天双柱：入库（蓝）为主柱，回看点赞（金）按同尺缩放叠在下方。
-   高度按两系列各自最大值归一（两把尺，避免点赞被入库量淹没）；空日给占位底线 */
+   高度按两系列各自最大值归一（两把尺，避免点赞被入库量淹没）；空日给占位底线。
+   柱状图纯视觉恒 aria-hidden，读屏走同源 days 算出的 .st-sr 文字摘要 */
 function paintChart(daily) {
   const wrap = $('#st-chart-wrap');
   if (!daily.length) return;   // 模板自带空态
@@ -54,7 +54,11 @@ function paintChart(daily) {
       `<i class="bar-n" style="height:${hn}%"></i>` +
       (hk ? `<i class="bar-k" style="height:${hk}%"></i>` : '') + `</div>`;
   }).join('');
-  wrap.innerHTML = `<div class="st-chart"${REDUCE ? '' : ' aria-hidden="true"'}>${cols}</div>` +
+  const sumN = days.reduce((s, x) => s + x.n, 0);
+  const sumK = days.reduce((s, x) => s + x.likes, 0);
+  const peak = days.reduce((m, x) => (x.n >= m.n ? x : m), days[0]);
+  const sr = `<p class="st-sr">近 30 天入库 ${sumN} 帖（峰值 ${peak.n}，出现在 ${peak.d}），回看点赞 ${sumK} 次</p>`;
+  wrap.innerHTML = `<div class="st-chart" aria-hidden="true">${cols}</div>` + sr +
     `<div class="st-legend"><span><i style="background:#7db8ec"></i>入库（峰值 ${maxN}）</span>` +
     `<span><i style="background:rgba(232,198,114,.75)"></i>回看点赞（峰值 ${maxK}）</span></div>`;
 }

@@ -61,6 +61,9 @@ a{ color:inherit; }
   vertical-align:-1px; }
 .st-empty{ border:1.5px dashed rgba(139,147,163,.55); border-radius:10px;
   padding:22px; text-align:center; color:#8b93a3; font-size:12px; }
+/* 图表文字摘要：仅供屏幕阅读器（视觉隐藏） */
+.st-sr{ position:absolute; width:1px; height:1px; overflow:hidden;
+  clip:rect(0 0 0 0); white-space:nowrap; margin:-1px; padding:0; border:0; }
 
 /* Top 博主 */
 .st-authors{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }

@@ -1750,3 +1750,31 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('统计室图表无障碍契约：柱状图恒 aria-hidden 纯视觉，另附同源 st-sr 读屏摘要', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [statsSrc, statsCss] = await Promise.all([
+    read('../app/static/stats.js'),
+    read('../app/static/stats.css'),
+  ]);
+  const chart = statsSrc.slice(statsSrc.indexOf('function paintChart'), statsSrc.indexOf('function paintAuthors'));
+
+  // aria-hidden 不再随 prefers-reduced-motion 摇摆：旧实现大多数用户整图无文字替代，reduced-motion 用户反而读 30 个空 div
+  assert.ok(chart.includes('<div class="st-chart" aria-hidden="true">'),
+    '柱状图容器应恒带 aria-hidden="true"（纯视觉）');
+  assert.ok(!statsSrc.includes('REDUCE'),
+    '图表可读性不应再绑定 prefers-reduced-motion（REDUCE 常量随之退役）');
+
+  // 读屏摘要与柱状图同一份 days 计算：入库总数、峰值（含日期）、回看点赞总数，且紧跟柱状图容器之后
+  assert.ok(chart.includes('days.reduce((s, x) => s + x.n, 0)') && chart.includes('days.reduce((s, x) => s + x.likes, 0)')
+    && chart.includes('近 30 天入库') && chart.includes('峰值') && chart.includes('，出现在 ')
+    && chart.includes('回看点赞'),
+    'st-sr 摘要应由同一 days 数组计算（入库总数/峰值日/点赞总数）');
+  assert.ok(chart.includes('<div class="st-chart" aria-hidden="true">${cols}</div>` + sr +'),
+    'st-sr 摘要应紧跟柱状图容器之后（chart → sr → legend）');
+
+  assert.ok(statsCss.includes('.st-sr{ position:absolute; width:1px; height:1px;')
+    && statsCss.includes('clip:rect(0 0 0 0)') && statsCss.includes('white-space:nowrap'),
+    'stats.css 应提供 .st-sr 视觉隐藏规则');
+});
