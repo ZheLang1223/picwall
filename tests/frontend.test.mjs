@@ -1750,3 +1750,30 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('回看收藏契约：星标与 M 键走修订号乐观翻转、就地保图保批注并同步墙卡描边', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [reviewSrc, appSrc] = await Promise.all([
+    read('../app/static/review.js'),
+    read('../app/static/app.js'),
+  ]);
+
+  const favSrc = reviewSrc.slice(
+    reviewSrc.indexOf('async function favorite()'), reviewSrc.indexOf('function openLink()'));
+  assert.ok(favSrc.includes('_favoriteRevision') && favSrc.includes('p._favoriteRevision === revision'),
+    '回看 favorite 应设每帖修订号并在失败时按修订号回滚（防连按竞态）');
+  assert.ok(favSrc.includes('front.dataset.img') && favSrc.includes('_comments'),
+    '回看 favorite 就地重绘应保住当前图序与刚写的批注');
+  assert.ok(!favSrc.includes('render()'),
+    '回看 favorite 不应整卡 render()：会把用户扔回第一张图并丢批注');
+  assert.ok(favSrc.includes('enqueueMutation') && favSrc.includes('/favorite'),
+    '回看 favorite 应经串行写队列 POST /api/posts/<sid>/favorite');
+  assert.ok(reviewSrc.includes('return { open, close, active: () => R.active, reaffirm, nav, key, favorite };'),
+    'favorite 应从 createReview 导出（详情卡星标复用同一路）');
+  const favClick = appSrc.slice(
+    appSrc.indexOf(".dt-fav').onclick"), appSrc.indexOf(".dt-ig.prev').onclick"));
+  assert.ok(favClick.includes('review.active()') && favClick.includes('review.favorite()')
+    && favClick.includes('toggleFavorite(detailSid).then(refreshDetail)'),
+    '详情卡星标应在回看会话走 review.favorite，否则维持普通 toggleFavorite');
+});

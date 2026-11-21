@@ -35,6 +35,15 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     } else chip?.remove();
   }
 
+  // 收藏态同步到墙（与 syncBadge 同一心智）：在 feed 列表里改数据对象并翻琥珀描边；
+  // 不在列表时也直接翻卡描边——回看帖通常不在当前 feed，星标不能只有一半反馈
+  function syncFav(p) {
+    const inFeed = S.posts.find(x => x.sid === p.sid);
+    if (inFeed) inFeed.favorite = p.favorite;
+    document.querySelectorAll(`#feed .card[data-sid="${CSS.escape(p.sid)}"]`)
+      .forEach(el => el.classList.toggle('fav', !!p.favorite));
+  }
+
   function reviewN() {
     const prefs = window.pwGetPrefs ? window.pwGetPrefs() : {};
     const n = parseInt(prefs.review, 10);
@@ -172,14 +181,42 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     render();
   }
 
+  /* 收藏翻转：与点赞 ±1 同款——乐观翻转、修订号防竞态、就地重绘保住正在看的
+     图与刚写的批注（不走 render()：整卡重渲会把用户扔回第一张图并丢批注）；
+     失败按修订号回滚 + toast。M 键与详情卡星标（app.js 走 review.favorite）共用这一路。 */
   async function favorite() {
     const p = R.posts[R.idx];
     if (!p) return;
     const target = !p.favorite;
+    const revision = (p._favoriteRevision || 0) + 1;
+    p._favoriteRevision = revision;
     p.favorite = target;
-    render();
-    try { await enqueueMutation(() => api(`/api/posts/${p.sid}/favorite`, 'POST', { favorite: target })); }
-    catch (e) { p.favorite = !target; render(); toast(e.message); }
+    R.arrow = {key: null, t: 0};   // 与普通 ±1 同款：双击判定作废
+    syncFav(p);
+    const { front } = detailCards();
+    let imgIdx = 0;
+    const inFront = R.posts[R.idx]?.sid === p.sid && !!front;
+    if (inFront) {
+      p.comments = front._comments || p.comments || [];   // 保住刚写的批注（卡内实时列表回写数据源）
+      imgIdx = +front.dataset.img || 0;
+    }
+    const repaint = () => {   // 收藏不前进：就地换星标描边，不打断正在看的图
+      front.hidden = false;
+      renderDetailInto(front, p, false);
+      showStageImage(front, Math.max(0, Math.min(imgIdx, (p.pics || []).length - 1)));
+      resetDetailCard(front);
+    };
+    if (inFront) repaint();
+    try {
+      await enqueueMutation(() => api(`/api/posts/${p.sid}/favorite`, 'POST', { favorite: target }));
+    } catch (e) {
+      if (p._favoriteRevision === revision) {
+        p.favorite = !target;
+        syncFav(p);
+        if (R.active && inFront) repaint();
+      }
+      toast(e.message);
+    }
   }
 
   function openLink() {
@@ -232,5 +269,5 @@ export function createReview({ S, $, api, toast, enqueueMutation,
     }
   }
 
-  return { open, close, active: () => R.active, reaffirm, nav, key };
+  return { open, close, active: () => R.active, reaffirm, nav, key, favorite };
 }

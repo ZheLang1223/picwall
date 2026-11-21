@@ -1701,7 +1701,12 @@ document.querySelectorAll('#detail .detail-card').forEach((card) => {
     if (lpFired) { lpFired = false; return; }
     if (detailSid) detailMarkAdvance('discarded');
   };
-  card.querySelector('.dt-fav').onclick = () => { if (detailSid) toggleFavorite(detailSid).then(refreshDetail); };
+  card.querySelector('.dt-fav').onclick = () => {
+    if (!detailSid) return;
+    // 回看：星标走回看的乐观翻转（回看帖多不在 feed 列表，toggleFavorite 会静默空转）
+    if (review.active()) { review.favorite(); return; }
+    toggleFavorite(detailSid).then(refreshDetail);
+  };
   // 图内切换：箭头按当前 index 步进，圆点直接跳（delegation，dots 每次 render 重建）
   card.querySelector('.dt-ig.prev').onclick = () => showStageImage(card, (+card.dataset.img || 0) - 1);
   card.querySelector('.dt-ig.next').onclick = () => showStageImage(card, (+card.dataset.img || 0) + 1);
