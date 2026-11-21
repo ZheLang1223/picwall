@@ -1750,3 +1750,17 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('批量打标签输入框不吞 Esc/Tab：#modal-tags 捕获层先于 stopPropagation 接住关窗与焦点圈', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const cap = src.match(/\$\('#modal-tags'\)\.addEventListener\('keydown', \(e\) => \{[\s\S]*?\n\}, true\);/);
+  assert.ok(cap, '#modal-tags 应有捕获阶段 keydown 监听（#tag-new 冒泡处理器对每键 stopPropagation，弹层级收不到 Esc/Tab）');
+  assert.ok(cap[0].includes("e.target !== $('#tag-new')"), '捕获层只应替 #tag-new 接管按键');
+  assert.ok(cap[0].includes('e.isComposing || e.keyCode === 229'), 'IME 组合中不应抢键');
+  assert.ok(cap[0].includes("e.key === 'Escape'") && cap[0].includes("closeModal('modal-tags')"), '#tag-new 的 Esc 应在捕获层关窗');
+  assert.ok(cap[0].includes("e.key === 'Tab'") && cap[0].includes("trapTab(e, $('#modal-tags'))"), '#tag-new 的 Tab 应交 trapTab 圈焦点');
+  // 位置契约：捕获层挂在 #sel-tags 入口之后、#tag-add-btn 之前
+  assert.ok(src.indexOf("$('#sel-tags').onclick") < src.indexOf(cap[0])
+    && src.indexOf(cap[0]) < src.indexOf("$('#tag-add-btn').onclick"), '捕获层应紧随批量打标签入口绑定');
+});

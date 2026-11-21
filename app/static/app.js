@@ -2061,6 +2061,14 @@ $('#sel-tags').onclick = () => {
   renderTagsChoices();
   openModal('modal-tags');
 };
+/* #tag-new 的冒泡 keydown 对每个键 stopPropagation，弹层级 Esc/Tab 收不到（开窗即聚焦在该输入框）：
+   捕获阶段先接住——Esc 关窗、Tab 圈焦点，Enter 等其余键仍交给原处理器 */
+$('#modal-tags').addEventListener('keydown', (e) => {
+  if (e.target !== $('#tag-new')) return;
+  if (e.isComposing || e.keyCode === 229) return;   // IME 组合中不抢键
+  if (e.key === 'Escape') { e.preventDefault(); closeModal('modal-tags'); }
+  else if (e.key === 'Tab') trapTab(e, $('#modal-tags'));
+}, true);
 $('#tag-add-btn').onclick = () => {
   const v = $('#tag-new').value.trim();
   if (!v) { $('#tag-new').focus(); return; }
