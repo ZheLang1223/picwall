@@ -891,7 +891,7 @@ function lbNav(d) { lightbox.lbNav(d); }
 /* ---------- 手机手势：大图 + 卡片流（仅触屏生效，桌面不受影响） ---------- */
 
 let gz = { sx: 0, sy: 0, dx: 0, dy: 0, mx: 0, my: 0, px: 0, py: 0,
-           lastTap: 0, zoom: false, movedFlag: false };
+           lastTap: 0, zoom: false, movedFlag: false, multi: false };
 let lbTapCloseTimer = 0;
 
 /* 双击缩放（中心 2.2×）；缩放态单指平移并钳在图内，双击切回。
@@ -910,7 +910,8 @@ function setZoom(on) {
 
 const lbStage = $('.lb-stage');
 lbStage.addEventListener('touchstart', (e) => {
-  if (e.touches.length !== 1) return;
+  if (e.touches.length !== 1) { gz.multi = e.touches.length > 1; return; }   // 第二指落下：标记捏合/多指，期间结束的 touchend 不走单指逻辑
+  gz.multi = false;
   const t = e.touches[0];
   gz.sx = t.clientX; gz.sy = t.clientY; gz.dx = gz.dy = 0;
   gz.mx = t.clientX; gz.my = t.clientY;
@@ -945,8 +946,13 @@ lbStage.addEventListener('touchmove', (e) => {
   }
 }, { passive: true });
 
-lbStage.addEventListener('touchend', () => {
+lbStage.addEventListener('touchend', (e) => {
   const img = $('#lb-img');
+  // 多指残留（还有手指没抬）或刚发生过捏合：只复位位移，绝不翻图/点按关闭
+  if (e.touches.length > 0 || gz.multi) {
+    img.style.transform = gz.zoom ? `translate(${gz.px}px, ${gz.py}px) scale(2.2)` : '';
+    return;
+  }
   if (gz.zoom) {
     img.style.transform = `translate(${gz.px}px, ${gz.py}px) scale(2.2)`;   // 平移位置保留
     return;
@@ -966,6 +972,13 @@ lbStage.addEventListener('touchend', () => {
     if (!$('#lightbox').hidden) closeLB();
     lbTapCloseTimer = 0;
   }, 320);
+}, { passive: true });
+
+lbStage.addEventListener('touchcancel', () => {   // 系统接管/来电等中断：复原位移，别让 translateX 半滑残影留在图上
+  const img = $('#lb-img');
+  img.style.transform = gz.zoom ? `translate(${gz.px}px, ${gz.py}px) scale(2.2)` : '';
+  clearTimeout(lbTapCloseTimer); lbTapCloseTimer = 0;
+  gz.dx = gz.dy = 0;
 }, { passive: true });
 
 /* 卡片流：长按进入选择模式（保留/不要的滑动决定随墙卡纯浏览化退役，分拣走快筛会话） */

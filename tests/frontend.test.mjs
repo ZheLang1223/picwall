@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('大图触控：多指/捏合不误触翻页与关闭，touchcancel 复位半滑位移', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const appSrc = await read('../app/static/app.js');
+
+  const ts = appSrc.indexOf("lbStage.addEventListener('touchstart'");
+  const te = appSrc.indexOf("lbStage.addEventListener('touchend'");
+  const tc = appSrc.indexOf("lbStage.addEventListener('touchcancel'");
+  assert.ok(ts > 0 && te > ts && tc > te, 'lbStage 应依次绑定 touchstart / touchend / touchcancel');
+  assert.ok(appSrc.slice(ts, te).includes('gz.multi = e.touches.length > 1') && appSrc.slice(ts, te).includes('gz.multi = false;'),
+    'touchstart 第二指落下应标记 gz.multi，新单指落下应复位');
+  const touchend = appSrc.slice(te, tc);
+  const guardAt = touchend.indexOf('e.touches.length > 0 || gz.multi');
+  assert.ok(guardAt > 0
+    && touchend.indexOf("img.style.transform = gz.zoom ? `translate(${gz.px}px, ${gz.py}px) scale(2.2)` : '';") > guardAt
+    && touchend.indexOf('lbNav(') > touchend.indexOf('return;', guardAt),
+    'touchend 应在残留触点或捏合后先复位位移再提前返回，多指不翻图不点按关闭');
+  const touchcancel = appSrc.slice(tc);
+  assert.ok(touchcancel.includes("img.style.transform = gz.zoom ? `translate(${gz.px}px, ${gz.py}px) scale(2.2)` : '';")
+    && touchcancel.includes('clearTimeout(lbTapCloseTimer); lbTapCloseTimer = 0;') && touchcancel.includes('gz.dx = gz.dy = 0;'),
+    'touchcancel 应恢复位移、清点按关闭定时器并归零滑动增量');
+});
