@@ -1750,3 +1750,13 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('放映跟随墙筛选：fetchBatch 查询应带 source 并在有标签时下传 tags', async()=>{
+  const fs=await import('node:fs/promises');
+  const source=await fs.readFile(new URL('../app/static/slideshow.js',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('async function fetchBatch()'), source.indexOf('function maybeFetch()'));
+  assert.ok(body.includes('source: S.source, limit: 50'),
+    '放映取片查询应与墙面同源带 source: S.source');
+  assert.ok(body.includes("if (S.tags && S.tags !== 'all') q.set('tags', S.tags);"),
+    "墙面按标签过滤时放映应下传 tags（S.tags !== 'all' 才带）");
+});

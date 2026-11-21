@@ -49,7 +49,8 @@ export function createSlideshow({ S, $, api, toast, enqueueMutation, fmtTime, tr
     try {
       const q = new URLSearchParams({status: S.status, group: S.group, author: S.author,
         range: S.range, q: S.searchText,
-        has_cmts: S.hasCmts === '1' ? '1' : 'all', limit: 50});
+        has_cmts: S.hasCmts === '1' ? '1' : 'all', source: S.source, limit: 50});
+      if (S.tags && S.tags !== 'all') q.set('tags', S.tags);
       if (S.searchScope && S.searchScope !== 'all') q.set('q_scope', S.searchScope);
       if (ssPrefs(window.pwGetPrefs ? window.pwGetPrefs() : {}).comments) q.set('cmts', '1');
       if (S.sort === 'shuffle') q.set('shuffle', shuffleSeed(window.pwGetPrefs ? window.pwGetPrefs() : {}));
