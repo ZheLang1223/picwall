@@ -242,7 +242,8 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
     for (const t of remove || []) { const i = optimistic.indexOf(t); if (i >= 0) optimistic.splice(i, 1); }
     for (const t of add || []) if (!optimistic.includes(t)) optimistic.push(t);
     beginWrite(p); p.tags = optimistic;
-    if (!matchesView(p, S)) syncPost(p);
+    const wasIn = matchesView(p, S);   // 乐观归属 = 墙当前实况（不入视图时下一行已摘卡）
+    if (!wasIn) syncPost(p);
     else if (!$('#detail').hidden && getDetailSid?.() === sid) refreshDetail();
     try {
       const r = await enqueue(() => api(`/api/posts/${sid}/tags`, 'POST', {add, remove}));
@@ -252,7 +253,9 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
     } catch (e) {
       if (p._tagsRevision === revision) {
         p.tags = previous;
-        if (!matchesView(p, S)) syncPost(p);
+        // 回滚对账双向看：摘出的卡滚回视图要重插（顺向：滚出视图也要摘），只查「仍不匹配」会漏掉重插
+        if (matchesView(p, S) !== wasIn) syncPost(p);
+        if (!$('#detail').hidden && getDetailSid?.() === sid) refreshDetail();
       }
       toast(e.message);
       return null;

@@ -1750,3 +1750,23 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('标签回滚对账：被筛掉的卡在请求失败后重新插回墙（双向 syncPost），详情开着同步刷新',async()=>{
+ const oldCSS=globalThis.CSS;globalThis.CSS={escape:(x)=>x};   // Node 无 CSS：syncPost 的选择器转义 mock 掉
+ try {
+  // 标签筛选态：乐观摘标签让帖子出局（卡片摘出 S.posts），请求失败回滚后必须对账重插
+  const post={...p,status:'kept',tags:['风景']},state={...s,tags:'风景',posts:[post],total:1,decisions:new Map()};
+  let detailRefreshes=0;const toasts=[];
+  const actions=createPostActions({
+    S:state,$:()=>({hidden:false}),toast:(m)=>toasts.push(m),
+    api:()=>Promise.reject(new Error('offline')),
+    feed:{querySelectorAll:()=>[],querySelector:()=>null},insertCard:()=>{},rebuildImages:()=>{},updateMore:()=>{},queueStatusRefresh:()=>{},
+    refreshDetail:()=>{detailRefreshes++;},getDetailSid:()=>post.sid,
+  });
+  await actions.toggleTag(post.sid,[],['风景']);
+  assert.ok(post.tags.includes('风景'),'失败回滚应还原标签');
+  assert.ok(state.posts.some(x=>x.sid===post.sid),'回滚后帖子应重新插回 S.posts（只查「仍不匹配」会漏掉重插）');
+  assert.equal(toasts.at(-1),'offline','失败 toast 保留');
+  assert.equal(detailRefreshes,1,'详情开着且正是该帖：回滚后标签区应刷新一次');
+ } finally { if(oldCSS===undefined) delete globalThis.CSS; else globalThis.CSS=oldCSS; }
+});
