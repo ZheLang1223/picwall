@@ -28,7 +28,8 @@ export function captureTitle(result) {
 
 export function emptyState(s) {
   const filtered = s.group !== 'all' || s.range !== 'all' || s.author !== 'all' ||
-                   s.source !== 'all' || s.hasCmts !== 'all' || !!s.searchText;
+                   s.source !== 'all' || s.hasCmts !== 'all' || !!(s.tags && s.tags !== 'all') ||
+                   !!s.searchText;
   if (filtered) return {text:'没有符合这些条件的图片，可调整或清空筛选条件。'};
   if (s.status === 'favorites') return {text:'还没有收藏，看图时点「收藏」或按 M。'};
   if (s.status === 'kept') return {text:'还没有保留的图片。'};

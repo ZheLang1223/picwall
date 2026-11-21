@@ -27,6 +27,7 @@ test('空筛选和已有相册均不误导用户重新连接或采集',()=>{
  assert.match(emptyState(existing).text,/查看已有图片/);
  assert.equal(emptyState(existing).action,undefined);
  assert.match(emptyState({...existing,searchText:'none'}).text,/清空筛选条件/);
+ assert.match(emptyState({...existing,tags:'foo'}).text,/清空筛选条件/);
  const fresh={...s,status:'pending',isAdmin:true,st:{counts:{},cookie:{state:'unset'},groups:[]}};
  assert.equal(emptyState(fresh).action,'connection');
  assert.equal(emptyState({...fresh,isAdmin:false}).action,undefined);
