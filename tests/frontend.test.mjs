@@ -1750,3 +1750,23 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('详情标签行内输入 Tab 圈焦契约：stopPropagation 吞键后 .dt-tag-input 自己把 Tab 交给 trapTab(#detail)，Enter/Escape 行为保持', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+
+  // 切出 renderDetailTags 的 .dt-tag-input 键盘处理段（与 spotlight Tab 圈焦测试同口径的源码契约）
+  const fn = appSrc.slice(appSrc.indexOf('function renderDetailTags'), appSrc.indexOf('详情评论区'));
+  const handler = fn.slice(fn.indexOf("inp.className = 'dt-tag-input'"));
+
+  assert.ok(handler.includes('e.stopPropagation()'),
+    '标签输入框应保留 stopPropagation（输入键不进全局快捷键）');
+  assert.ok(handler.includes("if (e.key === 'Enter') commit();"),
+    'Enter 提交标签的行为应保持不变');
+  assert.ok(handler.includes("else if (e.key === 'Escape')"),
+    'Escape 取消收起输入框的行为应保持不变');
+  assert.ok(handler.includes("else if (e.key === 'Tab') trapTab(e, $('#detail'));"),
+    'Tab 应路由到 trapTab(e, #detail) 焦点圈，防止焦点逸出打开的详情');
+  assert.ok(handler.indexOf("else if (e.key === 'Tab')") > handler.indexOf("else if (e.key === 'Escape')"),
+    'Tab 分支应位于 Escape 分支之后');
+});

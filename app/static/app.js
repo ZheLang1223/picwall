@@ -1457,6 +1457,7 @@ function renderDetailTags(card, p) {
       e.stopPropagation();   // 输入键不进全局快捷键；Esc 只收输入框不关详情
       if (e.key === 'Enter') commit();
       else if (e.key === 'Escape') { done = true; renderDetailTags(card, p); card.querySelector('.dt-tag-add')?.focus(); }
+      else if (e.key === 'Tab') trapTab(e, $('#detail'));   // Tab 被上面的 stopPropagation 拦下，全局焦点圈够不到详情，得在这里自己圈
     });
     inp.addEventListener('blur', () => commit());
   };
