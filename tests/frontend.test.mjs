@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {matchesView, comparePosts, keepBadge, avatarSrc, mediaSrc, esc, safeUrl, markTerm, shuffleSeed} from '../app/static/view-state.js';
+import {matchesView, comparePosts, keepBadge, avatarSrc, mediaSrc, esc, safeUrl, markTerm, searchNeedle, parseSearch, shuffleSeed} from '../app/static/view-state.js';
 import {esc as kioskEsc, nl2br as kioskNl2br, safeMedia as kioskSafeMedia} from '../app/static/kiosk.js';
 import {filterWeiboCookies, isInsecureLanHttp, originPatternFor} from '../extension/cookies.js';
 import {ssPrefs, expandPosts} from '../app/static/slideshow.js';
@@ -1198,6 +1198,31 @@ test('多维搜索契约与筛选面板精简：搜索维度匹配、快捷前�
   assert.ok(appSrc.includes('modalReturnFocus.id !== \'f-search\''), '关窗时不应死循环回焦移动端搜索输入框');
   assert.ok(appSrc.includes('setSpotlightScope(\'all\')'), 'resetFilters 应同步重置聚光灯搜索维度');
   assert.ok(appSrc.includes('role="button"') && appSrc.includes('tabindex="0"'), '最近搜索气泡应具备键盘访问语义');
+});
+
+test('搜索前缀解析与服务端 parse_search_query 同口径：前缀全剥离再 strip，墙端不再漏匹配', () => {
+  // 与服务端同口径的前缀解析：@/#连续剥离、//与c:剥2字符、剥离后再 strip
+  assert.deepEqual(parseSearch('# cat'), { scope: 'tag', term: 'cat' });
+  assert.deepEqual(parseSearch('##cat'), { scope: 'tag', term: 'cat' });
+  assert.deepEqual(parseSearch('＠＠Bob'), { scope: 'author', term: 'Bob' });
+  assert.deepEqual(parseSearch('@ Bob'), { scope: 'author', term: 'Bob' });
+  assert.deepEqual(parseSearch('c: hi'), { scope: 'comment', term: 'hi' });
+  assert.deepEqual(parseSearch('//x'), { scope: 'comment', term: 'x' });
+  assert.deepEqual(parseSearch('cat'), { scope: 'all', term: 'cat' });
+  assert.deepEqual(parseSearch('#cat', 'tag'), { scope: 'tag', term: 'cat' });
+  assert.deepEqual(parseSearch('@Bob', 'author'), { scope: 'author', term: 'Bob' });
+  // term 保留原大小写，小写比较由调用方处理；searchNeedle（markTerm 高亮）同口径
+  assert.equal(parseSearch('@Bob').term, 'Bob');
+  assert.equal(searchNeedle('##cat'), 'cat');
+
+  // 墙端过滤修复：服务端已剥前缀，matchesView 须同口径，否则 "# cat" 等搜索服务端有帖墙上却空
+  const catPost = { sid: 's9', status: 'kept', favorite: 0, text: '一只猫', author: '某博主', tags: ['cat'], comment_match: '' };
+  const catState = { status: 'kept', group: 'all', author: 'all', source: 'all', range: 'all', hasCmts: 'all', tags: 'all', searchScope: 'all' };
+  assert.equal(matchesView(catPost, { ...catState, searchText: '# cat' }), true);
+  assert.equal(matchesView(catPost, { ...catState, searchText: '##cat' }), true);
+  assert.equal(matchesView({ ...catPost, tags: ['dog'] }, { ...catState, searchText: '# cat' }), false);
+  // 纯前缀字符视作空关键词：不产生错误过滤（与服务端空关键词口径一致）
+  assert.equal(matchesView(catPost, { ...catState, searchText: '#' }), true);
 });
 
 test('实时检索与分类UI区分契约：聚光灯实时联想、四维视觉区分、键盘导航与页面活跃检索胶囊', async () => {

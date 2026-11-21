@@ -57,21 +57,38 @@ export function mediaSrc(u) {
   return '/media/' + u.replace(/^\/+/, '');
 }
 
-export function searchNeedle(term, scope = 'all') {
-  let s = String(term || '').trim();
-  const sc = String(scope || 'all').toLowerCase();
-  if (!s) return '';
+/* 与服务端 parse_search_query 同口径：解析搜索范围与前缀（@ 博主 / # 标签 / // 或 c: 评论）。
+   'all' 维度按首个前缀切维度并连续剥离该前缀全部字符；显式维度只剥自己的前缀；剥离后再 strip。
+   term 保留原大小写，需要小写比较的调用方自行处理。 */
+const SEARCH_SCOPES = new Set(['all', 'author', 'tag', 'text', 'comment']);
+export function parseSearch(text, scope = 'all') {
+  let sc = String(scope || 'all').trim().toLowerCase();
+  if (!SEARCH_SCOPES.has(sc)) sc = 'all';
+  let t = String(text || '').trim();
+  if (!t) return { scope: sc, term: '' };
   if (sc === 'all') {
-    if (s.startsWith('@') || s.startsWith('＠') || s.startsWith('#') || s.startsWith('＃')) s = s.slice(1);
-    else if (s.startsWith('//') || s.startsWith('／／') || /^c[:：]/i.test(s)) s = s.slice(2);
-  } else if (sc === 'author' && (s.startsWith('@') || s.startsWith('＠'))) {
-    s = s.slice(1);
-  } else if (sc === 'tag' && (s.startsWith('#') || s.startsWith('＃'))) {
-    s = s.slice(1);
-  } else if (sc === 'comment' && (s.startsWith('//') || s.startsWith('／／') || /^c[:：]/i.test(s))) {
-    s = s.slice(2);
+    if (t.startsWith('@') || t.startsWith('＠')) {
+      sc = 'author';
+      t = t.replace(/^[@＠]+/, '');
+    } else if (t.startsWith('#') || t.startsWith('＃')) {
+      sc = 'tag';
+      t = t.replace(/^[#＃]+/, '');
+    } else if (t.startsWith('//') || t.startsWith('／／') || /^c[:：]/i.test(t)) {
+      sc = 'comment';
+      t = t.slice(2);
+    }
+  } else if (sc === 'author') {
+    t = t.replace(/^[@＠]+/, '');
+  } else if (sc === 'tag') {
+    t = t.replace(/^[#＃]+/, '');
+  } else if (sc === 'comment' && (t.startsWith('//') || t.startsWith('／／') || /^c[:：]/i.test(t))) {
+    t = t.slice(2);
   }
-  return s.trim();
+  return { scope: sc, term: t.trim() };
+}
+
+export function searchNeedle(term, scope = 'all') {
+  return parseSearch(term, scope).term;
 }
 
 export function markTerm(text, term = '', scope = 'all') {
@@ -101,45 +118,26 @@ export function matchesView(p, s, now = Date.now()) {
       (s.author !== 'all' && s.author !== p.uid) ||   // payload 的 uid 已按来源加前缀（author_key），直接相等即可
       // 标签筛选态：payload 未带 tags（旧缓存对象）时按无标签处理，交服务端口径兜底
       (sel && !(p.tags || []).some(t => sel.includes(t)))) return false;
-  // 搜索态：根据维度（全部 / 内容 / 评论 / 标签 / 博主）匹配
+  // 搜索态：根据维度（全部 / 内容 / 评论 / 标签 / 博主）匹配，前缀解析与服务端 parse_search_query 同口径
   if (s.searchText && s.searchText.trim()) {
-    let term = s.searchText.trim().toLowerCase();
-    let scope = (s.searchScope || 'all').toLowerCase();
-    if (scope === 'all') {
-      if (term.startsWith('@') || term.startsWith('＠')) {
-        scope = 'author';
-        term = term.slice(1);
-      } else if (term.startsWith('#') || term.startsWith('＃')) {
-        scope = 'tag';
-        term = term.slice(1);
-      } else if (term.startsWith('//') || term.startsWith('／／')) {
-        scope = 'comment';
-        term = term.slice(2);
-      } else if (term.startsWith('c:') || term.startsWith('c：')) {
-        scope = 'comment';
-        term = term.slice(2);
-      }
-    } else if (scope === 'author') {
-      if (term.startsWith('@') || term.startsWith('＠')) term = term.slice(1);
-    } else if (scope === 'tag') {
-      if (term.startsWith('#') || term.startsWith('＃')) term = term.slice(1);
-    } else if (scope === 'comment') {
-      if (term.startsWith('//') || term.startsWith('／／') || term.startsWith('c:') || term.startsWith('c：')) term = term.slice(2);
+    const { scope, term: rawTerm } = parseSearch(s.searchText, s.searchScope);
+    const term = rawTerm.toLowerCase();
+    if (term) {
+      const matchText = (p.text || '').toLowerCase().includes(term);
+      const matchComment = (p.comment_match || '').toLowerCase().includes(term) ||
+        (Array.isArray(p.comments) && p.comments.some(c => (typeof c === 'string' ? c : c.body || c.text || '').toLowerCase().includes(term)));
+      const matchTag = (p.tags || []).some(t => (t || '').toLowerCase().includes(term));
+      const matchAuthor = (p.author || '').toLowerCase().includes(term);
+
+      let matched = false;
+      if (scope === 'text') matched = matchText;
+      else if (scope === 'comment') matched = matchComment;
+      else if (scope === 'tag') matched = matchTag;
+      else if (scope === 'author') matched = matchAuthor;
+      else matched = matchText || matchComment || matchTag || matchAuthor;
+
+      if (!matched) return false;
     }
-    const matchText = (p.text || '').toLowerCase().includes(term);
-    const matchComment = (p.comment_match || '').toLowerCase().includes(term) ||
-      (Array.isArray(p.comments) && p.comments.some(c => (typeof c === 'string' ? c : c.body || c.text || '').toLowerCase().includes(term)));
-    const matchTag = (p.tags || []).some(t => (t || '').toLowerCase().includes(term));
-    const matchAuthor = (p.author || '').toLowerCase().includes(term);
-
-    let matched = false;
-    if (scope === 'text') matched = matchText;
-    else if (scope === 'comment') matched = matchComment;
-    else if (scope === 'tag') matched = matchTag;
-    else if (scope === 'author') matched = matchAuthor;
-    else matched = matchText || matchComment || matchTag || matchAuthor;
-
-    if (!matched) return false;
   }
   const day = new Date(now + 8 * 3600e3).toISOString().slice(0, 10);
   const midnight = Date.parse(day + 'T00:00:00+08:00');
