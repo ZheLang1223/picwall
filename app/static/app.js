@@ -711,6 +711,9 @@ $('#f-author')?.addEventListener('input', (e) => {
   renderFaList();
 });
 // 搜索框里的按键不进全局快捷键；Esc 只收选择器，不惊动面板。
+// Enter 选中首条可见结果（复用行点击逻辑，无匹配不动）；↓ 把焦点交给结果行，
+// 行上 ↑↓ 在行间移动，首行 ↑ 回搜索框，行 Esc 收起并把焦点还给胶囊——键盘用户不必逐行 Tab。
+// IME 组合中的 Enter 是选字确认不是快捷键（keyCode 229 同义），忽略。
 // 选中态胶囊是 span[role=button]：Enter/空格手动补开合（浏览器只替 button 免费做这事）
 $('#f-author')?.addEventListener('keydown', (e) => {
   if (e.target.classList.contains('fa-search')) {
@@ -718,6 +721,31 @@ $('#f-author')?.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && authorPickerOpen) {
       authorPickerOpen = false; authorQuery = '';
       renderAuthorRow();
+    } else if (e.key === 'Enter' && !(e.isComposing || e.keyCode === 229)) {
+      const first = $('#f-author .fa-list .fa-row');
+      if (first) { e.preventDefault(); first.click(); }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      $('#f-author .fa-list .fa-row')?.focus();
+    }
+    return;
+  }
+  const row = e.target.closest('.fa-row');
+  if (row) {
+    const rows = [...row.closest('.fa-list').querySelectorAll('.fa-row')];
+    const i = rows.indexOf(row);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();   // ↑↓ 别冒泡进全局快捷键（视图切换/翻帖）
+      const nxt = e.key === 'ArrowDown' ? rows[i + 1] : rows[i - 1];
+      if (nxt) nxt.focus();
+      else if (e.key === 'ArrowUp') $('#f-author .fa-search')?.focus();
+    } else if (e.key === 'Escape' && authorPickerOpen) {
+      e.preventDefault();
+      e.stopPropagation();
+      authorPickerOpen = false; authorQuery = '';
+      renderAuthorRow();
+      $('#f-author [data-author-toggle]')?.focus();
     }
     return;
   }

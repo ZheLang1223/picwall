@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('作者选择器键盘导航：搜索框 Enter 选中首条 + IME 守卫、↓ 进列表、行间 ↑↓ 与行 Esc 还焦点胶囊', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const appSrc = await read('../app/static/app.js');
+
+  // 搜索框：Enter 走行点击选首条可见结果，IME 组合中（isComposing || keyCode 229）忽略；↓ 焦点进首行
+  assert.ok(appSrc.includes("e.key === 'Enter' && !(e.isComposing || e.keyCode === 229)"),
+    '搜索框 Enter 应忽略 IME 组合中的选字确认（isComposing || keyCode 229）');
+  assert.ok(appSrc.includes("const first = $('#f-author .fa-list .fa-row');\n      if (first) { e.preventDefault(); first.click(); }"),
+    '搜索框 Enter 应复用行点击逻辑选中首条可见结果，无匹配不动作');
+  assert.ok(appSrc.includes("else if (e.key === 'ArrowDown') {\n      e.preventDefault();\n      $('#f-author .fa-list .fa-row')?.focus();"),
+    '搜索框 ArrowDown 应把焦点移到第一行结果');
+
+  // 结果行：↑↓ 行间移动并拦下全局快捷键；首行 ↑ 回搜索框；Esc 收起选择器并把焦点还给胶囊
+  assert.ok(appSrc.includes("const rows = [...row.closest('.fa-list').querySelectorAll('.fa-row')];\n    const i = rows.indexOf(row);")
+    && appSrc.includes("const nxt = e.key === 'ArrowDown' ? rows[i + 1] : rows[i - 1];"),
+    '行上 ArrowDown/ArrowUp 应按 DOM 顺序在结果行间移动焦点');
+  assert.ok(appSrc.includes("else if (e.key === 'ArrowUp') $('#f-author .fa-search')?.focus();"),
+    '首行 ArrowUp 应把焦点交回搜索框');
+  assert.ok(appSrc.includes("$('#f-author [data-author-toggle]')?.focus();"),
+    '行上 Esc 收起选择器后应把焦点还给博主胶囊');
+});
