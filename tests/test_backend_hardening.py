@@ -503,15 +503,18 @@ class BackendPerformanceWave2Test(ApiTestBase):
             async def get(self, url, headers=None):
                 return httpx.Response(200, json={"data": {"viewer": {}}})
 
-        with patch.object(config, "X_PROXY_URL", "http://127.0.0.1:18888"), \
-             patch.object(connections.httpx, "AsyncClient", _FakeClient):
-            res = await connections.probe("x", "tok" * 10, "csrf")
-        self.assertEqual(captured.get("proxy"), "http://127.0.0.1:18888")
-        self.assertIn(res["state"], ("ok", "saved", "expired", "error"))
+        # X_AUTH_FILE 在 import 时按真实 DATA_DIR 算出，只重定向 DATA_DIR 挡不住
+        # save_x_auth 落盘：凭据文件必须一并指进临时目录，免得覆盖宿主登录态。
+        with patch.object(config, "X_AUTH_FILE", self.tmp / "x_auth.txt"):
+            with patch.object(config, "X_PROXY_URL", "http://127.0.0.1:18888"), \
+                 patch.object(connections.httpx, "AsyncClient", _FakeClient):
+                res = await connections.probe("x", "tok" * 10, "csrf")
+            self.assertEqual(captured.get("proxy"), "http://127.0.0.1:18888")
+            self.assertIn(res["state"], ("ok", "saved", "expired", "error"))
 
-        config.save_x_auth("tok" * 10, "csrf")
-        connections.record("x", "tok" * 10, "ok", updated=True)
-        st = connections.status("x")
+            config.save_x_auth("tok" * 10, "csrf")
+            connections.record("x", "tok" * 10, "ok", updated=True)
+            st = connections.status("x")
         self.assertEqual(st["state"], "ok")
         self.assertTrue(st["checked_at"])
         self.assertTrue(st["updated_at"])
