@@ -1750,3 +1750,29 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('无限滚动补页契约：成功载入后下一帧按 IO 同条件复测 sentinel，防预热区内自动加载停摆', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+
+  // load() 成功路径：updateMore() 之后、版本仍当前且还有更多时，触发下一帧复测
+  const loadBody = appSrc.slice(appSrc.indexOf('async function load('), appSrc.indexOf('function updateMore()'));
+  assert.ok(loadBody.includes('recheckSentinel()'), 'load 成功载入一页后应调用 recheckSentinel 复测 sentinel');
+  assert.ok(loadBody.includes('version === S.requestVersion && S.hasMore && !S.loadError'),
+    'recheckSentinel 调用应受版本守卫与 hasMore/loadError 约束（失败或到底不得续载）');
+  assert.ok(loadBody.indexOf('updateMore()') < loadBody.indexOf('recheckSentinel()'),
+    'recheckSentinel 应在 updateMore 之后调用');
+
+  // recheckSentinel 复用 IntersectionObserver 的同一条件：600px 预热区几何 + 还有更多/无错误/未在加载
+  const sentinel = appSrc.slice(appSrc.indexOf('function recheckSentinel()'), appSrc.indexOf('/* ---------- 启动 ---------- */'));
+  assert.ok(sentinel.includes('requestAnimationFrame'), '复测应推迟到下一动画帧（等新卡渲染稳定后再量）');
+  assert.ok(sentinel.includes('S.hasMore') && sentinel.includes('!S.loadError') && sentinel.includes('!S.loading'),
+    '复测应校验 S.hasMore、S.loadError、S.loading');
+  assert.ok(sentinel.includes("$('.more').getBoundingClientRect().top <= window.innerHeight + 600"),
+    '复测应复用 observer 的 600px 预热区几何条件');
+  assert.ok(sentinel.includes('load(false)'), '复测命中后应续载下一页');
+
+  // observer 本体保持不变，错误仍止住自动加载（S.loadError），到底自然收敛
+  assert.ok(appSrc.includes('entries.some((en) => en.isIntersecting) && !S.loadError'), 'IntersectionObserver 条件应保持不变');
+  assert.ok(appSrc.includes("rootMargin: '600px'"), 'IntersectionObserver 预热区应保持 600px');
+});

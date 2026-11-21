@@ -389,6 +389,7 @@ async function load(reset) {
     S.offset = S.posts.length;
     S.loadError = false;
     updateMore();
+    if (version === S.requestVersion && S.hasMore && !S.loadError) recheckSentinel();
   } catch (e) {
     if (e.name !== 'AbortError' && version === S.requestVersion) {
       S.loadError = true; toast(e.message); updateMore();
@@ -2702,6 +2703,16 @@ new IntersectionObserver((entries) => {
       S.hasMore && !S.loading)
     load(false);
 }, { rootMargin: '600px' }).observe($('.more'));
+
+// IO 只在交叉状态变化时触发：若一页加载完 sentinel 仍留在 600px 预热区里（本页新增极少/宽屏），
+// 不会再有回调，自动加载就悄悄停摆 → 成功载入后下一帧按同一条件复测一次，仍够近就续载下一页
+function recheckSentinel() {
+  requestAnimationFrame(() => {
+    if (S.hasMore && !S.loadError && !S.loading &&
+        $('.more').getBoundingClientRect().top <= window.innerHeight + 600)
+      load(false);
+  });
+}
 
 /* ---------- 启动 ---------- */
 
