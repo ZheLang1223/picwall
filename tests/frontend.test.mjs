@@ -1750,3 +1750,54 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+/* ---------- 手机配对页（pair.js） ---------- */
+test('手机配对提交：成功保持禁用并提示进入、失败回焦配对码、在途重复提交忽略',async()=>{
+  const oldDocument=globalThis.document,oldLocation=globalThis.location,oldFetch=globalThis.fetch;
+  const els={};
+  const makeEl=()=>({value:'',textContent:'',disabled:false,focused:false,selected:false,
+    addEventListener(t,fn){els._submit=fn;},focus(){this.focused=true;},select(){this.selected=true;}});
+  for (const k of ['#pair-code','#pair-name','#pair-error']) els[k]=makeEl();
+  els.button=makeEl();
+  els['#pair-form']=Object.assign(makeEl(),{querySelector:(sel)=>sel==='button'?els.button:null});
+  globalThis.document={querySelector:(sel)=>els[sel]||null};
+  globalThis.location={href:'http://localhost/pair',reloads:0,reload(){this.reloads++;}};
+  let calls=0,lastBody=null,mode='',release=null;
+  globalThis.fetch=(path,opts)=>{
+    calls++; lastBody=opts.body;
+    if (mode==='fail') return Promise.resolve({ok:false,status:400,json:async()=>({detail:'配对码无效'})});
+    if (mode==='hang') return new Promise(r=>{release=()=>r({ok:true,json:async()=>({})});});
+    return Promise.resolve({ok:true,json:async()=>({})});
+  };
+  try {
+    await import('../app/static/pair.js');   // 顶层即绑定 submit 监听（stub 捕获到 els._submit）
+    const submit=()=>els._submit({preventDefault(){}});
+    const code=els['#pair-code'],btn=els.button,err=els['#pair-error'];
+    code.value='ABCD-1234'; els['#pair-name'].value='我的手机';
+    // ① 失败：恢复按钮、展示原因、焦点与全选放回配对码输入框
+    mode='fail';
+    await submit();
+    assert.equal(calls,1);
+    assert.deepEqual(JSON.parse(lastBody),{code:'ABCD-1234',name:'我的手机'});
+    assert.equal(btn.disabled,false,'失败后按钮应恢复可用');
+    assert.equal(err.textContent,'配对码无效');
+    assert.ok(code.focused && code.selected,'焦点与选区应放回配对码输入框');
+    // ② 在途：请求挂起时重复提交被忽略（按钮禁用拦不住输入框回车，靠 pairing 标志）
+    mode='hang';
+    const inflight=submit();
+    assert.equal(btn.disabled,true); assert.equal(err.textContent,'正在连接…');
+    const inFlightCalls=calls;   // 挂起请求本身占一次 fetch
+    await submit();
+    assert.equal(calls,inFlightCalls,'请求在途时重复提交应被忽略');
+    release(); await inflight;
+    // ③ 成功：按钮保持禁用、文案提示正在进入、触发 reload；之后再提交仍被忽略
+    assert.equal(err.textContent,'已连接，正在进入…');
+    assert.equal(btn.disabled,true,'成功后按钮应保持禁用直到 reload 生效');
+    assert.equal(globalThis.location.reloads,1,'成功后应触发页面重载');
+    await submit();
+    assert.equal(calls,inFlightCalls,'已连接待跳转时再次提交仍应被忽略');
+    assert.equal(globalThis.location.reloads,1);
+  } finally {
+    globalThis.document=oldDocument; globalThis.location=oldLocation; globalThis.fetch=oldFetch;
+  }
+});
