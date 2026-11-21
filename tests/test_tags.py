@@ -117,6 +117,8 @@ class BulkTagsTest(TagsTestBase):
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.json()["updated"], 2)
             self.assertEqual(r.json()["skipped"], 1)
+            # applied 只含实际落库的帖（超上限的 b2 不在内），前端本地同步以此为准
+            self.assertEqual(r.json()["applied"], ["b1", "b3"])
         self.assertEqual(db.get_post("b1")["tags"], ["装机"])
         self.assertEqual(db.get_post("b2")["tags"], sorted(f"满{i}" for i in range(10)))
         self.assertEqual(db.get_post("b3")["tags"], ["装机"])

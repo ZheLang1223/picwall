@@ -765,14 +765,16 @@ def set_post_tags(sid: str, add=None, remove=None) -> list[str]:
 def set_post_tags_bulk(sids: list[str], add=None, remove=None) -> dict:
     """批量增删标签：单事务一次提交（逐条 fsync 是数量级开销，同 set_status_bulk）。
 
-    加标签会让某帖超出单帖上限时跳过该帖而不是整批报错；返回 updated/skipped。
+    加标签会让某帖超出单帖上限时跳过该帖而不是整批报错；返回 updated/skipped，
+    applied 为实际更新帖的 sid 列表（排序）、tags 为清洗去重后的 adds（前端本地同步以此为准）。
     """
     adds = _dedup_clean_tags(add)
     removes = _dedup_clean_tags(remove)
     sids = list(dict.fromkeys(s for s in (sids or ()) if s))
     updated = skipped = 0
     if not (adds or removes) or not sids:
-        return {"updated": 0, "skipped": len(sids) if (adds or removes) else 0}
+        return {"updated": 0, "skipped": len(sids) if (adds or removes) else 0,
+                "applied": [], "tags": adds}
     now = datetime.now(config.NOW_TZ).isoformat(timespec="seconds")
     qmarks = ",".join("?" * len(sids))
     with _write_lock, conn() as c:
@@ -803,7 +805,7 @@ def set_post_tags_bulk(sids: list[str], add=None, remove=None) -> dict:
         updated = len(good)
     if good:
         _bump_shuffle_epoch()
-    return {"updated": updated, "skipped": skipped}
+    return {"updated": updated, "skipped": skipped, "applied": sorted(good), "tags": adds}
 
 
 def post_tags_map(sids: list[str]) -> dict[str, list[str]]:

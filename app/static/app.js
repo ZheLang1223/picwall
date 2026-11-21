@@ -2085,9 +2085,12 @@ $('#tags-apply').onclick = async () => {
     const skipped = r.skipped ? `，${r.skipped} 帖超出上限已跳过` : '';
     toast(`已为 ${r.updated} 帖打上标签${skipped}`);
     closeModal('modal-tags');
+    // 只同步实际落库的帖与清洗后的标签（跳过帖补了也会刷新即失）；老响应缺字段回落旧行为
+    const applied = Array.isArray(r.applied) ? r.applied : sids;
+    const newTags = Array.isArray(r.tags) ? r.tags : add;
     for (const p of S.posts) {
-      if (!sids.includes(p.sid)) continue;
-      p.tags = [...new Set([...(p.tags || []), ...add])];   // 本地同步，详情立即可见
+      if (!applied.includes(p.sid)) continue;
+      p.tags = [...new Set([...(p.tags || []), ...newTags])];   // 本地同步，详情立即可见
       if (!matchesView(p, S)) syncPost(p);
     }
     setSelectMode(false);
