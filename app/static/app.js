@@ -1455,6 +1455,7 @@ function renderDetailTags(card, p) {
     };
     inp.addEventListener('keydown', (e) => {
       e.stopPropagation();   // 输入键不进全局快捷键；Esc 只收输入框不关详情
+      if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不提交
       if (e.key === 'Enter') commit();
       else if (e.key === 'Escape') { done = true; renderDetailTags(card, p); card.querySelector('.dt-tag-add')?.focus(); }
     });
@@ -1575,6 +1576,7 @@ function bindCommentRow(card, row) {
       ta.replaceWith(bodyEl);
     };
     ta.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不结束编辑
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
       else if (e.key === 'Escape') { e.stopPropagation(); finish(false); }   // 取消，不让全局 Esc 关浮层
     });
@@ -1716,6 +1718,7 @@ document.querySelectorAll('#detail .detail-card').forEach((card) => {
     input.style.height = `${Math.min(input.scrollHeight, 96)}px`;
   });
   input.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不发送
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendComment(card); }
   });
   card.querySelector('.dt-csend').onclick = () => sendComment(card);
@@ -2071,6 +2074,7 @@ $('#tag-add-btn').onclick = () => {
 };
 $('#tag-new').addEventListener('keydown', (e) => {
   e.stopPropagation();
+  if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不加标签
   if (e.key === 'Enter') { e.preventDefault(); $('#tag-add-btn').click(); }
 });
 $('#tags-apply').onclick = async () => {
@@ -2618,6 +2622,7 @@ $('#f-search').addEventListener('input', () => {
 });
 $('#f-search').addEventListener('keydown', (e) => {
   e.stopPropagation();   // 输入框里的方向键/回车不进全局快捷键
+  if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不搜索
   if (e.key === 'Enter') applySearch($('#f-search').value, S.searchScope);
 });
 function viewState() {
