@@ -1750,3 +1750,21 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('聚光灯输入框接力 Tab 焦点圈定：keydown 处理器内直达 trapTab(#modal-spotlight-search)', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const fnStart = appSrc.indexOf('function initSpotlightSearch()');
+  assert.ok(fnStart >= 0, 'app.js 应定义 initSpotlightSearch');
+  const fnEnd = appSrc.indexOf('initSpotlightSearch();', fnStart);
+  const fnSrc = appSrc.slice(fnStart, fnEnd > 0 ? fnEnd : appSrc.length);
+  // 输入框 keydown 对每个非 IME 键 stopPropagation，全局 handler 收不到 Tab——焦点圈定必须在此接力
+  assert.ok(fnSrc.includes("inp.addEventListener('keydown'"), '聚光灯输入框应绑定 keydown 处理器');
+  assert.ok(fnSrc.includes("e.key === 'Tab'") && fnSrc.includes("trapTab(e, $('#modal-spotlight-search'))"),
+    '聚光灯输入框拦下 Tab 后应接力 trapTab 做 #modal-spotlight-search 焦点圈定（否则 Shift+Tab 跳到遮罩后的页面）');
+  // 既有键位行为保持不变
+  assert.ok(fnSrc.includes("e.key === 'ArrowDown'") && fnSrc.includes("e.key === 'ArrowUp'"), '方向键导航应保留');
+  assert.ok(fnSrc.includes("e.key === 'Enter'") && fnSrc.includes('selectSpotlightItem'), 'Enter 选中/应用搜索应保留');
+  assert.ok(fnSrc.includes("e.key === 'Escape'") && fnSrc.includes('closeSpotlightSearch()'), 'Escape 关闭应保留');
+  assert.ok(fnSrc.includes("e.key === 'Backspace' && !inp.value && currentSpotlightScope !== 'all'"), '空输入 Backspace 切回全部维度应保留');
+});

@@ -3299,6 +3299,8 @@ function initSpotlightSearch() {
       } else if (e.key === 'Escape') {
         e.preventDefault();
         closeSpotlightSearch();
+      } else if (e.key === 'Tab') {
+        trapTab(e, $('#modal-spotlight-search'));   // 输入框拦下了 Tab，焦点圈定必须在此接力（否则 Shift+Tab 跳到遮罩后的页面）
       } else if (e.key === 'Backspace' && !inp.value && currentSpotlightScope !== 'all') {
         setSpotlightScope('all');
       }
