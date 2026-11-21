@@ -205,6 +205,7 @@ function bindMembersRow(scope) {
   scope.querySelectorAll('[data-gmok]').forEach((b) => b.onclick = () => addMember(b.dataset.gmok));
   scope.querySelectorAll('[data-gmadd]').forEach((inp) => {
     inp.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不加成员
       if (e.key === 'Enter') { e.preventDefault(); addMember(inp.dataset.gmadd); }
     });
   });
@@ -309,6 +310,7 @@ $('#btn-add-xgroup').onclick = async () => {
   finally { btn.disabled = false; }
 };
 $('#xgroup-input').addEventListener('keydown', (e) => {
+  if (e.isComposing || e.keyCode === 229) return;   // IME 组词中：回车只确认候选词，不加分组
   if (e.key === 'Enter') { e.preventDefault(); $('#btn-add-xgroup').click(); }
 });
 

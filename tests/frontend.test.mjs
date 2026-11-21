@@ -1751,25 +1751,32 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
 
-test('IME 组词回车守卫契约：五处回车提交入口均在 Enter 分支前拦截合成事件', async () => {
+test('IME 组词回车守卫契约：七处回车提交入口均在 Enter 分支前拦截合成事件', async () => {
   const fs = await import('node:fs/promises');
-  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [appSrc, settingsSrc] = await Promise.all([
+    read('../app/static/app.js'),
+    read('../app/static/settings.js'),
+  ]);
   const guard = 'if (e.isComposing || e.keyCode === 229) return;';
 
-  // [说明, 处理器锚点, Enter 分支锚点]：守卫必须落在处理器内、Enter 分支之前
+  // [源文件, 说明, 处理器锚点, Enter 分支锚点]：守卫必须落在处理器内、Enter 分支之前
   const entries = [
-    ['详情行内标签输入', "inp.addEventListener('keydown', (e) => {", "if (e.key === 'Enter') commit();"],
-    ['评论编辑框', "ta.addEventListener('keydown', (e) => {", 'finish(true); }'],
-    ['评论发送框', "input.addEventListener('keydown', (e) => {", 'sendComment(card); }'],
-    ['批量打标新标签输入', "$('#tag-new').addEventListener('keydown', (e) => {", "$('#tag-add-btn').click(); }"],
-    ['顶部搜索框', "$('#f-search').addEventListener('keydown', (e) => {", "applySearch($('#f-search').value"],
+    ['app.js', '详情行内标签输入', "inp.addEventListener('keydown', (e) => {", "if (e.key === 'Enter') commit();"],
+    ['app.js', '评论编辑框', "ta.addEventListener('keydown', (e) => {", 'finish(true); }'],
+    ['app.js', '评论发送框', "input.addEventListener('keydown', (e) => {", 'sendComment(card); }'],
+    ['app.js', '批量打标新标签输入', "$('#tag-new').addEventListener('keydown', (e) => {", "$('#tag-add-btn').click(); }"],
+    ['app.js', '顶部搜索框', "$('#f-search').addEventListener('keydown', (e) => {", "applySearch($('#f-search').value"],
+    ['settings.js', '分组新成员输入', "inp.addEventListener('keydown', (e) => {", 'addMember(inp.dataset.gmadd); }'],
+    ['settings.js', 'X 分组输入', "$('#xgroup-input').addEventListener('keydown', (e) => {", "$('#btn-add-xgroup').click(); }"],
   ];
-  for (const [label, handler, enterBranch] of entries) {
-    const at = appSrc.indexOf(handler);
-    assert.ok(at !== -1, `app.js 应包含${label}的 keydown 处理器`);
-    const enterAt = appSrc.indexOf(enterBranch, at);
+  for (const [file, label, handler, enterBranch] of entries) {
+    const src = file === 'app.js' ? appSrc : settingsSrc;
+    const at = src.indexOf(handler);
+    assert.ok(at !== -1, `${file} 应包含${label}的 keydown 处理器`);
+    const enterAt = src.indexOf(enterBranch, at);
     assert.ok(enterAt !== -1, `${label}应保留 Enter 提交分支`);
-    const guardAt = appSrc.indexOf(guard, at);
+    const guardAt = src.indexOf(guard, at);
     assert.ok(guardAt !== -1 && guardAt < enterAt, `${label}的 IME 守卫应先于其 Enter 分支`);
   }
 });
