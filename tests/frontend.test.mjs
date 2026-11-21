@@ -359,6 +359,21 @@ test('悬浮球可拖动：位移阈值区分拖/点、位置持久化、近顶�
  assert.ok(!fabSrc.includes('fab-flyout') && !css.includes('.fab-flyout'), '子浮窗（双卡/四格子菜单唯一消费者）应随双卡退役');
 });
 
+test('悬浮球拖拽吞击不残留：pointercancel 不武装、pointerup 武装后下一宏任务自解、pointerdown 兜底重置', async()=>{
+ const fs=await import('node:fs/promises');
+ const fabSrc=await fs.readFile(new URL('../app/static/fab.js',import.meta.url),'utf8');
+ const pd=fabSrc.indexOf("btn.addEventListener('pointerdown'"), pm=fabSrc.indexOf("btn.addEventListener('pointermove'");
+ const ed=fabSrc.indexOf('const endDrag'), up=fabSrc.indexOf("btn.addEventListener('pointerup'");
+ assert.ok(pd>=0 && pm>pd && ed>pm && up>ed, 'pointerdown→pointermove→endDrag→pointerup 链路应完整');
+ assert.ok(fabSrc.slice(pd, pm).includes('suppressClick = false'), 'pointerdown 开头应兜底重置吞击标记');
+ const body=fabSrc.slice(ed, up);
+ const guard=body.indexOf("e.type !== 'pointercancel'"), arm=body.indexOf('suppressClick = true');
+ const auto=body.indexOf("setTimeout(() => { suppressClick = false; }, 0)");
+ assert.ok(guard>=0 && arm>guard && auto>arm, '武装只应出现在非 cancel 分支，且紧跟宏任务自动解除');
+ assert.ok(body.indexOf('localStorage.setItem(POS_KEY') > auto && body.includes('setMenuSide()'),
+   'cancel 与拖完路径都应照旧持久化位置并重摆菜单朝向');
+});
+
 test('瀑布流列栈：CSS 多列退役，追加只进最短列（旧卡零位移）', async()=>{
  const fs=await import('node:fs/promises');
  const root=new URL('../app/static/',import.meta.url);

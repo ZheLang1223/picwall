@@ -74,6 +74,7 @@ export function createFab({ $, items }) {
     });
   });
   btn.addEventListener('pointerdown', (e) => {
+    suppressClick = false;   // 兜底重置：上一轮遗留的吞击标记（如无尾随 click 的异常路径）绝不吞本次真实点按
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const fr = fab.getBoundingClientRect();
     drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY,
@@ -94,7 +95,10 @@ export function createFab({ $, items }) {
     const moved = drag.moved;
     drag = null;
     if (!moved) return;
-    suppressClick = true;
+    if (e.type !== 'pointercancel') {   // 真拖完才吞尾随 click；click 同步跟在 pointerup 后，下一宏任务自动解除武装
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+    }   // pointercancel（系统手势/触点被接管）没有尾随 click：照旧存位置+重摆菜单朝向，但绝不武装——否则吞掉下一次真实点按
     const fr = fab.getBoundingClientRect();
     try { localStorage.setItem(POS_KEY, JSON.stringify({ x: fr.left, y: fr.top })); } catch {}
     setMenuSide();
