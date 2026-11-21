@@ -13,7 +13,7 @@
    uid 传 'all' 即退出且无快照时的默认落点。 */
 export function enterFilters(uid) {
   return { author: uid, status: 'all', group: 'all', source: 'all',
-           range: 'all', hasCmts: 'all', searchText: '', sort: '' };
+           range: 'all', hasCmts: 'all', tags: 'all', searchText: '', sort: '' };
 }
 
 /* 时间跨度（年-月）：同月只出现一次；缺据不给 */
@@ -161,7 +161,7 @@ export function createAuthorView(deps) {
     closeOverlays?.();
     if (S.author === 'all')
       snapshot = { status: S.status, group: S.group, source: S.source,
-                   range: S.range, hasCmts: S.hasCmts,
+                   range: S.range, hasCmts: S.hasCmts, tags: S.tags,
                    searchText: S.searchText, sort: S.sort,
                    searchScope: S.searchScope };
     if (hint) hints.set(uid, { author: hint.author, avatar: hint.avatar });

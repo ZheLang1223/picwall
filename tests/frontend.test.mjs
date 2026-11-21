@@ -849,8 +849,15 @@ test('createTimeline 返回编年控制器 API 且不在导入期触碰 DOM',()=
 test('博主视图进入即归位：作者钉住，状态与伴随筛选全部清零',()=>{
  assert.deepEqual(enterFilters('x:luoluokun_'),
   {author:'x:luoluokun_',status:'all',group:'all',source:'all',
-   range:'all',hasCmts:'all',searchText:'',sort:''});
+   range:'all',hasCmts:'all',tags:'all',searchText:'',sort:''});
  assert.equal(enterFilters('all').author,'all','无快照退出的默认落点也是同一套归位');
+});
+test('博主视图进入快照带出墙上的标签筛选，退出原样还原', async()=>{
+ const fs=await import('node:fs/promises');
+ const av=await fs.readFile(new URL('../app/static/author-view.js',import.meta.url),'utf8');
+ const snap=av.match(/snapshot = \{[\s\S]*?searchScope: S\.searchScope \};/);
+ assert.ok(snap, 'open() 应有进入前筛选快照');
+ assert.ok(snap[0].includes('tags: S.tags'), '快照应记录 S.tags，退出才能还原墙上的标签筛选');
 });
 test('头部统计文案只报有内容的维度，跨度同年同月只出现一次',()=>{
  assert.equal(statsLine({n:12,kept:8,favorites:2,comments:0,
