@@ -1750,3 +1750,103 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('设备管理取消配对 2 步确认：首击不调接口、装备互斥与失焦/Esc 还原、4 秒超时还原文案、再击才 DELETE', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/devices.js', import.meta.url), 'utf8');
+  assert.ok(src.includes('if (b.disabled) return; b.disabled = true;') && src.includes('encodeURIComponent(b.dataset.device)'),
+    '既有防连点守卫与 DELETE URL 编码必须保留');
+  assert.ok(src.includes('确认取消配对？') && src.includes('确认取消配对并退出本机？') && src.includes('setTimeout(disarm, 4000)'),
+    'devices.js 应带 4 秒二次确认态与当前机专属文案');
+
+  const { initDevices } = await import('../app/static/devices.js');
+  const prevDoc = globalThis.document;
+  const apiCalls = [];
+  const toasts = [];
+  const removedRows = new Set();
+  const mkRow = (id) => {
+    const btn = {
+      dataset: { device: id },
+      disabled: false,
+      textContent: '取消配对',
+      _attrs: new Map(),
+      setAttribute(k, v) { this._attrs.set(k, String(v)); },
+      removeAttribute(k) { this._attrs.delete(k); },
+      getAttribute(k) { return this._attrs.get(k) ?? null; },
+    };
+    const row = { remove() { removedRows.add(id); } };
+    btn.closest = () => row;
+    return { btn, row };
+  };
+  const rows = [mkRow('dev-a'), mkRow('dev-b')];  // dev-a 为当前机（本测试不真删它），dev-b 为远端
+  const box = {};
+  let kids = [];
+  Object.defineProperty(box, 'innerHTML', {
+    get() { return ''; },
+    set(v) {
+      kids = [];
+      for (const m of String(v).matchAll(/data-device="([^"]*)"/g)) {
+        const hit = rows.find((r) => r.btn.dataset.device === m[1]);
+        if (hit) kids.push(hit.btn);
+      }
+    },
+  });
+  box.querySelectorAll = () => kids;
+  const api = async (url, method) => {
+    apiCalls.push({ url, method: method || 'GET' });
+    if (url === '/api/devices') return { devices: [{ id: 'dev-a', name: '本机', role: 'admin' }, { id: 'dev-b', name: '书房', role: 'admin' }] };
+    if (url === '/api/device/session') return { id: 'dev-a' };
+    return {};
+  };
+  const deletes = () => apiCalls.filter((c) => c.method === 'DELETE');
+  globalThis.document = { documentElement: { dataset: { deviceRole: 'admin', localOwner: 'false' } } };
+  try {
+    const { render } = initDevices({ $: (sel) => (sel === '#device-list' ? box : null), api, toast: (m) => toasts.push(m) });
+    await render();
+    assert.equal(kids.length, 2);
+    const [btnA, btnB] = kids;
+
+    // 1. 首次点击：只进入确认态，绝不调接口；当前机文案带「并退出本机」
+    btnA.onclick();
+    assert.equal(btnA.textContent, '确认取消配对并退出本机？');
+    assert.equal(btnA.getAttribute('data-armed'), '1');
+    assert.equal(deletes().length, 0, '首次点击不得调用 DELETE');
+
+    // 2. 装备另一行：上一行立即还原（同屏互斥）
+    btnB.onclick();
+    assert.equal(btnB.textContent, '确认取消配对？');
+    assert.equal(btnB.getAttribute('data-armed'), '1');
+    assert.equal(btnA.textContent, '取消配对');
+    assert.equal(btnA.getAttribute('data-armed'), null);
+
+    // 3. 失焦立即还原
+    btnB.onblur();
+    assert.equal(btnB.textContent, '取消配对');
+    assert.equal(btnB.getAttribute('data-armed'), null);
+
+    // 4. Esc 立即还原
+    btnB.onclick();
+    btnB.onkeydown({ key: 'Escape' });
+    assert.equal(btnB.textContent, '取消配对');
+    assert.equal(btnB.getAttribute('data-armed'), null);
+    assert.equal(deletes().length, 0);
+
+    // 5. 4 秒窗口内第二次点击：才真正 DELETE，非当前机成功后移除该行且不 reload
+    btnB.onclick();
+    await btnB.onclick();
+    assert.equal(deletes().length, 1);
+    assert.equal(deletes()[0].url, '/api/devices/' + encodeURIComponent('dev-b'));
+    assert.equal(btnB.disabled, true);
+    assert.ok(removedRows.has('dev-b'), '非当前机解绑成功后应移除该行');
+    assert.equal(toasts.length, 0);
+
+    // 6. 装备后 4 秒不点：定时器自动还原文案与标记
+    btnA.onclick();
+    assert.equal(btnA.textContent, '确认取消配对并退出本机？');
+    await new Promise((r) => setTimeout(r, 4200));
+    assert.equal(btnA.textContent, '取消配对');
+    assert.equal(btnA.getAttribute('data-armed'), null);
+  } finally {
+    globalThis.document = prevDoc;
+  }
+});
