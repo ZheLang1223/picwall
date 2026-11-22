@@ -1750,3 +1750,14 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('配对码过期提示契约：生成定时器到期应归位并把提示改为「已过期」', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/settings.js', import.meta.url), 'utf8');
+  const start = src.indexOf("$('#pair-code-gen').onclick");
+  const end = src.indexOf('async function onQrEnter()');
+  assert.ok(start !== -1 && end !== -1 && start < end, 'settings.js 应包含 #pair-code-gen 生成处理器');
+  const body = src.slice(start, end);
+  assert.ok(body.includes("pairCodeResetTimer = setTimeout(() => { resetPairCode(); $('#pair-code-hint').textContent = '配对码已过期，请重新生成。'; }, r.ttl * 1000);"),
+    '配对码到期定时器应调用 resetPairCode 归位，并把提示改写为「配对码已过期，请重新生成。」');
+});

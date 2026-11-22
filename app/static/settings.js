@@ -479,7 +479,7 @@ $('#pair-code-gen').onclick = async () => {
     $('#pair-code-hint').textContent =
       `「${{editor:'日常',viewer:'只读',admin:'管理'}[r.role]}」设备码 · ${Math.round(r.ttl / 60)} 分钟内有效、仅可使用一次；扫码自动填入。`;
     clearTimeout(pairCodeResetTimer);
-    pairCodeResetTimer = setTimeout(resetPairCode, r.ttl * 1000);
+    pairCodeResetTimer = setTimeout(() => { resetPairCode(); $('#pair-code-hint').textContent = '配对码已过期，请重新生成。'; }, r.ttl * 1000);
     refreshQr();
   } catch (e) { toast(e.message); }
   finally { btn.disabled = false; }
