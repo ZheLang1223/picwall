@@ -1750,3 +1750,23 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('批注浮层键盘契约：#notes-view 打开时拦截全局键序——Escape 逐层退块之后、输入态豁免之前，Tab 仅浮层内循环', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const start = appSrc.indexOf("document.addEventListener('keydown'");
+  const end = appSrc.indexOf('/* ---------- 详情页');
+  assert.ok(start >= 0 && end > start, '全局 keydown 处理器应存在');
+  const handler = appSrc.slice(start, end);
+  const atEscapeTail = handler.indexOf('else handled = false;');
+  const atGuard = handler.indexOf("if (!$('#notes-view').hidden && notes.active()) {");
+  const atEditing = handler.indexOf('if (editing) return;');
+  assert.ok(atEscapeTail > 0 && atEditing > 0, 'Escape 逐层退块与输入态豁免应存在');
+  assert.ok(atGuard > atEscapeTail, '批注拦截应排在整段 Escape 逐层退块之后（Esc 仍先经 notes.close() 关浮层）');
+  assert.ok(atGuard < atEditing, '批注拦截应排在 if (editing) return; 之前（输入态豁免不受影响）');
+  const guardBody = handler.slice(atGuard, atEditing);
+  assert.ok(guardBody.includes("if (e.key === 'Tab') trapTab(e, $('#notes-view'));"),
+    'Tab 应走 trapTab 在批注浮层内循环，不得走出模态落进背后页面');
+  assert.ok(guardBody.includes('return;'),
+    '批注浮层打开时应直接 return，1-4 / Shift+Q / Shift+F / / 等墙快键不得漏下去');
+});

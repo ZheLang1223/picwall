@@ -1108,6 +1108,11 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
+  // 批注浮层打开时屏蔽其后全部墙快键，Tab 仅在浮层内循环
+  if (!$('#notes-view').hidden && notes.active()) {
+    if (e.key === 'Tab') trapTab(e, $('#notes-view'));
+    return;
+  }
   if (editing) return;
   if (!e.repeat && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
     e.preventDefault();
