@@ -1750,3 +1750,17 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('批量打包轮询单次失败不判死：连续 5 次失败才报错，重试期间提示连接中断', async () => {
+  const fs = await import('node:fs/promises');
+  const batch = await fs.readFile(new URL('../app/static/batch-download.js', import.meta.url), 'utf8');
+  const loopStart = batch.indexOf('for (;;) {');
+  const takeOver = batch.indexOf('if (cur.id !== job.id)');
+  assert.ok(loopStart !== -1 && takeOver !== -1 && loopStart < takeOver, '应能定位打包轮询主循环');
+  const poll = batch.slice(loopStart, takeOver);
+  assert.ok(poll.includes("cur = (await api('/api/jobs/download')).job;"), '轮询调用本身应保持原样并被包裹');
+  assert.ok(poll.includes('try {') && poll.includes('} catch (e) {'), '轮询应有独立 try/catch 兜住单次失败');
+  assert.ok(batch.includes('let pollFails = 0;') && poll.includes('pollFails = 0;'), '应有连续失败计数且成功后清零');
+  assert.ok(poll.includes('pollFails++') && poll.includes('if (pollFails >= 5) throw e;'), '连续失败 5 次才交由外层 catch 报错');
+  assert.ok(poll.includes("if (v === B.version) $('#b-total').textContent = '连接中断，正在重试…';"), '重试期间应提示连接中断正在重试且只写当前面板版本');
+});

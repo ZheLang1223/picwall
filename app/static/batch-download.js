@@ -19,9 +19,20 @@ export function initBatch({S, $, api, toast}) {
     $('#b-total').textContent = label || '正在打包…';
     try {
       const job = (await api('/api/download/zip?' + q.toString(), 'POST')).job;
+      /* 轮询单次失败不判死：网络抖动/服务重启期间打包仍在服务端跑，连续 5 次失败才交由外层报错 */
+      let pollFails = 0;
       for (;;) {
         await new Promise(r => setTimeout(r, 1000));
-        const cur = (await api('/api/jobs/download')).job;
+        let cur;
+        try {
+          cur = (await api('/api/jobs/download')).job;
+        } catch (e) {
+          pollFails++;
+          if (pollFails >= 5) throw e;
+          if (v === B.version) $('#b-total').textContent = '连接中断，正在重试…';
+          continue;
+        }
+        pollFails = 0;
         if (cur.id !== job.id) return;   // 面板已被更新的打包任务接管，这里不再重复交付
         if (cur.state === 'queued' || cur.state === 'running') {
           if (v === B.version) {
