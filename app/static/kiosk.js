@@ -579,9 +579,16 @@ if (typeof document !== 'undefined') {
   });
   $('#ks-newgrp-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const form = e.currentTarget;
     const inp = $('#ks-newgrp-input');
+    const btn = form?.querySelector('button[type="submit"]');
     const name = inp?.value.trim();
     if (!name) { inp?.focus(); return; }
+    if (form.dataset.busy) return;                 // 建组请求在途：回车连点/双击直接忽略，防重复建组
+    form.dataset.busy = '1';
+    form.setAttribute('aria-busy', 'true');
+    inp.disabled = true;
+    if (btn) btn.disabled = true;
     try {
       const r = await ksApi('/api/groups', 'POST', { list_id: 'xg:', name });
       if (r.list_id) S.groups.push({ list_id: r.list_id, name, source: 'x', is_local: true });
@@ -590,6 +597,13 @@ if (typeof document !== 'undefined') {
       paint();
       if (S.open >= 0) openSpread(S.open);
     } catch (err) { ksToast(err.message); }
+    finally {                                      // 失败也要恢复可用，焦点还给输入框
+      delete form.dataset.busy;
+      form.removeAttribute('aria-busy');
+      inp.disabled = false;
+      if (btn) btn.disabled = false;
+      inp.focus();
+    }
   });
 
   async function loadShelf() {

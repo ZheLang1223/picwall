@@ -1750,3 +1750,66 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('报刊亭新建分组防连点：请求在途忽略重复提交恰一次 POST，失败后表单恢复可用并归还焦点', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const kJs = await read('../app/static/kiosk.js');
+
+  // 截出 #ks-newgrp-form 的 submit handler 源码，用桩运行（$ 登记监听并供给输入框，其余依赖全桩化）
+  const start = kJs.indexOf("$('#ks-newgrp-form')?.addEventListener('submit'");
+  assert.ok(start >= 0, 'kiosk.js 应绑定 #ks-newgrp-form 的 submit 监听');
+  const end = kJs.indexOf('\n  });', start);
+  assert.ok(end > start, '应能截出完整的新建分组 handler 源码');
+  const handlerSrc = kJs.slice(start, end + '\n  });'.length);
+
+  const boot = (apiImpl) => {
+    const inp = { value: '新分组', disabled: false, focusCount: 0, focus() { this.focusCount++; } };
+    const btn = { disabled: false };
+    const form = {
+      dataset: {}, attrs: new Map(), querySelector: () => btn,
+      setAttribute(k, v) { this.attrs.set(k, v); },
+      removeAttribute(k) { this.attrs.delete(k); },
+    };
+    const S = { groups: [], open: -1 };
+    const toasts = [];
+    const ev = { preventDefault() {}, currentTarget: form };
+    let listener = null;
+    new Function('$', 'ksApi', 'ksToast', 'S', 'paint', 'openSpread', handlerSrc)(
+      (sel) => sel === '#ks-newgrp-form' ? { addEventListener: (t, fn) => { listener = fn; } }
+        : sel === '#ks-newgrp-input' ? inp : null,
+      apiImpl, (m) => toasts.push(m), S, () => {}, () => {});
+    assert.ok(typeof listener === 'function', '桩运行应能得到 submit 监听器');
+    return { inp, btn, form, S, toasts, ev, listener };
+  };
+
+  // 场景一：请求在途时再次提交必须被忽略——两次快速提交只发一次 POST，且在途期间控件禁用
+  let release;
+  const gate = new Promise((res) => { release = res; });
+  const postsA = [];
+  const a = boot(async () => { postsA.push(1); await gate; return { list_id: 'xg:新分组' }; });
+  const p1 = a.listener(a.ev);
+  const p2 = a.listener(a.ev);
+  assert.strictEqual(postsA.length, 1, '请求在途时的重复提交应被忽略：两次快速提交只发一次 POST');
+  assert.strictEqual(a.form.attrs.get('aria-busy'), 'true', '请求在途表单应置 aria-busy=true');
+  assert.strictEqual(a.inp.disabled, true, '请求在途应禁用输入框');
+  assert.strictEqual(a.btn.disabled, true, '请求在途应禁用「+ 建组」按钮');
+  release();
+  await Promise.all([p1, p2]);
+  assert.strictEqual(a.S.groups.length, 1, '成功后应把新分组并入 S.groups');
+  assert.strictEqual(a.inp.value, '', '成功后应清空输入框');
+  assert.strictEqual(a.inp.disabled, false, '成功后应恢复输入框');
+  assert.strictEqual(a.btn.disabled, false, '成功后应恢复「+ 建组」按钮');
+  assert.ok(!a.form.dataset.busy && !a.form.attrs.has('aria-busy'), '结束后应清掉 busy 守卫与 aria-busy');
+  assert.ok(a.inp.focusCount >= 1, '结束后焦点应归还输入框');
+
+  // 场景二：请求被拒——finally 仍要恢复控件可用（表单可重试），错误经 toast 呈现
+  const b = boot(async () => { throw new Error('建组失败'); });
+  await b.listener(b.ev);
+  assert.ok(b.toasts.includes('建组失败'), '失败应经 ksToast 呈现错误信息');
+  assert.strictEqual(b.inp.disabled, false, '失败后输入框应恢复可用');
+  assert.strictEqual(b.btn.disabled, false, '失败后「+ 建组」按钮应恢复可用');
+  assert.ok(!b.form.dataset.busy && !b.form.attrs.has('aria-busy'), '失败后应清掉 busy 守卫与 aria-busy');
+  assert.ok(b.inp.focusCount >= 1, '失败后焦点应归还输入框');
+  assert.strictEqual(b.inp.value, '新分组', '失败不应清空已输入的分组名');
+});
