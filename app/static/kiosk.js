@@ -33,15 +33,34 @@ function ksToast(msg) {
   toastTimer = setTimeout(() => { el.hidden = true; }, 3200);
 }
 
-async function ksApi(url, method = 'GET', body) {
+export async function ksApi(url, method = 'GET', body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const r = await fetch(url, opts);
+  let r;
+  try {
+    r = await fetch(url, opts);
+  } catch (err) {
+    // fetch 本体失败（断网/服务停）抛的是浏览器英文文案，收敛为统一中文提示
+    if (err instanceof TypeError) {
+      const e = new Error('网络连接失败，请检查网络后重试');
+      e.network = true;
+      e.cause = err;
+      throw e;
+    }
+    throw err;
+  }
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.ok === false) throw new Error(j.detail || j.msg || `请求失败 (${r.status})`);
+  if (!r.ok || j.ok === false) {
+    // FastAPI 校验错误的 detail 是对象数组，直接进 Error 会显示 [object Object]
+    const detail = typeof j.detail === 'string' ? j.detail
+      : Array.isArray(j.detail) && typeof j.detail[0]?.msg === 'string' ? j.detail[0].msg : '';
+    const err = new Error(detail || j.msg || `请求失败 (${r.status})`);
+    err.status = r.status;
+    throw err;
+  }
   return j;
 }
 

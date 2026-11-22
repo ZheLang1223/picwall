@@ -1750,3 +1750,27 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('kiosk ksApi：fetch 本体失败收敛为中文网络提示，422 校验 detail 数组取首项 msg', async () => {
+  const { ksApi } = await import('../app/static/kiosk.js');
+  const oldFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(ksApi('/api/authors/kiosk'), (err) => {
+      assert.equal(err.message, '网络连接失败，请检查网络后重试');
+      assert.equal(err.network, true);
+      assert.ok(err.cause instanceof TypeError, '应保留原始 TypeError 为 cause');
+      return true;
+    }, '网络错误应替换浏览器英文文案');
+
+    globalThis.fetch = async () => ({
+      ok: false, status: 422,
+      json: async () => ({ detail: [{ loc: ['body', 'key'], msg: 'field required', type: 'missing' }] }),
+    });
+    await assert.rejects(ksApi('/api/groups', 'POST', { name: '' }), (err) => {
+      assert.equal(err.message, 'field required');
+      assert.equal(err.status, 422);
+      return true;
+    }, '422 detail 数组应取首项 msg 而非 [object Object]');
+  } finally { globalThis.fetch = oldFetch; }
+});
