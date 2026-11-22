@@ -230,7 +230,16 @@
       if (actual && actual !== R.feedColCount()) R.relayoutFeed();
     }
     const c = (S.st && S.st.counts) || {};
-    viewRows.forEach((b) => b.classList.toggle('on', S.status === b.dataset.status));
+    viewRows.forEach((b) => {
+      const on = S.status === b.dataset.status;
+      b.classList.toggle('on', on);
+      // 读屏可感知当前视图：当前行标 aria-current="page"，其余行彻底移除；值不变不写 DOM（sync 每 1.5s 兜底）
+      if (on) {
+        if (b.getAttribute('aria-current') !== 'page') b.setAttribute('aria-current', 'page');
+      } else if (b.hasAttribute('aria-current')) {
+        b.removeAttribute('aria-current');
+      }
+    });
     const total = (c.pending || 0) + (c.kept || 0) + (c.discarded || 0);
     for (const [st, el] of Object.entries(cntEls)) {
       if (!el) continue;
