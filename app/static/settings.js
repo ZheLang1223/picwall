@@ -281,14 +281,35 @@ async function renderMyGroups() {
     } catch (e) { toast(e.message); }
     finally { b.disabled = false; }
   });
-  box.querySelectorAll('[data-rm]').forEach((b) => b.onclick = async () => {
-    if (b.disabled) return; b.disabled = true;
-    try {
-      await api('/api/groups/' + encodeURIComponent(b.dataset.rm), 'DELETE');
-      openXGroups.delete(b.dataset.rm);
-      toast('已移除（已抓的图保留在库里）');
-      renderMyGroups();
-    } catch (e) { b.disabled = false; toast(e.message); }
+  box.querySelectorAll('[data-rm]').forEach((b) => {
+    let rmTimer = null;   // 武装复原定时器（随本次渲染的按钮存活）
+    b.onclick = async () => {
+      // 两步移除：第一击武装成「确认移除」（3 秒不点自动复原），第二击才真调 DELETE——与详情批注删除同款
+      if (!b.classList.contains('arming')) {
+        const gname = st.groups.find((g) => g.list_id === b.dataset.rm)?.name || b.dataset.rm;
+        b.classList.add('arming');
+        b.textContent = '确认移除';
+        b.setAttribute('aria-label', `再点一次确认移除分组「${gname}」`);
+        rmTimer = setTimeout(() => {
+          b.classList.remove('arming');
+          b.textContent = '移除';
+          b.removeAttribute('aria-label');
+        }, 3000);
+        return;
+      }
+      clearTimeout(rmTimer);
+      if (b.disabled) return; b.disabled = true;
+      try {
+        await api('/api/groups/' + encodeURIComponent(b.dataset.rm), 'DELETE');
+        openXGroups.delete(b.dataset.rm);
+        toast('已移除（已抓的图保留在库里）');
+        renderMyGroups();
+      } catch (e) {
+        b.disabled = false;
+        b.classList.remove('arming'); b.textContent = '移除'; b.removeAttribute('aria-label');
+        toast(e.message);
+      }
+    };
   });
 }
 

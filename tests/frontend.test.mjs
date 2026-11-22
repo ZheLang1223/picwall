@@ -1750,3 +1750,32 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('设置页分组「移除」两步确认：第一击武装不调 API，第二击才真发 DELETE', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [settingsSrc, styleCss] = await Promise.all([
+    read('../app/static/settings.js'),
+    read('../app/static/style.css'),
+  ]);
+
+  // 截取 renderMyGroups 里 data-rm 处理器段（到「新建本地分组」注释为止）
+  const start = settingsSrc.indexOf("querySelectorAll('[data-rm]')");
+  const rmSrc = settingsSrc.slice(start, settingsSrc.indexOf('// 新建本地分组', start));
+
+  const armIdx = rmSrc.indexOf("contains('arming')");
+  const delIdx = rmSrc.indexOf("'DELETE')");
+  assert.ok(start !== -1 && armIdx !== -1 && delIdx !== -1 && armIdx < delIdx,
+    'data-rm 处理器应先做 arming 武装判断再发 DELETE');
+  assert.ok(rmSrc.includes("b.textContent = '确认移除'") && rmSrc.indexOf('return;') < delIdx,
+    '第一击只武装成「确认移除」并提前返回，不调删除 API');
+  assert.ok(rmSrc.includes('再点一次确认移除分组') && rmSrc.includes('}, 3000)'),
+    '武装态应带 aria-label 再击提示并 3 秒不点自动复原');
+  assert.ok(rmSrc.includes("classList.remove('arming')")
+    && rmSrc.split("b.textContent = '移除'").length - 1 >= 2,
+    '定时复原与删除失败两条路径都应解除武装并恢复「移除」文案');
+  assert.ok(rmSrc.includes('if (b.disabled) return; b.disabled = true;'),
+    '确认后的删除请求仍应保留防连点禁用守卫');
+  assert.ok(/#my-groups button\.arming[^}]*var\(--danger\)/.test(styleCss),
+    '武装态按钮应有红色高亮样式（复用 --danger）');
+});
