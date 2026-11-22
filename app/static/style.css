@@ -1163,6 +1163,7 @@ a.setrow { text-decoration: none; }   /* 悬浮球菜单沿用 .setrow 行样式
 .connection-card #cookie-result { min-height: 18px; margin: 6px 0; }
 .connection-card .modal-row { flex-wrap: wrap; gap: 8px; }
 .connection-card button:disabled { opacity: .5; cursor: wait; }
+#btn-clear-cookie.arming { color: var(--danger); font-weight: 600; }   /* 两步清除的武装确认态 */
 
 /* ---------- 顶栏：正文搜索 ---------- */
 .searchwrap { position: relative; display: flex; align-items: center;

@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('清除凭据两步确认契约：首击武装不直发、3 秒自动解除、重渲染/切平台解除与红色武装样式', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [settingsSrc, styleSrc] = await Promise.all([
+    read('../app/static/settings.js'),
+    read('../app/static/style.css'),
+  ]);
+
+  assert.ok(settingsSrc.includes("$('#btn-clear-cookie').onclick = () => {")
+    && !settingsSrc.includes("$('#btn-clear-cookie').onclick = () => cookieAction('clear');"),
+    '清除按钮首击应只武装确认，不应单击直接发起 cookieAction(\'clear\')');
+  assert.ok(settingsSrc.includes("btn.textContent = '确认清除'")
+    && settingsSrc.includes('再点一次确认清除')
+    && settingsSrc.includes("'微博' : 'X'"),
+    '武装态应显示「确认清除」并带含平台名的「再点一次」aria-label');
+  assert.ok(settingsSrc.includes('clearArmTimer = setTimeout(() => { clearArmTimer = 0; renderConnection(); }, 3000)'),
+    '武装态 3 秒不点应自动解除并经 renderConnection() 复原文案');
+  assert.ok(settingsSrc.includes('function disarmClearBtn(') && settingsSrc.includes('disarmClearBtn(clearBtn);'),
+    'renderConnection 重渲染（含切换平台）应解除武装，避免「确认清除」残留到错误平台');
+  assert.ok(styleSrc.includes('#btn-clear-cookie.arming { color: var(--danger); font-weight: 600; }'),
+    '武装态应有红色（var(--danger)）可见样式');
+});

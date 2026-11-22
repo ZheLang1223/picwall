@@ -377,9 +377,13 @@ $('#btn-discover').onclick = async () => {
 
 /* ---------- 连接状态（原 Cookie 弹窗：微博 / X 双平台凭据） ---------- */
 
-let cookieSource = 'weibo', cookieBusy = false;
+let cookieSource = 'weibo', cookieBusy = false, clearArmTimer = 0;
 const cookieStates = {unset:'未连接', saved:'已保存 · 待验证', ok:'连接正常',
   expired:'登录已失效 · 请更新 Cookie', error:'暂时无法访问 · 可重新检查'};
+function disarmClearBtn(btn) {   // 解除武装：清掉计时器与确认态，任何重渲染都别让「确认清除」残留到错误平台
+  clearTimeout(clearArmTimer); clearArmTimer = 0;
+  btn.classList.remove('arming'); btn.removeAttribute('aria-label');
+}
 function renderConnection() {
   const c = S.st?.connections?.[cookieSource] || (cookieSource === 'weibo' ? S.st?.cookie : null) || {state:'unset'};
   $('#cookie-connection-state').textContent = cookieStates[c.state] || cookieStates.unset;
@@ -401,9 +405,11 @@ function renderConnection() {
   $('#btn-save-cookie').disabled = cookieBusy;
   $('#btn-save-cookie').textContent = cookieBusy ? '处理中…' : '保存并校验';
   $('#btn-check-cookie').disabled = cookieBusy || c.state === 'unset';
-  $('#btn-clear-cookie').disabled = cookieBusy || c.state === 'unset';
-  $('#btn-clear-cookie').textContent = c.source === 'env' ? '环境配置生效中' : '清除';
-  if (c.source === 'env') $('#btn-clear-cookie').disabled = true;
+  const clearBtn = $('#btn-clear-cookie');
+  disarmClearBtn(clearBtn);
+  clearBtn.disabled = cookieBusy || c.state === 'unset';
+  clearBtn.textContent = c.source === 'env' ? '环境配置生效中' : '清除';
+  if (c.source === 'env') clearBtn.disabled = true;
 }
 function onConnEnter() {
   $('#cookie-input').value = ''; $('#cookie-result').textContent = '';
@@ -441,7 +447,20 @@ async function cookieAction(action) {
 }
 $('#btn-save-cookie').onclick = () => cookieAction('save');
 $('#btn-check-cookie').onclick = () => cookieAction('check');
-$('#btn-clear-cookie').onclick = () => cookieAction('clear');
+// 两步清除：第一击武装成「确认清除」（3 秒不点经 renderConnection 自动复原），第二击才真删；
+// 切平台/任何重渲染一律解除武装，避免误触清掉已保存的登录凭据
+$('#btn-clear-cookie').onclick = () => {
+  const btn = $('#btn-clear-cookie');
+  if (!btn.classList.contains('arming')) {
+    btn.classList.add('arming');
+    btn.textContent = '确认清除';
+    btn.setAttribute('aria-label', `再点一次确认清除${cookieSource === 'weibo' ? '微博' : 'X'} 登录凭据`);
+    clearArmTimer = setTimeout(() => { clearArmTimer = 0; renderConnection(); }, 3000);
+    return;
+  }
+  disarmClearBtn(btn);
+  cookieAction('clear');
+};
 
 /* ---------- 手机扫码连接（配对码签发仅管理设备；非管理端整块隐藏） ---------- */
 
