@@ -1750,3 +1750,31 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('最近搜索存储损坏自愈：非数组返回空表、脏条目过滤归一化且 scope 白名单收敛', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+
+  // 从 app.js 源码提取 getRecentSearches（连同其常量声明），注入受控 localStorage 后直接执行
+  const constsSrc = appSrc.slice(appSrc.indexOf('const RECENT_SEARCH_KEY'), appSrc.indexOf('function getRecentSearches'));
+  const fnSrc = appSrc.slice(appSrc.indexOf('function getRecentSearches'), appSrc.indexOf('function saveRecentSearch'));
+  const load = (raw) => new Function('localStorage', `${constsSrc}${fnSrc}\n  return getRecentSearches();`)({ getItem: () => raw });
+
+  // 非数组（null / {} / 5 等）一律回落空表，不再让 saveRecentSearch 抛错卡死聚光灯
+  assert.deepEqual(load('null'), []);
+  assert.deepEqual(load('{}'), []);
+  assert.deepEqual(load('5'), []);
+
+  // 数组内的脏条目（null/数字/无 q 对象）被过滤，字符串与 {q,scope} 归一化为 {q,scope}，scope 白名单外回落 all
+  assert.deepEqual(
+    load('[null, 5, {"x":1}, "a", {"q":"b","scope":"weird"}]'),
+    [{ q: 'a', scope: 'all' }, { q: 'b', scope: 'all' }],
+  );
+
+  // 正常数据不变形：字符串条目补 scope all，合法 scope 原样保留，超过 8 条截断
+  assert.deepEqual(
+    load('["a", {"q":"c","scope":"author"}, {"q":"b","scope":"tag"}]'),
+    [{ q: 'a', scope: 'all' }, { q: 'c', scope: 'author' }, { q: 'b', scope: 'tag' }],
+  );
+  assert.equal(load('["1","2","3","4","5","6","7","8","9"]').length, 8);
+});

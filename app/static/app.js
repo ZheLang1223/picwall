@@ -2778,14 +2778,25 @@ authorView.init();
 
 /* ---------- 居中聚光灯大搜索栏（Spotlight Search） ---------- */
 const RECENT_SEARCH_KEY = 'pw_recent_searches';
+const RECENT_SEARCH_SCOPES = ['all', 'text', 'comment', 'tag', 'author'];
 
 function getRecentSearches() {
+  let parsed;
   try {
     const raw = localStorage.getItem(RECENT_SEARCH_KEY);
-    return raw ? JSON.parse(raw) : [];
+    parsed = raw ? JSON.parse(raw) : [];
   } catch (e) {
     return [];
   }
+  // 存储值可能是历史脏数据（非数组或条目缺 q/scope），过滤归一化，避免 saveRecentSearch 等调用方抛错卡死聚光灯
+  if (!Array.isArray(parsed)) return [];
+  const list = parsed.map((item) => {
+    const q = typeof item === 'string' ? item : (item && typeof item.q === 'string' ? item.q : '');
+    if (!q || !q.trim()) return null;
+    const scope = RECENT_SEARCH_SCOPES.includes(item && item.scope) ? item.scope : 'all';
+    return { q, scope };
+  }).filter(Boolean);
+  return list.length > 8 ? list.slice(0, 8) : list;
 }
 
 function saveRecentSearch(text, scope = 'all') {
