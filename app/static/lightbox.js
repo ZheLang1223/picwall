@@ -100,6 +100,8 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
         stage.classList.toggle('lb-long',
           img.naturalHeight / Math.max(1, img.naturalWidth) > 2); };
       img.onerror = () => { if (seq === lbSeq) stage.classList.remove('loading'); };
+      // #lb-img 复用同一元素：换源前清掉兜底标记，否则上一张缺失图留 fb=1，下一张不再兜底
+      delete img.dataset.fb;
       img.src = src;
     }
     $('#lb-prev').disabled=pos<=0;$('#lb-next').disabled=pos>=pool.length-1;

@@ -1392,6 +1392,7 @@ test('Wave2 性能优化 F-P1：Lightbox 胶片窗口化渲染（最多 41 张�
       hidden: true,
       disabled: false,
       style: {},
+      dataset: {},
       classList: makeCls(),
       children: [],
       setAttribute: (k, v) => attrs.set(k, String(v)),
@@ -1749,4 +1750,20 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
   assert.ok(indexHtml.includes('id="ss-state" class="ss-state" role="status" aria-live="polite"')
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
+});
+
+test('灯箱图片缺失兜底契约：onImgError 根列表覆盖 #lightbox 且 renderLB 换源前清 dataset.fb', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [appSrc, lbSrc] = await Promise.all([
+    read('../app/static/app.js'),
+    read('../app/static/lightbox.js'),
+  ]);
+
+  const rootsLine = appSrc.split('\n').find((l) => l.includes('for (const root of ['));
+  assert.ok(rootsLine && rootsLine.includes("document.getElementById('lightbox')")
+    && appSrc.includes("root.addEventListener('error', onImgError, true);"),
+    'onImgError 捕获层根列表应包含 #lightbox，灯箱内 /media/ 缺失图才换「图片缺失」占位');
+  assert.ok(/delete img\.dataset\.fb;\s*img\.src = src;/.test(lbSrc),
+    'renderLB 复用同一 #lb-img，换源前应清 dataset.fb，否则上一张缺失图留标记致下一张不再兜底');
 });

@@ -811,7 +811,7 @@ function onImgError(e) {
   img.dataset.fb = '1';
   img.src = IMG_FALLBACK;
 }
-for (const root of [feed, document.getElementById('detail'), document.getElementById('quad')])
+for (const root of [feed, document.getElementById('detail'), document.getElementById('quad'), document.getElementById('lightbox')])
   root.addEventListener('error', onImgError, true);
 
 /* 列高账本的兜底失效：卡片被标记摘除后从列栈移除会改变列高，仅在卡片/列节点移除时
