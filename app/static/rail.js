@@ -162,6 +162,10 @@
     closeMore();
     R.slideshowOpen();
   });
+  document.getElementById('tt-review')?.addEventListener('click', () => {
+    closeMore();
+    R.reviewOpen();
+  });
   document.getElementById('tt-random')?.addEventListener('click', () => {
     closeMore();
     const ps = (S.posts || []).filter((p) => !p.fading);

@@ -1111,6 +1111,37 @@ test('桌面右轨与侧栏修复：Esc冒泡阻断、抽屉焦点/点按收起�
     '悬浮胶囊描边应使用 border-subtle 强化对比度');
 });
 
+test('桌面回看入口：右上更多菜单提供回看项并直达 review.open，viewer 角色隐藏', async () => {
+  const fs = await import('node:fs/promises');
+  const root = new URL('../app/static/', import.meta.url);
+  const html = await fs.readFile(new URL('../templates/index.html', root), 'utf8');
+  const railSrc = await fs.readFile(new URL('rail.js', root), 'utf8');
+  const appSrc = await fs.readFile(new URL('app.js', root), 'utf8');
+  const css = await fs.readFile(new URL('style.css', root), 'utf8');
+
+  // 1. 标记：#tt-more-menu 含 #tt-review（restore 图标 + 回看文案），置于 #tt-play 之后
+  const playIdx = html.indexOf('id="tt-play"');
+  const reviewIdx = html.indexOf('id="tt-review"');
+  assert.ok(reviewIdx > -1 && html.includes('<span>回看</span>'), '更多菜单应提供「回看」条目 #tt-review');
+  assert.ok(playIdx > -1 && reviewIdx > playIdx, '#tt-review 应紧跟 #tt-play 之后');
+  assert.ok(html.slice(reviewIdx).includes('<polyline points="1 4 1 10 7 10"/>')
+    && html.slice(reviewIdx).includes('M3.51 15a9 9 0 1 0 2.13-9.36L1 10'),
+    '#tt-review 应使用与悬浮球回看一致的 restore 图标');
+
+  // 2. 接线：rail.js 点击 #tt-review 先收菜单再直达 R.reviewOpen()
+  assert.ok(railSrc.includes("document.getElementById('tt-review')?.addEventListener('click'")
+    && railSrc.includes('R.reviewOpen()'),
+    '点击回看应先收起更多菜单再直达 R.reviewOpen()');
+
+  // 3. 出口：pwRail 暴露 reviewOpen（与 slideshowOpen/notesOpen 同族）
+  assert.ok(appSrc.includes('reviewOpen: () => review.open()'),
+    'pwRail 应暴露 reviewOpen 直连 review.open()');
+
+  // 4. 只读设备：viewer 角色隐藏 #tt-review（review.open() 对 readOnly 静默返回，不该留死按钮）
+  assert.ok(css.includes('html[data-device-role="viewer"] #tt-review'),
+    'viewer 角色应隐藏 #tt-review');
+});
+
 test('多维搜索契约与筛选面板精简：搜索维度匹配、快捷前缀、胶囊同步与面板去重', async () => {
   const fs = await import('node:fs/promises');
   const root = new URL('../app/static/', import.meta.url);
@@ -1311,7 +1342,7 @@ test('Wave1 安全加固：settings 组 ID 转义、kiosk/view-state 转义与�
   assert.ok(quadSrc.includes('avatarSrc(p.avatar)') && quadSrc.includes('src="/media/${esc(isVid'));
   assert.ok(lbSrc.includes('src="${esc(src)}"') && lbSrc.includes('data-i="${esc(gi)}"'));
   assert.ok(!fabSrc.includes('<span>${label}</span>') && fabSrc.includes('span.textContent ='));
-  for (const sel of ['#sel-tags', '#rail-triage', '#tt-select', '#tt-play']) {
+  for (const sel of ['#sel-tags', '#rail-triage', '#tt-select', '#tt-play', '#tt-review']) {
     assert.ok(cssSrc.includes(`html[data-device-role="viewer"]`) && cssSrc.includes(sel), `viewer 应隐藏 ${sel}`);
   }
 });

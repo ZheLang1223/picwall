@@ -3478,6 +3478,7 @@ window.pwRail = {
   toast,
   slideshowOpen: () => slideshow.open(),
   notesOpen: () => notes.open(),
+  reviewOpen: () => review.open(),
   chronoActive: () => timeline.active(),
   setChrono: (on) => timeline.setLayout(on),
   scrollTop: scrollFeedTop,

@@ -1299,6 +1299,7 @@ html[data-device-role="viewer"] #sel-tags,
 html[data-device-role="viewer"] #rail-triage,
 html[data-device-role="viewer"] #tt-select,
 html[data-device-role="viewer"] #tt-play,
+html[data-device-role="viewer"] #tt-review,
 html[data-device-role="viewer"] #fab { display: none; }
 .pair-page { max-width: 440px; margin: 12vh auto; padding: 24px; }
 .pair-page h1 { font-size: 24px; }
