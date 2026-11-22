@@ -1750,3 +1750,38 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('QR 面板 pw_qrurl 的 localStorage 访问必须包在 try/catch 内（存储不可用不炸面板）', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/settings.js', import.meta.url), 'utf8');
+
+  // 按起始标记取代码块（大括号配平截取函数体/监听器体）
+  const body = (startMark) => {
+    const i = src.indexOf(startMark);
+    assert.ok(i >= 0, `settings.js 应包含 ${JSON.stringify(startMark)}`);
+    const open = src.indexOf('{', i);
+    let depth = 0;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === '{') depth++;
+      else if (src[j] === '}') { depth--; if (!depth) return src.slice(open + 1, j); }
+    }
+    return '';
+  };
+
+  const regions = [
+    ['onQrEnter', body('async function onQrEnter')],
+    ['#qr-url change 监听器', body("$('#qr-url').addEventListener('change'")],
+  ];
+  for (const [name, region] of regions) {
+    const accesses = [...region.matchAll(/localStorage\.(?:getItem|setItem)\('pw_qrurl'/g)];
+    assert.ok(accesses.length > 0, `${name} 应存在 pw_qrurl 的 localStorage 访问（契约防漂移）`);
+    // 访问点之前最近的 try { 必须晚于最近的 } catch，即该访问落在未关闭的 try 块内
+    for (const m of accesses) {
+      const before = region.slice(0, m.index);
+      const lastTry = before.lastIndexOf('try {');
+      const lastCatch = before.lastIndexOf('} catch');
+      assert.ok(lastTry > lastCatch,
+        `${name} 中 pw_qrurl 的 localStorage 访问必须包在 try/catch 内（隐私模式/配额满等存储不可用时兜底，不得裸调用）`);
+    }
+  }
+});

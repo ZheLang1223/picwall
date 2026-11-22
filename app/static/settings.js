@@ -496,17 +496,21 @@ async function onQrEnter() {
       const lan = await api('/api/lan');
       if (lan.ip) url = `http://${lan.ip}:${lan.port}`;
     } catch (e) { /* 网络问题走兜底 */ }
-    if (!url) url = localStorage.getItem('pw_qrurl') || location.origin;
+    // localStorage 可能不可用（隐私模式/被禁用/配额满），失败回落 location.origin，不阻断面板
+    if (!url) {
+      try { url = localStorage.getItem('pw_qrurl'); } catch {}
+      if (!url) url = location.origin;
+    }
   }
   $('#qr-url').value = url;
-  localStorage.setItem('pw_qrurl', url);
+  try { localStorage.setItem('pw_qrurl', url); } catch {} // 存不进也不影响展示
   refreshQr();
 }
 $('#qr-url').oninput = (() => { let t; return () => { clearTimeout(t); t = setTimeout(refreshQr, 350); }; })();
 $('#qr-refresh').onclick = refreshQr;
 $('#qr-url').addEventListener('change', () => {
   const v = $('#qr-url').value.trim();
-  if (v) localStorage.setItem('pw_qrurl', v);
+  if (v) { try { localStorage.setItem('pw_qrurl', v); } catch {} }
 });
 
 /* ---------- 关于：版本 / 结构 / 设备身份 ---------- */
