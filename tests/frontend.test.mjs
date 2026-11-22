@@ -1750,3 +1750,15 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('大图滚动锁契约：关闭时若仍有全屏浮层（详情/四格/放映/批注）开着不得解锁 body 滚动', async()=>{
+ const fs=await import('node:fs/promises');
+ const lbSrc=await fs.readFile(new URL('../app/static/lightbox.js',import.meta.url),'utf8');
+ assert.ok(!lbSrc.includes("$('#detail').hidden ? '' : 'hidden'"), '不得只按 #detail 单一浮层判定滚动锁（四格/放映/批注开着时关大图会解锁背景墙滚动）');
+ const closeBlock=lbSrc.match(/function closeLB\(\) \{[\s\S]*?\n  \}/);
+ assert.ok(closeBlock, 'closeLB 应存在');
+ for (const sel of ["'#detail'", "'#quad'", "'#slideshow'", "'#notes-view'"]) {
+   assert.ok(closeBlock[0].includes(sel), `closeLB 关闭时应检查 ${sel} 是否仍开着`);
+ }
+ assert.ok(closeBlock[0].includes("classList.contains('closing')"), '淡出中（closing）的浮层不应再算作开着，全部退场后才解锁滚动');
+});

@@ -51,7 +51,10 @@ export function createLightbox({S,$,animatedHide,cancelHide,resetZoom,crossPosts
     cancelPreloads();
     clearTimeout(imageClickTimer); imageClickTimer = 0;
     animatedHide($('#lightbox'));
-    document.body.style.overflow=$('#detail').hidden ? '' : 'hidden';
+    // 大图关了但下面还压着别的全屏浮层（详情/四格/放映/批注，含 140ms 淡出中的）时不能解锁滚动，否则背景墙会跟着滚
+    const overlayUp=['#detail','#quad','#slideshow','#notes-view']
+      .some(sel=>{const el=$(sel);return !!el && !el.hidden && !el.classList.contains('closing');});
+    document.body.style.overflow=overlayUp ? 'hidden' : '';
     scopeSid=null;anchor=null;filmKey=null;filmStart=0;filmEnd=0;activeThumb=null;
     returnFocus?.focus();returnFocus=null;
   }
