@@ -1750,3 +1750,37 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('同文无动作 toast 连发只刷新旧条目：不叠副本、重置倒计时；异文与带动作永不合并', async () => {
+  const {toast} = await import('../app/static/notifications.js');
+  const mk = () => ({ children: [], className: '', textContent: '',
+    classList: { _s: new Set(), add(c) { this._s.add(c); }, contains(c) { return this._s.has(c); } },
+    appendChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); this.children.push(c); },
+    remove() {}, addEventListener() {}, setAttribute() {} });
+  const timers = [];
+  const oldDocument = globalThis.document, oldSetTimeout = globalThis.setTimeout,
+        oldClearTimeout = globalThis.clearTimeout, oldRAF = globalThis.requestAnimationFrame;
+  globalThis.setTimeout = (fn, ms) => { timers.push(ms); return 0; };
+  globalThis.clearTimeout = () => {};
+  globalThis.requestAnimationFrame = (fn) => fn();   // 同步点亮，不等一帧
+  const container = mk();
+  globalThis.document = { querySelector: (s) => (s === '#toast' ? container : null), createElement: () => mk() };
+  try {
+    toast('网络错误');
+    const first = container.children[0];
+    assert.equal(container.children.length, 1);
+    toast('网络错误');
+    assert.equal(container.children.length, 1, '同文无动作连发应复用旧条目，不追加副本');
+    assert.equal(container.children[0], first);
+    assert.equal(container.children.at(-1), first, '复用条目应挪到队尾（最新）');
+    assert.ok(first.classList.contains('show'), '复用条目应保持点亮');
+    assert.deepEqual(timers, [2800, 2800], '每次连发都按初始时长重置倒计时');
+    toast('另一条消息');
+    assert.equal(container.children.length, 2, '不同文本不合并');
+    toast('网络错误', { label: '重试', fn: () => {} });
+    assert.equal(container.children.length, 3, '带动作的同文 toast 永不合并');
+  } finally {
+    globalThis.document = oldDocument; globalThis.setTimeout = oldSetTimeout;
+    globalThis.clearTimeout = oldClearTimeout; globalThis.requestAnimationFrame = oldRAF;
+  }
+});

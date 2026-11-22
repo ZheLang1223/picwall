@@ -2,6 +2,7 @@ const $ = (s) => document.querySelector(s);
 /* 栈式 toast：#toast 是容器，条目（.toast-item）独立计时、互不顶替——
    快筛连裁时带「撤销」的条目在其 6s 反悔窗口内不会被后续状态消息顶掉。
    同屏上限 3 条，超容先逐出最旧的**无动作**条目（全是带动作的才逐最旧）。
+   同文无动作连发只挪队尾刷新旧条目（重置倒计时），不叠副本——读屏不重复播报。
    persistent 条目带 ✕ 手动关闭（无动作也能关掉）；悬停暂停计时、移出续跑。 */
 const MAX_ITEMS = 3;
 
@@ -32,6 +33,9 @@ function makeItem(msg, action, options) {
   item._hasAction = hasAction;
   // 带撤销的 toast 停留更久（Gmail 式：给足反悔时间）
   item._delay = options.duration || (hasAction ? 6000 : 2800);
+  item._msg = msg;   // 同文去重凭据：原文 + 初始时长 + persistent 旗
+  item._baseDelay = item._delay;
+  item._persistent = !!options.persistent;
   item.addEventListener('mouseenter', () => pauseItem(item));
   item.addEventListener('mouseleave', () => armItem(item));
   return item;
@@ -66,6 +70,17 @@ function evictOverflow(container) {   // 超容逐出：优先无动作的最旧
 
 export function toast(msg, action, options = {}) {
   const t = $('#toast');
+  const acts = action ? (Array.isArray(action) ? action : [action]) : [];
+  if (!acts.some((act) => act && act.label)) {   // 无动作才可合并；带撤销/重试的每条都要自己的条目
+    const dup = [...t.children].find((el) => !el._hasAction && el._msg === msg
+      && !!el._persistent === !!options.persistent);
+    if (dup) {   // 同文连发：挪队尾 = 最新，重置倒计时，不叠副本
+      t.appendChild(dup);
+      dup.classList.add('show');
+      if (!dup._persistent) { dup._delay = dup._baseDelay; armItem(dup); }
+      return;
+    }
+  }
   const item = makeItem(msg, action, options);
   t.appendChild(item);
   evictOverflow(t);
