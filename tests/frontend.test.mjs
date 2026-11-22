@@ -1750,3 +1750,22 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('收藏页取消收藏失败回滚：帖重插回墙不静默消失',async()=>{
+ const post={...p,favorite:true},state={...s,status:'favorites',posts:[post],decisions:new Map(),total:1};
+ const oldCSS=globalThis.CSS;globalThis.CSS={escape:(x)=>x};
+ const $=()=>({hidden:true});
+ let inserted=0;
+ const feed={querySelectorAll:()=>[],querySelector:()=>null};
+ const actions=createPostActions({
+   S:state,$,toast:()=>{},api:()=>Promise.reject(new Error('offline')),
+   feed,insertCard:()=>{inserted++;},rebuildImages:()=>{},updateMore:()=>{},queueStatusRefresh:()=>{},
+ });
+ try {
+   await actions.toggleFavorite(post.sid);
+   assert.equal(state.posts.length,1,'失败回滚后帖须重插回收藏墙（旧代码只翻描边找不到已摘的卡，静默消失到刷新）');
+   assert.equal(state.posts[0].favorite,true,'回滚恢复服务端事实');
+   assert.equal(state.total,1);
+   assert.equal(inserted,1,'回滚走 syncPost 重插一次');
+ } finally { if(oldCSS===undefined) delete globalThis.CSS; else globalThis.CSS=oldCSS; }
+});

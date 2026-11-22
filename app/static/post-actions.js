@@ -212,7 +212,8 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
     const revision = (p._favoriteRevision || 0) + 1;
     p._favoriteRevision = revision;
     beginWrite(p); p.favorite = target;
-    if (matchesView(p, S)) applyFavDom(sid, target);   // 仍在视图：只换描边不挪卡
+    const wasIn = matchesView(p, S);
+    if (wasIn) applyFavDom(sid, target);               // 仍在视图：只换描边不挪卡
     else syncPost(p);                                  // 收藏页取消收藏：摘卡出列
     try {
       await enqueue(() => api(`/api/posts/${sid}/favorite`, 'POST', {favorite:target}));
@@ -222,8 +223,10 @@ export function createPostActions({S, feed, $, api, toast, insertCard, rebuildIm
     } catch (e) {
       if (p._favoriteRevision === revision) {
         p.favorite = !target;
-        if (matchesView(p, S)) applyFavDom(sid, p.favorite);
-        else syncPost(p);
+        // 回滚后归属可能翻回视图（收藏页摘卡再失败）：与乐观时相比变了才走 syncPost 重插，
+        // 只翻描边会找不到已摘的卡，帖从此在墙上消失到刷新为止
+        if (matchesView(p, S) !== wasIn) syncPost(p);
+        else applyFavDom(sid, p.favorite);
       }
       queueStatusRefresh(); toast(e.message);
     } finally { finishWrite(p); }
