@@ -1750,3 +1750,27 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('个性化偏好档损坏兜底：pw_prefs 非 JSON 对象回落空档，pwSetPref 写入不再静默丢失', async () => {
+  const fs = await import('node:fs/promises');
+  const vm = await import('node:vm');
+  const src = await fs.readFile(new URL('../app/static/boot.js', import.meta.url), 'utf8');
+  // vm 里真跑 boot.js IIFE：stub localStorage/document/window（boot.js 启动即 applyAll 触 DOM）
+  const boot = (init) => {
+    let v = init;
+    const ls = { getItem: () => v, setItem: (k, x) => { v = String(x); }, removeItem: () => { v = null; } };
+    const root = { setAttribute() {}, removeAttribute() {} };
+    const sandbox = { window: { addEventListener() {} },
+      document: { documentElement: root, querySelector: () => null }, localStorage: ls };
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+    return { ls, setPref: sandbox.window.pwSetPref, getPrefs: sandbox.window.pwGetPrefs };
+  };
+  for (const raw of ['5', '"x"', '[1,2]', 'null'])
+    assert.deepEqual(JSON.parse(JSON.stringify(boot(raw).getPrefs())), {}, `损坏档 ${raw} 应回落空档而非裸值`);
+  assert.deepEqual(JSON.parse(JSON.stringify(boot('{"theme":"dark"}').getPrefs())), { theme: 'dark' });
+  // 损坏数组档上写入：赋值不得再被数组 stringify 静默吞掉
+  const bad = boot('[1,2]');
+  bad.setPref('theme', 'dark');
+  assert.deepEqual(JSON.parse(bad.ls.getItem('pw_prefs')), { theme: 'dark' });
+});

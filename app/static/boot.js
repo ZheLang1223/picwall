@@ -12,7 +12,7 @@
   };
   var root = document.documentElement;
   function prefs() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; }
+    try { var p = JSON.parse(localStorage.getItem(KEY)); return (p && typeof p === 'object' && !Array.isArray(p)) ? p : {}; } catch (e) { return {}; }
   }
   function sysTheme() {
     return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches)
