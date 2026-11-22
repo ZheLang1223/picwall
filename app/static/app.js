@@ -2200,7 +2200,6 @@ function pollCrawl() {
         else if (lr?.outcome === 'interrupted') toast('采集中断，已收到的记录保留，可重试');
         else if (lr?.outcome === 'failed') toast('抓取失败，请在自动抓取里查看原因');
         else if (lr) toast(`抓取完成：${lr.new_posts} 帖 / ${lr.new_pics} 图`);
-        else if (st.cookie.state === 'expired') toast('Cookie 过期，请重新粘贴');
         else if (st.crawl.error) toast('抓取出错：' + st.crawl.error);
         closeDetailIfOpen();   // 整列重取会让 S.posts 换血，详情继续开着只会拿到死数据
         load(true);
@@ -2208,7 +2207,7 @@ function pollCrawl() {
     } catch (e) {
       if (++S.pollFails >= 5) {
         clearInterval(S.pollTimer);
-        toast('状态刷新连续失败：' + e.message);
+        toast('状态刷新连续失败：' + e.message, { label: '重试', fn: () => pollCrawl() }, { persistent: true });
       }
     }
   }, 4000);
