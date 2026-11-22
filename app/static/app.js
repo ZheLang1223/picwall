@@ -2108,7 +2108,17 @@ function crawlPaneEnter() {
 
 /* ---------- 清理已删除：预览 + 手动触发（自动清理每天 04:10 另有定时） ---------- */
 
+let purgeArmTimer = 0;
+function disarmPurgeRun() {   // 复原两步删除武装态（重渲染/超时/二击共用）
+  clearTimeout(purgeArmTimer);
+  const runBtn = $('#btn-purge-run');
+  runBtn.classList.remove('arming');
+  runBtn.removeAttribute('aria-label');
+  $('#purge-run-label').textContent = '立即清理';
+}
+
 async function renderPurgeModal() {
+  disarmPurgeRun();   // 重渲染前先复原武装态，重开面板不留「确认永久删除」
   const st = S.st || await loadStatus();
   const p = st.purge || { days: 3, due: 0, discarded: 0 };
   $('#purge-days').textContent = p.days;
@@ -2129,6 +2139,16 @@ async function renderPurgeModal() {
 
 $('#btn-purge-run').onclick = async () => {
   const runBtn = $('#btn-purge-run');
+  // 两步删除：第一击武装成「确认永久删除」（3 秒不点自动复原），第二击才真删（图片一并清除，无法恢复）
+  if (!runBtn.classList.contains('arming')) {
+    runBtn.classList.add('arming');
+    $('#purge-run-label').textContent = '确认永久删除';
+    runBtn.setAttribute('aria-label', `再点一次确认永久删除 ${$('#purge-n').textContent} 帖及其图片`);
+    clearTimeout(purgeArmTimer);
+    purgeArmTimer = setTimeout(disarmPurgeRun, 3000);
+    return;
+  }
+  disarmPurgeRun();
   if (runBtn.disabled) return;
   runBtn.disabled = true;
   const days = S.st?.purge?.days || 3;

@@ -1750,3 +1750,39 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('清理已删除两步确认契约：首击武装不发请求、二击才清理、3 秒自动复原与重渲染复位', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [indexHtml, appSrc, cssSrc] = await Promise.all([
+    read('../app/templates/index.html'),
+    read('../app/static/app.js'),
+    read('../app/static/style.css'),
+  ]);
+
+  // index.html：#purge-n 仍在 #btn-purge-run 内，前导文案包进 #purge-run-label（武装换字不动计数）
+  const btnHtml = (indexHtml.match(/<button id="btn-purge-run"[\s\S]*?<\/button>/) || [''])[0];
+  assert.ok(btnHtml.includes('<span id="purge-run-label">立即清理</span>（<span id="purge-n">0</span> 帖）'),
+    '#btn-purge-run 内应有 #purge-run-label 且 #purge-n 计数保持原位');
+
+  // 首击武装：加 arming、换字「确认永久删除」、aria-label 带帖数，武装分支须先于 /api/purge 且 return
+  const h = appSrc.slice(appSrc.indexOf("$('#btn-purge-run').onclick"), appSrc.indexOf('async function startCrawl'));
+  assert.ok(h.includes("classList.contains('arming')") && h.includes("classList.add('arming')")
+    && h.includes("'确认永久删除'") && h.includes('再点一次确认永久删除'),
+    '首击应武装（arming + 确认永久删除 + aria-label 带帖数）');
+  assert.ok(h.indexOf("classList.contains('arming')") >= 0
+    && h.indexOf("classList.contains('arming')") < h.indexOf('/api/purge'),
+    '武装判断必须先于 /api/purge 请求（首击不得直接清理）');
+  assert.ok(h.includes('return;'), '武装分支必须 return，不得继续执行清理');
+  assert.ok(h.includes('/api/purge'), '二击才走既有 /api/purge 清理逻辑');
+
+  // 3 秒超时自动复原；renderPurgeModal 复位武装态（重开面板/重渲染不留残留武装）
+  assert.ok(appSrc.includes('setTimeout(disarmPurgeRun, 3000)'), '武装 3 秒不点应自动复原');
+  const rpm = appSrc.slice(appSrc.indexOf('async function renderPurgeModal'), appSrc.indexOf("$('#btn-purge-run').onclick"));
+  assert.ok(appSrc.includes('function disarmPurgeRun') && rpm.includes('disarmPurgeRun();'),
+    'renderPurgeModal 开头应先复原武装态');
+
+  // 武装态可见样式复用 --danger
+  assert.ok(cssSrc.includes('#btn-purge-run.arming') && cssSrc.includes('box-shadow: 0 0 0 2px var(--danger)'),
+    'style.css 应有武装态高亮（复用 --danger）');
+});

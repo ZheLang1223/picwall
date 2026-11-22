@@ -1196,6 +1196,7 @@ a.setrow { text-decoration: none; }   /* 悬浮球菜单沿用 .setrow 行样式
 .prow:last-child { border-bottom: 0; }
 .pwhen { color: var(--faint); }
 .pbtn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+#btn-purge-run.arming { font-weight: 700; box-shadow: 0 0 0 2px var(--danger); }
 .pbtn:disabled { opacity: .4; cursor: default; }
 
 /* ---------- 个性化档位（data-* 属性分档；置于主题块之后以赢得同权重覆盖） ---------- */
