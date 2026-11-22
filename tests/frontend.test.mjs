@@ -1750,3 +1750,52 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('kiosk 简介落定契约：拉取落空记空档换「暂无」文案、不再反复重拉、成功仍渲染正文', async () => {
+  const fs = await import('node:fs/promises');
+  const src = await fs.readFile(new URL('../app/static/kiosk.js', import.meta.url), 'utf8');
+  const start = src.indexOf('async function ensureBio');
+  const end = src.indexOf('function spreadManageHtml');
+  assert.ok(start > 0 && end > start, 'kiosk.js 应包含 ensureBio/paintBio 相邻函数块');
+  // 取出函数块源码，注入 S/document/nl2br/fetch 桩，真实执行 ensureBio/paintBio
+  const harness = (S, box, slot, fetchStub) => {
+    const api = new Function('S', 'document', 'nl2br', 'fetch', `
+      ${src.slice(start, end)}
+      return { ensureBio, paintBio };
+    `)(S, { getElementById: (id) => (id === `ks-bio-${slot}` ? box : null) },
+      (s) => String(s).replace('\n', '<br>'), fetchStub);
+    return api;
+  };
+
+  // 成功路径：真简介照旧渲染（nl2br），不留占位态
+  const box1 = { innerHTML: '' };
+  const api1 = harness({ open: 1, bio: new Map() }, box1, 1,
+    () => ({ json: async () => ({ ok: true, bio: '第一行\n第二行' }) }));
+  await api1.ensureBio({ key: 'wb:1', bio: '' }, 1);
+  assert.ok(box1.innerHTML.includes('第一行<br>第二行'), '真简介应照旧 nl2br 渲染');
+  assert.ok(!box1.innerHTML.includes('拉取中'), '拿到简介后不应残留占位态');
+
+  // 落空路径（ok:false / 空简介）：换「暂无」空态 + 重开不重拉
+  const S2 = { open: 2, bio: new Map() };
+  const box2 = { innerHTML: '' };
+  let hits = 0;
+  const api2 = harness(S2, box2, 2, () => {
+    hits++;
+    return { json: async () => ({ ok: false }) };
+  });
+  await api2.ensureBio({ key: 'wb:2', bio: '' }, 2);
+  assert.ok(box2.innerHTML.includes('「暂无平台简介。」') && !box2.innerHTML.includes('拉取中'),
+    '落空后应显示「暂无」空态，不再停留拉取中占位');
+  S2.open = -1;
+  await api2.ensureBio({ key: 'wb:2', bio: '' }, 2);   // 关闭
+  S2.open = 2;
+  await api2.ensureBio({ key: 'wb:2', bio: '' }, 2);   // 重开同一 spread
+  assert.equal(hits, 1, '落空已记档，重开不应再发请求');
+
+  // 网络错误（fetch 抛异常）同样落定为「暂无」，不抛出
+  const box3 = { innerHTML: '' };
+  const api3 = harness({ open: 3, bio: new Map() }, box3, 3,
+    () => Promise.reject(new Error('network down')));
+  await api3.ensureBio({ key: 'wb:3', bio: '' }, 3);
+  assert.ok(box3.innerHTML.includes('「暂无平台简介。」'), '网络错误也应落定为「暂无」空态');
+});

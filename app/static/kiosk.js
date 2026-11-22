@@ -308,11 +308,11 @@ async function ensureBio(d, slot) {
   try {
     const r = await fetch(`/api/authors/${encodeURIComponent(d.key)}/bio`);
     const j = await r.json();
-    if (j?.ok && j.bio) {
-      S.bio.set(d.key, j.bio);
-      if (S.open === slot) paintBio(d, slot);
-    }
-  } catch (e) { /* 拉不到就保持占位态（未配 Cookie / 限流都常见） */ }
+    S.bio.set(d.key, (j?.ok && j.bio) ? j.bio : '');   // 落空也记空档（无 Cookie / 403 / 网络错误），不再每次打开都重拉
+  } catch (e) {
+    S.bio.set(d.key, '');
+  }
+  if (S.open === slot) paintBio(d, slot);
 }
 
 function paintBio(d, slot) {
@@ -321,7 +321,9 @@ function paintBio(d, slot) {
   const bio = d.bio || S.bio.get(d.key);
   box.innerHTML = bio
     ? `<p>${nl2br(bio)}</p>`
-    : '<p class="empty">「平台简介拉取中——本期专访进行中。」</p>';
+    : (S.bio.has(d.key)                        // 已落定：拉过但没简介
+      ? '<p class="empty">「暂无平台简介。」</p>'
+      : '<p class="empty">「平台简介拉取中——本期专访进行中。」</p>');
 }
 
 function spreadManageHtml(d) {
