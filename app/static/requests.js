@@ -14,8 +14,10 @@ export async function api(path, method = 'GET', body, options = {}) {
     const data = await res.json().catch(() => ({}));
     if (controller.signal.aborted) throw controller.signal.reason;
     if (!res.ok) {
-      // FastAPI 校验错误的 detail 是对象数组，直接进 Error 会显示 [object Object]
-      const detail = typeof data.detail === 'string' ? data.detail : '';
+      // FastAPI 校验错误的 detail 是对象数组，直接进 Error 会显示 [object Object]，取首项 msg
+      const raw = data.detail;
+      const detail = typeof raw === 'string' ? raw
+        : Array.isArray(raw) && typeof raw[0]?.msg === 'string' ? raw[0].msg : '';
       const err = new Error(detail || data.msg || `HTTP ${res.status}`);
       err.status = res.status;
       throw err;
@@ -23,6 +25,13 @@ export async function api(path, method = 'GET', body, options = {}) {
     return data;
   } catch(e) {
     if (controller.signal.aborted && !signal?.aborted) throw controller.signal.reason;
+    if (e instanceof TypeError && !controller.signal.aborted && !signal?.aborted) {
+      // 断网/服务器不可达时 fetch 抛的 TypeError 文案各浏览器不同且是英文，翻译成人话
+      const err = new Error('网络连接失败，请检查网络后重试');
+      err.network = true;
+      err.cause = e;
+      throw err;
+    }
     throw e;
   } finally { clearTimeout(timer); signal?.removeEventListener('abort',cancel); }
 }

@@ -454,6 +454,33 @@ test('请求超时会结束等待，外部取消可以中止旧筛选请求',asy
  } finally {globalThis.fetch=oldFetch;}
 });
 
+test('fetch 网络层失败给出友好中文提示并保留原始错误',async()=>{
+ const {api}=await import('../app/static/requests.js');
+ const oldFetch=globalThis.fetch;
+ globalThis.fetch=async()=>{throw new TypeError('Load failed');};
+ try {
+   let err;
+   try { await api('/api/posts'); } catch(e){ err=e; }
+   assert.match(err.message,/网络连接失败/);
+   assert.equal(err.network,true);
+   assert.ok(err.cause instanceof TypeError && err.cause.message==='Load failed');
+ } finally {globalThis.fetch=oldFetch;}
+});
+
+test('422 校验错误取 detail 数组首项 msg 作为提示',async()=>{
+ const {api}=await import('../app/static/requests.js');
+ const oldFetch=globalThis.fetch;
+ globalThis.fetch=async()=>new Response(JSON.stringify({detail:[{msg:'field required',loc:['body','sid']}]}),
+   {status:422,headers:{'Content-Type':'application/json'}});
+ try {
+   await assert.rejects(api('/api/posts','POST',{sid:0}),e=>{
+     assert.equal(e.message,'field required');
+     assert.equal(e.status,422);
+     return true;
+   });
+ } finally {globalThis.fetch=oldFetch;}
+});
+
 test('助手拒绝公网上传地址、内网探针地址与带凭据的地址',async()=>{
  const {destination}=await import('../extension/destination.js');
  for (const value of ['https://example.com','http://169.254.169.254','file:///tmp',
