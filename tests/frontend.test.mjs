@@ -1750,3 +1750,25 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('立即抓取按钮点击即禁用防重复：startCrawl 忙判定、失败/异常复位与自动进入不受影响', async () => {
+  const fs = await import('node:fs/promises');
+  const appSrc = await fs.readFile(new URL('../app/static/app.js', import.meta.url), 'utf8');
+  const src = appSrc.slice(appSrc.indexOf('async function startCrawl()'), appSrc.indexOf('async function renderCrawlModal()'));
+
+  assert.ok(src.includes('const btn = $(\'#btn-crawl-start\');') && src.includes('if (btn.disabled) return;'),
+    'startCrawl 应先取按钮并做忙判定，禁用中直接返回');
+  const atGuard = src.indexOf('if (btn.disabled) return;');
+  const atSet = src.indexOf('btn.disabled = true;');
+  const atApi = src.indexOf("await api('/api/crawl', 'POST')");
+  assert.ok(atGuard !== -1 && atSet !== -1 && atApi !== -1 && atGuard < atSet && atSet < atApi,
+    'startCrawl 应在发起 POST /api/crawl 之前就把按钮置为禁用');
+  assert.ok(src.includes("if (r && r.ok === false) { btn.disabled = false; toast(r.msg || '抓取未能开始'); }"),
+    '服务端返回 ok === false（如已在抓取）时应复位按钮再提示');
+  assert.ok(src.includes("catch (e) { btn.disabled = false; toast(e.message); await renderCrawlModal(); }"),
+    '请求异常时应先复位按钮再 toast');
+  assert.ok(appSrc.includes("$('#btn-crawl-start').onclick = () => startCrawl();"),
+    '按钮点击仍应走 startCrawl');
+  assert.ok(appSrc.includes('btn.disabled = !!p.running;'),
+    'renderCrawlModal 仍按 p.running 复位按钮（成功路径不在此重复处理）');
+});

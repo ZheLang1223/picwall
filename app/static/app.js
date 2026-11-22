@@ -2142,13 +2142,16 @@ $('#btn-purge-run').onclick = async () => {
 };
 
 async function startCrawl() {
+  const btn = $('#btn-crawl-start');
+  if (btn.disabled) return;   // 双击/POST 在途防重复；crawlPaneEnter 自动进入时按钮未禁用，不受影响
+  btn.disabled = true;
   try {
     const r = await api('/api/crawl', 'POST');
-    if (r && r.ok === false) toast(r.msg || '抓取未能开始');
+    if (r && r.ok === false) { btn.disabled = false; toast(r.msg || '抓取未能开始'); }
     renderBanner();
-    renderCrawlModal();   // 失败原因由服务端写进 progress，弹窗里能看到
+    renderCrawlModal();   // 失败原因由服务端写进 progress，弹窗里能看到；成功后按钮态交它按 p.running 复位
     pollCrawl();
-  } catch (e) { toast(e.message); await renderCrawlModal(); }
+  } catch (e) { btn.disabled = false; toast(e.message); await renderCrawlModal(); }
 }
 
 $('#btn-crawl-start').onclick = () => startCrawl();
