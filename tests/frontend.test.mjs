@@ -1750,3 +1750,17 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('快捷键速查与真实键位一致：Shift+Q/W 成对、搜索行（/ 或 Ctrl/⌘+K）在列、Shift+F 旧标签退役', async () => {
+  const fs = await import('node:fs/promises');
+  const html = await fs.readFile(new URL('../app/templates/index.html', import.meta.url), 'utf8');
+  const pane = html.match(/<section class="spane" id="pane-shortcuts"[\s\S]*?<\/section>/);
+  assert.ok(pane, '快捷键速查分区应存在');
+  const sheet = pane[0];
+  assert.ok(sheet.includes('<kbd>Shift</kbd>+<kbd>Q</kbd> / <kbd>Shift</kbd>+<kbd>W</kbd>'),
+    '四格快筛两枚组合键都需要 Shift（app.js e.shiftKey 对 Q/W 一并判定），速查不得漏标 W 的 Shift');
+  assert.ok(sheet.includes('<kbd>/</kbd>') && sheet.includes('<kbd>K</kbd>'),
+    '搜索快捷键（/ 或 Ctrl/⌘+K 呼出聚光灯搜索）应列出');
+  assert.ok(!sheet.includes('状态/来源/博主'),
+    'Shift+F 已改开视图面板（筛选/排序/分组），旧「筛选面板 (状态/来源/博主)」标签应退役');
+});
