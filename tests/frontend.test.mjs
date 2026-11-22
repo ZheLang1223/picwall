@@ -814,6 +814,56 @@ test('四格快筛：只读设备不进入，新增为零直接提示',async()=>
    if(oldLS===undefined)delete globalThis.localStorage;else globalThis.localStorage=oldLS;}
 });
 
+test('四格 M 收藏：槽位卡 fav 描边即时翻转、settle 再对齐（回滚也可见）',async()=>{
+ const els={};
+ const makeEl=()=>({hidden:false,innerHTML:'',textContent:'',style:{},dataset:{},
+  classList:{_s:new Set(),add(...c){for(const x of c)this._s.add(x);},
+             remove(...c){for(const x of c)this._s.delete(x);},
+             toggle(c,v){if(v===undefined)v=!this._s.has(c);if(v)this._s.add(c);else this._s.delete(c);return v;},
+             contains(c){return this._s.has(c);}},
+  appendChild(){},remove(){},focus(){},setAttribute(){},getAttribute:()=>null,
+  querySelectorAll:()=>[],
+  querySelector(sel){this._kids=this._kids||{};if(!this._kids[sel])this._kids[sel]=makeEl();return this._kids[sel];}});
+ const oldDocument=globalThis.document,oldCSS=globalThis.CSS,oldLS=globalThis.localStorage;
+ globalThis.document={querySelectorAll:()=>[],createElement:()=>makeEl(),body:makeEl()};
+ globalThis.CSS={escape:x=>x};
+ globalThis.localStorage={getItem:()=>'1',setItem(){}};   // 已看过键位提示：hintOnce 不出声，toast 断言只看收藏
+ try {
+  const posts='abcd'.split('').map(x=>({sid:x,status:'pending',pics:[{file:x+'.jpg'}],author:'甲'}));
+  const state={...s,status:'pending',readOnly:false,posts,images:[],hasMore:false,
+    decisions:new Map(),st:{counts:{pending:4}}};
+  const msgs=[];
+  let failNext=false;
+  const toggleFavorite=async(sid)=>{
+    const p=state.posts.find(x=>x.sid===sid);
+    if(!p)return;
+    p.favorite=!p.favorite;              // 乐观翻转在首个 await 前同步完成（与真实实现同口径）
+    await Promise.resolve();
+    if(failNext){failNext=false;p.favorite=!p.favorite;}   // 模拟 API 失败回滚
+  };
+  const quad=createQuad({S:state,$:(sel)=>els[sel]||(els[sel]=makeEl()),
+    toast:m=>msgs.push(m),esc:x=>x,fmtDate:()=>'',fmtHM:()=>'',icons:{comment:'',star:''},
+    mark:()=>null,toggleFavorite,getLastDrop:()=>null,undoLastMark:async()=>null,
+    load:async()=>{},openLB:()=>{},openLinkForSid:()=>{},
+    switchStatusView:()=>{},animatedHide:()=>{},cancelHide:()=>{}});
+  const slot=(i)=>els[`#quad .q-slot[data-slot="${i}"]`];
+  const card=(i)=>slot(i).querySelector('.q-card');
+  await quad.open();
+  assert.ok(!card(0).classList.contains('fav'),'初始未收藏无描边');
+  await quad.key({key:'m'});              // M 收藏 0 格：乐观描边即时落卡
+  assert.ok(card(0).classList.contains('fav'),'按 M 后槽位卡应挂 fav 类');
+  assert.deepEqual(msgs,['已收藏']);
+  await quad.key({key:'m'});              // 再按取消：描边摘除
+  assert.ok(!card(0).classList.contains('fav'),'再按 M 应摘除 fav 类');
+  assert.deepEqual(msgs,['已收藏','已取消收藏']);
+  failNext=true;
+  await quad.key({key:'m'});              // API 失败回滚：settle 后描边对齐回原状，不报成功 toast
+  assert.ok(!card(0).classList.contains('fav'),'回滚后描边应还原');
+  assert.deepEqual(msgs,['已收藏','已取消收藏'],'失败不应报「已收藏」');
+ } finally {globalThis.document=oldDocument;globalThis.CSS=oldCSS;
+   if(oldLS===undefined)delete globalThis.localStorage;else globalThis.localStorage=oldLS;}
+});
+
 /* ---------- 编年时间线（timeline.js） ---------- */
 test('编年 dayOf 与标签：东八区日期截取、中文月日与跨年月份',()=>{
  assert.equal(dayOf({created_at:'2026-10-14T09:30:00+08:00'}),'2026-10-14');

@@ -365,6 +365,16 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
     if (i >= 0) openLB(i, p.sid);
   }
 
+  /* ---------- M 收藏的槽位描边同步 ---------- */
+  /* 墙侧 applyFavDom 只扫 #feed，quad 卡常驻 #quad 里够不着——按帖当前 favorite
+     对齐槽内 .q-card 的 fav 类：按下后乐观刷一次（翻转在 toggleFavorite 首个 await
+     前已同步生效），promise settle 再刷一次兜住 API 失败的回滚 */
+  function syncFav(sid) {
+    const i = Q.slots.findIndex(p => p?.sid === sid);
+    if (i < 0) return;
+    slotEl(i)?.querySelector('.q-card')?.classList.toggle('fav', !!Q.slots[i].favorite);
+  }
+
   /* ---------- 键位（模态流：吃掉全部单键；返回 promise 便于测试衔接） ---------- */
   function key(e) {
     switch (e.key) {
@@ -376,7 +386,19 @@ export function createQuad({ S, $, toast, esc, fmtDate, fmtHM, icons,
       case 'ArrowRight': Q.zoom ? zoomNav(1) : moveFocus(1); return undefined;
       case ' ': e.preventDefault(); openPostLightbox(Q.zoom ? Q.slots[Q.zoomSlot] : Q.slots[Q.focus]); return undefined;
       case 'Enter': e.preventDefault(); openZoom(); return undefined;
-      case 'm': case 'M': { const p = Q.slots[Q.zoom ? Q.zoomSlot : Q.focus]; if (p) toggleFavorite(p.sid); return undefined; }
+      case 'm': case 'M': {
+        const p = Q.slots[Q.zoom ? Q.zoomSlot : Q.focus];
+        if (!p) return undefined;
+        const before = !!p.favorite;
+        const pr = toggleFavorite(p.sid);
+        syncFav(p.sid);                       // 乐观翻转已同步落 DOM：描边即时跟上
+        const fav = !!p.favorite;             // 记下乐观方向：settle 后被回滚则不报喜
+        return Promise.resolve(pr).then(() => {
+          syncFav(p.sid);                     // settle 再对齐一次，失败回滚也可见
+          // 只读/找不到帖时 toggleFavorite 直接返回、未翻转：不报喜
+          if (fav !== before && !!p.favorite === fav) toast(fav ? '已收藏' : '已取消收藏');
+        });
+      }
       case 'l': case 'L': { const p = Q.slots[Q.zoom ? Q.zoomSlot : Q.focus]; if (p) openLinkForSid(p.sid); return undefined; }
       case 'z': case 'Z': return undoLast();
       case 'Escape': if (Q.zoom) closeZoom(); else close(); return undefined;
