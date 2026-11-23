@@ -1750,3 +1750,26 @@ test('远端修复整合契约：失败重试、防死循环、防连点 busy �
     && indexHtml.includes('aria-label="微博博主 UID 或主页链接"'),
     '放映状态与设置输入框应具备无障碍角色与标签');
 });
+
+test('断开当前设备两步确认：首击只武装不退登、3 秒/失焦/Esc 解除、二次击才调登出接口', async () => {
+  const fs = await import('node:fs/promises');
+  const read = (p) => fs.readFile(new URL(p, import.meta.url), 'utf8');
+  const [devicesSrc, cssSrc] = await Promise.all([
+    read('../app/static/devices.js'),
+    read('../app/static/style.css'),
+  ]);
+  // 两步确认：先检查 arming 态并提前返回（首击不调 DELETE /api/device/session），二次击才走原登出流程
+  const logoutIdx = devicesSrc.indexOf("$('#device-logout')");
+  assert.ok(logoutIdx > 0, 'devices.js 应绑定 #device-logout');
+  const handler = devicesSrc.slice(logoutIdx);
+  assert.ok(handler.indexOf("classList.contains('arming')") < handler.indexOf("'/api/device/session'"),
+    '登出处理器应先检查 arming 武装态，再调 DELETE /api/device/session（首击只武装不退登）');
+  assert.ok(handler.includes('确认断开并退出') && handler.includes('断开当前设备'),
+    '武装态文案应变为「确认断开并退出」，解除后恢复「断开当前设备」');
+  assert.ok(handler.includes('setTimeout') && handler.includes('3000'),
+    '武装态应有 3000ms 超时自动解除');
+  assert.ok(handler.includes("'blur'") && handler.includes('Escape'),
+    '失焦与 Esc 均应解除武装态');
+  assert.ok(cssSrc.includes('#device-logout.arming'),
+    'style.css 应有 #device-logout.arming 武装态样式（红字描边提示确认）');
+});

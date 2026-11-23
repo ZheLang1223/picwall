@@ -407,6 +407,7 @@ textarea#cookie-input {
 }
 .pbtn:hover { opacity: .88; }
 .pbtn.ghost { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+#device-logout.arming { color: var(--danger); border-color: var(--danger); font-weight: 700; }
 .pbtn:disabled { opacity: .5; cursor: default; }
 .my-groups { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 

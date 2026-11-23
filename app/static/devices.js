@@ -26,10 +26,31 @@ export function initDevices({$,api,toast}) {
     } catch(e) { console.error('设备列表渲染失败:', e); box.textContent = '设备列表加载失败：' + e.message; }
   }
   const logout = $('#device-logout');
-  if (logout) logout.onclick = async () => {
-    if (logout.disabled) return; logout.disabled = true;
-    try { await api('/api/device/session','DELETE'); location.reload(); }
-    catch(e) { logout.disabled = false; toast(e.message); }
-  };
+  if (logout) {
+    /* 两步确认（同取消配对/清空的武装式防误触）：首击只武装不改状态，再击才真退登；
+       失焦、Esc 或 3 秒超时自动解除，避免误触把已配对设备踢下线。 */
+    let armTimer = 0;
+    const disarm = () => {
+      clearTimeout(armTimer);
+      logout.classList.remove('arming');
+      logout.removeAttribute('aria-label');
+      logout.textContent = '断开当前设备';
+    };
+    logout.addEventListener('blur', disarm);
+    logout.addEventListener('keydown', (e) => { if (e.key === 'Escape') disarm(); });
+    logout.onclick = async () => {
+      if (logout.disabled) return;
+      if (!logout.classList.contains('arming')) {
+        logout.classList.add('arming');
+        logout.setAttribute('aria-label', '再点一次确认断开当前设备（需重新配对才能再登录）');
+        logout.textContent = '确认断开并退出';
+        armTimer = setTimeout(disarm, 3000);
+        return;
+      }
+      disarm(); logout.disabled = true;
+      try { await api('/api/device/session','DELETE'); location.reload(); }
+      catch(e) { logout.disabled = false; toast(e.message); }
+    };
+  }
   return { render };
 }
